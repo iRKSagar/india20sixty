@@ -1,9 +1,15 @@
-R2_ACCOUNT_ID = "your_account_id"
+import os
 
-R2_ACCESS_KEY = "your_access_key"
+LEONARDO_API_KEY = os.getenv("LEONARDO_API_KEY")
 
-R2_SECRET_KEY = "your_secret_key"
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
-R2_BUCKET = "india20sixty-videos"
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
+R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
+R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
+R2_BUCKET = os.getenv("R2_BUCKET")
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL")
 
-R2_PUBLIC_URL = "https://pub-xxxx.r2.dev"
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID")
