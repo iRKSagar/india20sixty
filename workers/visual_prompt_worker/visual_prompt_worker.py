@@ -1,12 +1,11 @@
-import uuid
 import random
 import json
-import time
+import uuid
 
 
-# ---------------------------------
-# VISUAL STYLE BASE
-# ---------------------------------
+# ----------------------------------
+# BASE STYLE
+# ----------------------------------
 
 BASE_STYLE = (
     "futuristic India, advanced technology, cinematic lighting, "
@@ -14,82 +13,91 @@ BASE_STYLE = (
 )
 
 
-# ---------------------------------
-# CATEGORY LIBRARY
-# ---------------------------------
+# ----------------------------------
+# SCENE POOLS
+# ----------------------------------
 
-AI_SCENES = [
-    "AI robotics lab in India",
-    "AI medical diagnostic system",
-    "robotic hospital operating room",
-    "AI research center India"
+HOOK_SCENES = [
+
+    "Indian futuristic city skyline at sunrise",
+    "advanced AI hospital entrance India",
+    "robotic laboratory India",
+    "high-tech smart city control room"
+
 ]
 
-CITY_SCENES = [
-    "futuristic Indian smart city skyline",
-    "AI traffic management system India",
-    "smart city infrastructure India",
+TREND_SCENES = [
+
+    "AI medical scanner analyzing patient",
+    "robotic system assisting doctor",
+    "AI classroom with digital teacher",
+    "smart city traffic control center"
+
 ]
 
-SPACE_SCENES = [
-    "Indian space station orbiting Earth",
-    "satellite network above India",
+INSIGHT_SCENES = [
+
+    "AI analyzing medical data on holographic screen",
+    "robot performing precise surgery",
+    "AI system monitoring thousands of sensors",
+    "advanced research lab India"
+
 ]
 
-INDUSTRY_SCENES = [
-    "robotic factory India",
-    "AI powered warehouse India"
+FUTURE_SCENES = [
+
+    "futuristic hospital India 2060",
+    "fully autonomous AI healthcare system",
+    "futuristic Indian megacity skyline 2060",
+    "AI powered infrastructure India future"
+
+]
+
+ENDING_SCENES = [
+
+    "wide cinematic shot of futuristic Indian city",
+    "Indian skyline glowing with advanced technology",
+    "India 2060 futuristic megacity",
+    "sunset view of advanced smart India"
+
 ]
 
 
-SCENE_LIBRARY = AI_SCENES + CITY_SCENES + SPACE_SCENES + INDUSTRY_SCENES
-
-
-# ---------------------------------
-# PROMPT GENERATION
-# ---------------------------------
+# ----------------------------------
+# PROMPT BUILDER
+# ----------------------------------
 
 def build_prompt(scene):
 
     return f"{scene}, {BASE_STYLE}"
 
 
-def generate_prompts(topic):
+# ----------------------------------
+# PROMPT GENERATOR
+# ----------------------------------
 
-    prompts = []
+def generate_prompts():
 
-    # hook visual
-    scene1 = random.choice(SCENE_LIBRARY)
-    prompts.append(build_prompt(scene1))
+    prompts = [
 
-    # trend visual
-    scene2 = random.choice(SCENE_LIBRARY)
-    prompts.append(build_prompt(scene2))
+        build_prompt(random.choice(HOOK_SCENES)),
+        build_prompt(random.choice(TREND_SCENES)),
+        build_prompt(random.choice(INSIGHT_SCENES)),
+        build_prompt(random.choice(FUTURE_SCENES)),
+        build_prompt(random.choice(ENDING_SCENES))
 
-    # insight visual
-    scene3 = random.choice(SCENE_LIBRARY)
-    prompts.append(build_prompt(scene3))
-
-    # future visual
-    scene4 = random.choice(SCENE_LIBRARY)
-    prompts.append(build_prompt(scene4))
-
-    # ending visual
-    scene5 = random.choice(SCENE_LIBRARY)
-    prompts.append(build_prompt(scene5))
+    ]
 
     return prompts
 
 
-# ---------------------------------
+# ----------------------------------
 # JOB PROCESSOR
-# ---------------------------------
+# ----------------------------------
 
 def process_job(job):
 
-    topic = job["topic"]
-
-    prompts = generate_prompts(topic)
+    prompts = generate_prompts()
 
     job["visual_prompts"] = prompts
 
@@ -98,50 +106,21 @@ def process_job(job):
     return job
 
 
-# ---------------------------------
-# SIMULATED QUEUE LOOP
-# ---------------------------------
-
-def run_worker():
-
-    print("Visual Prompt Worker Started")
-
-    while True:
-
-        try:
-
-            job = {
-
-                "job_id": str(uuid.uuid4()),
-
-                "topic": "AI doctors in India",
-
-                "script": {},
-
-                "status": "script_complete"
-            }
-
-            print("\nProcessing Job:", job["job_id"])
-
-            job = process_job(job)
-
-            print("\nGenerated Prompts:\n")
-
-            print(json.dumps(job["visual_prompts"], indent=2))
-
-            time.sleep(5)
-
-        except Exception as e:
-
-            print("Worker error:", e)
-
-            time.sleep(5)
-
-
-# ---------------------------------
-# ENTRY POINT
-# ---------------------------------
+# ----------------------------------
+# TEST RUN
+# ----------------------------------
 
 if __name__ == "__main__":
 
-    run_worker()
+    job = {
+
+        "job_id": str(uuid.uuid4()),
+        "topic": "AI doctors in India"
+
+    }
+
+    job = process_job(job)
+
+    print("\nGenerated Visual Prompts:\n")
+
+    print(json.dumps(job["visual_prompts"], indent=2))
