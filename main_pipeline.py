@@ -1,8 +1,10 @@
 import uuid
 
-# Import workers
+from workers.topic_worker.topic_worker import process_job as topic_worker
+from workers.safety_worker.safety_worker import process_job as safety_worker
 from workers.script_worker.script_worker import process_job as script_worker
 from workers.visual_prompt_worker.visual_prompt_worker import process_job as visual_worker
+from workers.image_cache_worker.image_cache_worker import process_job as cache_worker
 from workers.image_worker.image_worker import process_job as image_worker
 from workers.voice_worker.voice_worker import process_job as voice_worker
 from workers.subtitle_worker.subtitle_worker import process_job as subtitle_worker
@@ -13,88 +15,86 @@ from workers.analytics_worker.analytics_worker import process_job as analytics_w
 
 
 # ----------------------------------
-# CREATE JOB
+# CONFIG
 # ----------------------------------
 
-def create_job(topic):
+TEST_MODE = True
 
-    job = {
 
-        "job_id": str(uuid.uuid4()),
+# ----------------------------------
+# PIPELINE
+# ----------------------------------
 
-        "topic": topic,
+def run_pipeline():
 
-        "hook": f"Socho agar {topic} reality ban jaye…",
+    print("\nStarting India20Sixty Pipeline\n")
 
-        "status": "created"
-    }
+    job = topic_worker()
+
+    print("Topic Worker:", job["topic"])
+
+    job = safety_worker(job)
+
+    print("Safety Worker Passed")
+
+    job = script_worker(job)
+
+    print("Script Generated")
+
+    job = visual_worker(job)
+
+    print("Visual Prompts Created")
+
+    job = cache_worker(job)
+
+    print("Image Cache Checked")
+
+    job = image_worker(job)
+
+    print("Images Generated")
+
+    job = voice_worker(job)
+
+    print("Voice Generated")
+
+    job = subtitle_worker(job)
+
+    print("Subtitles Created")
+
+    job = render_worker(job)
+
+    print("Video Rendered")
+
+    if not TEST_MODE:
+
+        job = youtube_worker(job)
+        print("Uploaded to YouTube")
+
+        job = instagram_worker(job)
+        print("Uploaded to Instagram")
+
+    else:
+
+        print("\nTEST MODE ENABLED")
+        print("Upload workers skipped")
+
+    job = analytics_worker(job)
+
+    print("Analytics Recorded")
+
+    print("\nPipeline Finished")
 
     return job
 
 
 # ----------------------------------
-# PIPELINE EXECUTION
-# ----------------------------------
-
-def run_pipeline(topic):
-
-    job = create_job(topic)
-
-    print("\nJOB CREATED")
-    print(job["job_id"])
-
-    try:
-
-        print("\nRunning Script Worker")
-        job = script_worker(job)
-
-        print("\nRunning Visual Prompt Worker")
-        job = visual_worker(job)
-
-        print("\nRunning Image Worker")
-        job = image_worker(job)
-
-        print("\nRunning Voice Worker")
-        job = voice_worker(job)
-
-        print("\nRunning Subtitle Worker")
-        job = subtitle_worker(job)
-
-        print("\nRunning Render Worker")
-        job = render_worker(job)
-
-        print("\nRunning YouTube Upload Worker")
-        job = youtube_worker(job)
-
-        print("\nRunning Instagram Upload Worker")
-        job = instagram_worker(job)
-
-        print("\nRunning Analytics Worker")
-        job = analytics_worker(job)
-
-        print("\nPIPELINE COMPLETE")
-
-        return job
-
-    except Exception as e:
-
-        print("\nPIPELINE FAILED:", e)
-
-        job["status"] = "failed"
-
-        return job
-
-
-# ----------------------------------
-# MAIN ENTRY
+# ENTRY
 # ----------------------------------
 
 if __name__ == "__main__":
 
-    topic = "AI doctors in India"
+    result = run_pipeline()
 
-    final_job = run_pipeline(topic)
+    print("\nFinal Job Output:\n")
 
-    print("\nFinal Job Status:")
-
-    print(final_job)
+    print(result)
