@@ -1,43 +1,48 @@
+```python
 import json
-import os
 from pathlib import Path
 
 
 # ----------------------------------
-# PATH
+# PATH SETUP
 # ----------------------------------
 
-DATA_PATH = Path("data/analytics")
+BASE_PATH = Path("data")
+ANALYTICS_PATH = BASE_PATH / "analytics"
+FILE_PATH = ANALYTICS_PATH / "performance.json"
 
-DATA_PATH.mkdir(parents=True, exist_ok=True)
-
-FILE_PATH = DATA_PATH / "performance.json"
+ANALYTICS_PATH.mkdir(parents=True, exist_ok=True)
 
 
 # ----------------------------------
-# LOAD DATA
+# SAFE JSON LOAD
 # ----------------------------------
 
 def load_data():
+    try:
+        if not FILE_PATH.exists():
+            return {"videos": []}
 
-    if not FILE_PATH.exists():
+        with open(FILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
 
+    except Exception:
+        # corrupted JSON protection
         return {"videos": []}
-
-    with open(FILE_PATH, "r") as f:
-
-        return json.load(f)
 
 
 # ----------------------------------
-# SAVE DATA
+# SAFE JSON SAVE
 # ----------------------------------
 
 def save_data(data):
 
-    with open(FILE_PATH, "w") as f:
+    try:
+        with open(FILE_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
-        json.dump(data, f, indent=2)
+    except Exception as e:
+        print("Analytics save error:", e)
 
 
 # ----------------------------------
@@ -46,13 +51,16 @@ def save_data(data):
 
 def calculate_score(views, likes, comments):
 
-    score = (
-        views * 0.6 +
-        likes * 0.3 +
-        comments * 0.1
-    )
+    try:
+        score = (
+            views * 0.6 +
+            likes * 0.3 +
+            comments * 0.1
+        )
+        return round(score, 2)
 
-    return score
+    except Exception:
+        return 0
 
 
 # ----------------------------------
@@ -61,63 +69,75 @@ def calculate_score(views, likes, comments):
 
 def process_job(job):
 
-    topic = job["topic"]
+    try:
 
-    youtube_views = job.get("youtube_views", 0)
+        topic = job.get("topic", "unknown")
 
-    youtube_likes = job.get("youtube_likes", 0)
+        youtube_views = job.get("youtube_views", 0)
+        youtube_likes = job.get("youtube_likes", 0)
+        youtube_comments = job.get("youtube_comments", 0)
 
-    youtube_comments = job.get("youtube_comments", 0)
+        instagram_views = job.get("instagram_views", 0)
+        instagram_likes = job.get("instagram_likes", 0)
+        instagram_comments = job.get("instagram_comments", 0)
 
-    instagram_views = job.get("instagram_views", 0)
+        total_views = youtube_views + instagram_views
+        total_likes = youtube_likes + instagram_likes
+        total_comments = youtube_comments + instagram_comments
 
-    instagram_likes = job.get("instagram_likes", 0)
+        score = calculate_score(
+            total_views,
+            total_likes,
+            total_comments
+        )
 
-    instagram_comments = job.get("instagram_comments", 0)
+        data = load_data()
 
-    total_views = youtube_views + instagram_views
+        record = {
 
-    total_likes = youtube_likes + instagram_likes
+            "topic": topic,
 
-    total_comments = youtube_comments + instagram_comments
+            "youtube_views": youtube_views,
+            "youtube_likes": youtube_likes,
+            "youtube_comments": youtube_comments,
 
-    score = calculate_score(total_views, total_likes, total_comments)
+            "instagram_views": instagram_views,
+            "instagram_likes": instagram_likes,
+            "instagram_comments": instagram_comments,
 
-    data = load_data()
+            "total_views": total_views,
+            "total_likes": total_likes,
+            "total_comments": total_comments,
 
-    record = {
+            "performance_score": score
+        }
 
-        "topic": topic,
+        data["videos"].append(record)
 
-        "youtube_views": youtube_views,
-        "youtube_likes": youtube_likes,
+        save_data(data)
 
-        "instagram_views": instagram_views,
-        "instagram_likes": instagram_likes,
+        job["performance_score"] = score
+        job["status"] = "analytics_recorded"
 
-        "score": score
-    }
+        return job
 
-    data["videos"].append(record)
+    except Exception as e:
 
-    save_data(data)
+        job["status"] = "analytics_error"
+        job["analytics_error"] = str(e)
 
-    job["performance_score"] = score
-
-    job["status"] = "analytics_recorded"
-
-    return job
+        return job
 
 
 # ----------------------------------
-# WORKER
+# LOCAL TEST WORKER
 # ----------------------------------
 
 def run_worker():
 
-    print("Analytics Worker Started")
+    print("Analytics Worker Started\n")
 
-    job = {
+    test_job = {
 
         "topic": "AI doctors in India",
 
@@ -130,13 +150,17 @@ def run_worker():
         "instagram_comments": 33
     }
 
-    job = process_job(job)
+    result = process_job(test_job)
 
-    print("\nPerformance score:")
+    print("Worker Result:\n")
+    print(json.dumps(result, indent=2))
 
-    print(job["performance_score"])
 
+# ----------------------------------
+# ENTRYPOINT
+# ----------------------------------
 
 if __name__ == "__main__":
 
     run_worker()
+```
