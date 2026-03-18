@@ -1,165 +1,281 @@
-import random
-import uuid
-import json
-import time
+export default {
 
+  async fetch(request, env) {
 
-# ---------------------------------
-# CONFIG
-# ---------------------------------
+    try {
 
-SCRIPT_MIN_WORDS = 50
-SCRIPT_MAX_WORDS = 65
+      const url = new URL(request.url)
 
-TWIST_PROBABILITY = 0.35
+      const base = `${env.SUPABASE_URL}/rest/v1`
 
+      const headers = {
+        apikey: env.SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json"
+      }
 
-# ---------------------------------
-# SCRIPT GENERATION
-# ---------------------------------
+      // --------------------------------
+      // ROOT
+      // --------------------------------
 
-def generate_trend(topic):
+      if (url.pathname === "/") {
 
-    templates = [
-        f"Aaj {topic} se related technology already develop ho rahi hai.",
-        f"Abhi bhi {topic} se related systems real world mein test ho rahe hain.",
-        f"Researchers aur startups {topic} par rapidly kaam kar rahe hain."
-    ]
+        return Response.json({
+          system: "India20Sixty",
+          status: "Worker running"
+        })
 
-    return random.choice(templates)
+      }
 
+      // --------------------------------
+      // LIST TOPICS
+      // --------------------------------
 
-def generate_insight(topic):
+      if (url.pathname === "/topics") {
 
-    templates = [
-        f"AI systems thousands of data points seconds mein analyse kar sakte hain.",
-        f"Machines complex decisions humans se faster process kar sakti hain.",
-        f"Technology gradually industries ko transform kar rahi hai."
-    ]
+        const res = await fetch(
+          `${base}/topics?select=*&limit=10`,
+          { headers }
+        )
 
-    insight = random.choice(templates)
+        const data = await res.json()
 
-    # subtle twist
-    if random.random() < TWIST_PROBABILITY:
+        return Response.json(data)
 
-        twist_templates = [
-            "Kabhi kabhi lagta hai machines humans se zyada patience rakhti hain.",
-            "Aur machines ko coffee break bhi nahi chahiye.",
-            "Aur shayad machines kabhi complain bhi nahi karti."
+      }
+
+      // --------------------------------
+      // GET NEXT UNUSED TOPIC
+      // --------------------------------
+
+      if (url.pathname === "/topic") {
+
+        const res = await fetch(
+          `${base}/topics?used=eq.false&limit=1`,
+          { headers }
+        )
+
+        const rows = await res.json()
+
+        if (!rows.length) {
+
+          return Response.json({
+            error: "No topics available"
+          })
+
+        }
+
+        const topic = rows[0]
+
+        await fetch(
+          `${base}/topics?id=eq.${topic.id}`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+              used: true
+            })
+          }
+        )
+
+        return Response.json(topic)
+
+      }
+
+      // --------------------------------
+      // CREATE JOB
+      // --------------------------------
+
+      if (url.pathname === "/create-job") {
+
+        const topicRes = await fetch(
+          `${base}/topics?used=eq.false&limit=1`,
+          { headers }
+        )
+
+        const topics = await topicRes.json()
+
+        if (!topics.length) {
+
+          return Response.json({
+            error: "No topics left"
+          })
+
+        }
+
+        const topic = topics[0]
+
+        const jobRes = await fetch(
+          `${base}/jobs`,
+          {
+            method: "POST",
+            headers: {
+              ...headers,
+              Prefer: "return=representation"
+            },
+            body: JSON.stringify({
+              topic: topic.topic,
+              cluster: topic.cluster,
+              status: "topic_generated"
+            })
+          }
+        )
+
+        const job = await jobRes.json()
+
+        await fetch(
+          `${base}/topics?id=eq.${topic.id}`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+              used: true
+            })
+          }
+        )
+
+        return Response.json(job)
+
+      }
+
+      // --------------------------------
+      // LIST JOBS
+      // --------------------------------
+
+      if (url.pathname === "/jobs") {
+
+        const res = await fetch(
+          `${base}/jobs?select=*`,
+          { headers }
+        )
+
+        const data = await res.json()
+
+        return Response.json(data)
+
+      }
+
+      // --------------------------------
+      // SCRIPT GENERATOR
+      // --------------------------------
+
+      if (url.pathname === "/script") {
+
+        const res = await fetch(
+          `${base}/topics?used=eq.false&limit=1`,
+          { headers }
+        )
+
+        const rows = await res.json()
+
+        if (!rows.length) {
+
+          return Response.json({
+            error: "No topics available"
+          })
+
+        }
+
+        const topic = rows[0]
+
+        const hooks = [
+          `Socho agar ${topic.topic} reality ban jaye…`,
+          `Sach bataun… ${topic.topic} India mein possible hai`,
+          `2035 tak ${topic.topic} common ho sakta hai`,
+          `Kya India ${topic.topic} ke liye ready hai?`
         ]
 
-        insight += " " + random.choice(twist_templates)
+        const hook =
+          hooks[Math.floor(Math.random() * hooks.length)]
 
-    return insight
+        const script = {
 
+          topic: topic.topic,
 
-def generate_future(topic):
+          hook,
 
-    templates = [
-        f"2060 tak {topic} India ke daily life ka normal part ban sakta hai.",
-        f"Agar development isi speed se chala, to 2060 tak {topic} common ho sakta hai.",
-        f"Future mein {topic} millions logon ki life change kar sakta hai."
-    ]
+          trend:
+            "India mein technology rapidly evolve ho rahi hai.",
 
-    return random.choice(templates)
+          insight:
+            `${topic.topic} jaise innovations already research stage mein hain.`,
 
+          future:
+            "2060 tak ye system India ke millions logon ki life change kar sakta hai.",
 
-def generate_question(topic):
+          question:
+            "Aapko kya lagta hai — kya India ready hoga?"
 
-    templates = [
-        f"Kya India ready hai is future ke liye?",
-        f"Kya aap imagine kar sakte ho ye future?",
-        f"Agar ye reality ban gaya to life kaise change hogi?"
-    ]
+        }
 
-    return random.choice(templates)
+        return Response.json(script)
 
+      }
 
-# ---------------------------------
-# SCRIPT BUILDER
-# ---------------------------------
+      // --------------------------------
+      // VISUAL PROMPT GENERATOR
+      // --------------------------------
 
-def build_script(topic, hook):
+      if (url.pathname === "/prompts") {
 
-    trend = generate_trend(topic)
+        const topicRes = await fetch(
+          `${base}/topics?used=eq.false&limit=1`,
+          { headers }
+        )
 
-    insight = generate_insight(topic)
+        const rows = await topicRes.json()
 
-    future = generate_future(topic)
+        if (!rows.length) {
 
-    question = generate_question(topic)
+          return Response.json({
+            error: "No topics available"
+          })
 
-    script = {
-        "hook": hook,
-        "trend": trend,
-        "insight": insight,
-        "future": future,
-        "question": question
+        }
+
+        const topic = rows[0].topic
+
+        const baseStyle =
+          "futuristic India, advanced technology, cinematic lighting, ultra realistic, blue neon accents"
+
+        const prompts = [
+
+          `Indian futuristic city skyline sunrise, ${baseStyle}`,
+
+          `AI medical system operating in Indian hospital, ${baseStyle}`,
+
+          `robotic technology assisting humans in India, ${baseStyle}`,
+
+          `India 2060 futuristic megacity infrastructure, ${baseStyle}`,
+
+          `wide cinematic shot futuristic India skyline sunset, ${baseStyle}`
+
+        ]
+
+        return Response.json({
+          topic,
+          prompts
+        })
+
+      }
+
+      // --------------------------------
+      // FALLBACK
+      // --------------------------------
+
+      return new Response("India20Sixty API")
+
     }
 
-    return script
+    catch (error) {
 
+      return Response.json({
+        error: error.message,
+        stack: error.stack
+      })
 
-# ---------------------------------
-# JOB PROCESSOR
-# ---------------------------------
+    }
 
-def process_job(job):
+  }
 
-    topic = job["topic"]
-
-    hook = job["hook"]
-
-    script = build_script(topic, hook)
-
-    job["script"] = script
-
-    job["status"] = "script_complete"
-
-    return job
-
-
-# ---------------------------------
-# SIMULATED QUEUE LOOP
-# ---------------------------------
-
-def run_worker():
-
-    print("Script Worker Started")
-
-    while True:
-
-        try:
-
-            # simulate queue job
-            job = {
-                "job_id": str(uuid.uuid4()),
-                "topic": "AI doctors in India",
-                "hook": "Socho agar AI doctors India mein common ho jayein",
-                "status": "script_pending"
-            }
-
-            print("\nProcessing Job:", job["job_id"])
-
-            job = process_job(job)
-
-            print("\nGenerated Script:\n")
-
-            print(json.dumps(job["script"], indent=2))
-
-            time.sleep(5)
-
-        except Exception as e:
-
-            print("Worker error:", e)
-
-            time.sleep(5)
-
-
-# ---------------------------------
-# ENTRY POINT
-# ---------------------------------
-
-if __name__ == "__main__":
-
-    run_worker()
+}
