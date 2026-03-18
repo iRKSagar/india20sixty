@@ -1,7 +1,6 @@
 import uuid
 from pathlib import Path
 
-
 # ----------------------------------
 # PATH
 # ----------------------------------
@@ -11,20 +10,36 @@ SUBTITLE_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
 # ----------------------------------
-# KEYWORD EXTRACTION
+# VIRAL CAPTION GENERATOR
 # ----------------------------------
 
 def extract_keywords(script):
 
-    subtitles = [
+    hook = script["hook"].upper()
+    trend = script["trend"].upper()
+    insight = script["insight"].upper()
+    future = script["future"].upper()
+    question = script["question"].upper()
 
-        script["hook"].upper(),
-        script["trend"].upper(),
-        script["insight"].upper(),
-        script["future"].upper(),
-        script["question"].upper()
+    subtitles = []
 
-    ]
+    # Scene 1 – Hook
+    subtitles.append("SOCHO AGAR")
+
+    # Scene 2 – Trend
+    if "AI" in trend:
+        subtitles.append("AI TREND")
+    else:
+        subtitles.append("NEW TECHNOLOGY")
+
+    # Scene 3 – Insight
+    subtitles.append("SMART SYSTEMS")
+
+    # Scene 4 – Future
+    subtitles.append("INDIA 2060")
+
+    # Scene 5 – Question
+    subtitles.append("INDIA READY?")
 
     return subtitles
 
@@ -34,8 +49,6 @@ def extract_keywords(script):
 # ----------------------------------
 
 def build_srt(subtitles, job_id):
-
-    # timing matches 5 scenes (≈26 seconds)
 
     times = [
         ("00:00:00,000", "00:00:04,000"),
@@ -72,7 +85,6 @@ def build_srt(subtitles, job_id):
 def process_job(job):
 
     job_id = job["job_id"]
-
     script = job["script"]
 
     subtitles = extract_keywords(script)
@@ -80,7 +92,6 @@ def process_job(job):
     srt_file = build_srt(subtitles, job_id)
 
     job["subtitle_file"] = srt_file
-
     job["status"] = "subtitles_ready"
 
     return job
@@ -105,15 +116,14 @@ def run_worker():
             "future": "2060 tak AI doctors rural India tak healthcare pahucha sakte hain",
             "question": "Kya India ready hai AI healthcare revolution ke liye"
         }
+
     }
 
     job = process_job(job)
 
     print("\nSubtitle file created:")
-
     print(job["subtitle_file"])
 
 
 if __name__ == "__main__":
-
     run_worker()
