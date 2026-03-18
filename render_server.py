@@ -1,22 +1,148 @@
-from flask import Flask, request, jsonify
 import os
-import requests
-import subprocess
 import uuid
-import traceback
+import subprocess
+import requests
+import boto3
+
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-TMP_DIR = "/tmp/india20sixty"
-VIDEO_DIR = f"{TMP_DIR}/videos"
+# ----------------------------
+# CONFIG
+# ----------------------------
 
-os.makedirs(TMP_DIR, exist_ok=True)
+R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
+R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
+R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
+R2_BUCKET = os.environ.get("R2_BUCKET")
+
+VIDEO_DIR = "/tmp/india20sixty/videos"
+IMAGE_DIR = "/tmp/india20sixty/images"
+AUDIO_DIR = "/tmp/india20sixty/audio"
+
 os.makedirs(VIDEO_DIR, exist_ok=True)
+os.makedirs(IMAGE_DIR, exist_ok=True)
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+# ----------------------------
+# R2 CLIENT
+# ----------------------------
+
+r2 = boto3.client(
+    "s3",
+    endpoint_url=R2_ENDPOINT,
+    aws_access_key_id=R2_ACCESS_KEY,
+    aws_secret_access_key=R2_SECRET_KEY,
+)
+
+# ----------------------------
+# DOWNLOAD HELPER
+# ----------------------------
+
+def download_file(url, path):
+    r = requests.get(url)
+    with open(path, "wb") as f:
+        f.write(r.content)
+
+# ----------------------------
+# RENDER ENDPOINT
+# ----------------------------
+
+@app.route("/render", methods=["POST"])
+def render():
+
+    data = request.json
+
+    job_id = data["job_id"]
+    image_urls = data["images"]
+    audio_url = data["audio"]
+
+    # ----------------------------
+    # DOWNLOAD ASSETS
+    # ----------------------------
+
+    image_paths = []
+
+    for i, url in enumerate(image_urls):
+        path = f"{IMAGE_DIR}/{job_id}_{i}.jpg"
+        download_file(url, path)
+        image_paths.append(path)
+
+    audio_path = f"{AUDIO_DIR}/{job_id}.mp3"
+    download_file(audio_url, audio_path)
+
+    # ----------------------------
+    # CREATE IMAGE LIST FILE
+    # ----------------------------
+
+    list_file = f"/tmp/{job_id}_images.txt"
+
+    with open(list_file, "w") as f:
+        for img in image_paths:
+            f.write(f"file '{img}'\n")
+            f.write("duration 4\n")
+
+        f.write(f"file '{image_paths[-1]}'\n")
+
+    # ----------------------------
+    # RENDER VIDEO
+    # ----------------------------
+
+    output_path = f"{VIDEO_DIR}/{job_id}.mp4"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_file,
+        "-i",
+        audio_path,
+        "-vsync",
+        "vfr",
+        "-pix_fmt",
+        "yuv420p",
+        "-vf",
+        "scale=1080:1920",
+        "-shortest",
+        output_path,
+    ]
+
+    subprocess.run(cmd, check=True)
+
+    # ----------------------------
+    # UPLOAD TO R2
+    # ----------------------------
+
+    r2_key = f"videos/{job_id}.mp4"
+
+    r2.upload_file(
+        output_path,
+        R2_BUCKET,
+        r2_key,
+        ExtraArgs={"ContentType": "video/mp4"},
+    )
+
+    video_url = f"{R2_ENDPOINT}/{R2_BUCKET}/{r2_key}"
+
+    # ----------------------------
+    # RESPONSE
+    # ----------------------------
+
+    return jsonify({
+        "status": "rendered",
+        "job_id": job_id,
+        "video": video_url
+    })
 
 
-# ----------------------------------------
+# ----------------------------
 # HEALTH CHECK
-# ----------------------------------------
+# ----------------------------
 
 @app.route("/")
 def health():
@@ -26,155 +152,9 @@ def health():
     })
 
 
-# ----------------------------------------
-# SAFE FILE DOWNLOAD
-# ----------------------------------------
-
-def download_file(url, path):
-
-    try:
-        r = requests.get(url, timeout=20)
-
-        if r.status_code != 200:
-            raise Exception(f"Download failed {url}")
-
-        with open(path, "wb") as f:
-            f.write(r.content)
-
-        return True
-
-    except Exception as e:
-        return str(e)
-
-
-# ----------------------------------------
-# RENDER ENDPOINT
-# ----------------------------------------
-
-@app.route("/render", methods=["POST"])
-def render_video():
-
-    try:
-
-        data = request.json
-
-        job_id = data.get("job_id", str(uuid.uuid4()))
-        images = data.get("images", [])
-        audio = data.get("audio")
-
-        if not images:
-            return jsonify({"error": "No images provided"}), 400
-
-        job_dir = f"{TMP_DIR}/{job_id}"
-        os.makedirs(job_dir, exist_ok=True)
-
-        image_paths = []
-
-        # --------------------------------
-        # DOWNLOAD IMAGES
-        # --------------------------------
-
-        for i, img_url in enumerate(images):
-
-            img_path = f"{job_dir}/img{i}.png"
-
-            result = download_file(img_url, img_path)
-
-            if result is not True:
-                return jsonify({
-                    "error": "image download failed",
-                    "url": img_url,
-                    "details": result
-                }), 400
-
-            image_paths.append(img_path)
-
-        # --------------------------------
-        # DOWNLOAD AUDIO
-        # --------------------------------
-
-        audio_path = f"{job_dir}/audio.mp3"
-
-        result = download_file(audio, audio_path)
-
-        if result is not True:
-            return jsonify({
-                "error": "audio download failed",
-                "details": result
-            }), 400
-
-        # --------------------------------
-        # BUILD FFMPEG LIST
-        # --------------------------------
-
-        list_file = f"{job_dir}/images.txt"
-
-        with open(list_file, "w") as f:
-
-            for img in image_paths:
-                f.write(f"file '{img}'\n")
-                f.write("duration 5\n")
-
-        output_video = f"{VIDEO_DIR}/{job_id}.mp4"
-
-        # --------------------------------
-        # RUN FFMPEG
-        # --------------------------------
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", list_file,
-            "-i", audio_path,
-            "-vsync", "vfr",
-            "-pix_fmt", "yuv420p",
-            "-shortest",
-            output_video
-        ]
-
-        process = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        if process.returncode != 0:
-
-            return jsonify({
-                "error": "ffmpeg failed",
-                "details": process.stderr.decode()
-            }), 500
-
-        # --------------------------------
-        # SUCCESS RESPONSE
-        # --------------------------------
-
-        return jsonify({
-            "status": "rendered",
-            "job_id": job_id,
-            "video": output_video
-        })
-
-    except Exception as e:
-
-        return jsonify({
-            "error": "server_exception",
-            "message": str(e),
-            "trace": traceback.format_exc()
-        }), 500
-
-
-# ----------------------------------------
-# SERVER START
-# ----------------------------------------
+# ----------------------------
+# RUN
+# ----------------------------
 
 if __name__ == "__main__":
-
-    port = int(os.environ.get("PORT", 10000))
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    app.run(host="0.0.0.0", port=10000)
