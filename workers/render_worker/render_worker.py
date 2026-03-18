@@ -1,201 +1,292 @@
-import subprocess
-import uuid
 import os
-import json
-from pathlib import Path
+import subprocess
+import requests
+import boto3
+from flask import Flask, request, jsonify
 
+app = Flask(__name__)
 
-# ----------------------------------
-# PATH CONFIG
-# ----------------------------------
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
 
-IMAGE_FOLDER = Path("assets/images")
-VIDEO_FOLDER = Path("assets/videos")
-MUSIC_PATH = Path("assets/music/ambient_future.mp3")
+R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
+R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
+R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
+R2_BUCKET = os.environ.get("R2_BUCKET")
 
-VIDEO_FOLDER.mkdir(parents=True, exist_ok=True)
+TMP = "/tmp/india20sixty"
 
+IMG_DIR = f"{TMP}/images"
+VID_DIR = f"{TMP}/videos"
+AUD_DIR = f"{TMP}/audio"
+SUB_DIR = f"{TMP}/subs"
 
-# ----------------------------------
-# MOTION GENERATOR
-# ----------------------------------
+os.makedirs(IMG_DIR, exist_ok=True)
+os.makedirs(VID_DIR, exist_ok=True)
+os.makedirs(AUD_DIR, exist_ok=True)
+os.makedirs(SUB_DIR, exist_ok=True)
 
-def create_motion_clip(image_path, output_path):
+MUSIC_FILE = "assets/music.mp3"
+
+# --------------------------------------------------
+# R2 CLIENT
+# --------------------------------------------------
+
+r2 = boto3.client(
+    "s3",
+    endpoint_url=R2_ENDPOINT,
+    aws_access_key_id=R2_ACCESS_KEY,
+    aws_secret_access_key=R2_SECRET_KEY
+)
+
+# --------------------------------------------------
+# DOWNLOAD HELPER
+# --------------------------------------------------
+
+def download(url, path):
+
+    r = requests.get(url)
+
+    with open(path, "wb") as f:
+        f.write(r.content)
+
+# --------------------------------------------------
+# CREATE VIDEO SEGMENT
+# --------------------------------------------------
+
+def build_segment(image, output):
 
     cmd = [
+
         "ffmpeg",
-        "-loop", "1",
-        "-i", image_path,
-        "-vf",
-        "zoompan=z='min(zoom+0.0015,1.08)':d=150:s=1080x1920",
-        "-t", "5",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
         "-y",
-        output_path
+
+        "-loop", "1",
+        "-i", image,
+
+        "-t", "5",
+
+        "-vf",
+
+        # Ken Burns + Color grading
+        "zoompan=z='min(zoom+0.0015,1.2)':d=125:s=1080x1920,"
+        "eq=contrast=1.1:saturation=1.2:brightness=0.03",
+
+        "-pix_fmt", "yuv420p",
+        "-c:v", "libx264",
+
+        output
+
     ]
 
     subprocess.run(cmd)
 
+# --------------------------------------------------
+# CONCAT SEGMENTS
+# --------------------------------------------------
 
-# ----------------------------------
-# MERGE CLIPS
-# ----------------------------------
+def concat_segments(segment_paths, output):
 
-def merge_clips(clips, output):
+    list_file = f"{TMP}/segments.txt"
 
-    inputs = []
+    with open(list_file, "w") as f:
 
-    for clip in clips:
-        inputs.extend(["-i", clip])
+        for seg in segment_paths:
+            f.write(f"file '{seg}'\n")
 
-    filter_complex = (
-        "[0:v][1:v]xfade=transition=fade:duration=0.3:offset=4.7[v1];"
-        "[v1][2:v]xfade=transition=fade:duration=0.3:offset=9.4[v2];"
-        "[v2][3:v]xfade=transition=fade:duration=0.3:offset=14.1[v3];"
-        "[v3][4:v]xfade=transition=fade:duration=0.3:offset=18.8[v]"
+    subprocess.run([
+
+        "ffmpeg",
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file,
+        "-c", "copy",
+        output
+
+    ])
+
+# --------------------------------------------------
+# ADD AUDIO + MUSIC
+# --------------------------------------------------
+
+def add_audio(video, voice, output):
+
+    subprocess.run([
+
+        "ffmpeg",
+        "-y",
+
+        "-i", video,
+        "-i", voice,
+        "-i", MUSIC_FILE,
+
+        "-filter_complex",
+
+        "[1:a]volume=1[a1];"
+        "[2:a]volume=0.15[a2];"
+        "[a1][a2]amix=inputs=2[aout]",
+
+        "-map", "0:v",
+        "-map", "[aout]",
+
+        "-shortest",
+
+        output
+
+    ])
+
+# --------------------------------------------------
+# ADD SUBTITLES
+# --------------------------------------------------
+
+def add_subtitles(video, subtitle_file, output):
+
+    subprocess.run([
+
+        "ffmpeg",
+        "-y",
+
+        "-i", video,
+
+        "-vf", f"subtitles={subtitle_file}",
+
+        "-c:a", "copy",
+
+        output
+
+    ])
+
+# --------------------------------------------------
+# RENDER ENDPOINT
+# --------------------------------------------------
+
+@app.route("/render", methods=["POST"])
+def render():
+
+    data = request.json
+
+    job_id = data["job_id"]
+    image_urls = data["images"]
+    audio_url = data["audio"]
+    subtitle_url = data.get("subtitles")
+
+    # --------------------------------------------------
+    # DOWNLOAD ASSETS
+    # --------------------------------------------------
+
+    image_paths = []
+
+    for i, url in enumerate(image_urls):
+
+        path = f"{IMG_DIR}/{job_id}_{i}.jpg"
+
+        download(url, path)
+
+        image_paths.append(path)
+
+    audio_path = f"{AUD_DIR}/{job_id}.mp3"
+
+    download(audio_url, audio_path)
+
+    subtitle_path = None
+
+    if subtitle_url:
+
+        subtitle_path = f"{SUB_DIR}/{job_id}.srt"
+
+        download(subtitle_url, subtitle_path)
+
+    # --------------------------------------------------
+    # BUILD SEGMENTS
+    # --------------------------------------------------
+
+    segments = []
+
+    for i, img in enumerate(image_paths):
+
+        seg = f"{VID_DIR}/{job_id}_seg{i}.mp4"
+
+        build_segment(img, seg)
+
+        segments.append(seg)
+
+    # --------------------------------------------------
+    # MERGE SEGMENTS
+    # --------------------------------------------------
+
+    merged = f"{VID_DIR}/{job_id}_merged.mp4"
+
+    concat_segments(segments, merged)
+
+    # --------------------------------------------------
+    # ADD AUDIO
+    # --------------------------------------------------
+
+    with_audio = f"{VID_DIR}/{job_id}_audio.mp4"
+
+    add_audio(merged, audio_path, with_audio)
+
+    final_video = f"{VID_DIR}/{job_id}.mp4"
+
+    # --------------------------------------------------
+    # ADD SUBTITLES
+    # --------------------------------------------------
+
+    if subtitle_path:
+
+        add_subtitles(with_audio, subtitle_path, final_video)
+
+    else:
+
+        final_video = with_audio
+
+    # --------------------------------------------------
+    # UPLOAD TO R2
+    # --------------------------------------------------
+
+    key = f"videos/{job_id}.mp4"
+
+    r2.upload_file(
+
+        final_video,
+        R2_BUCKET,
+        key,
+        ExtraArgs={"ContentType": "video/mp4"}
+
     )
 
-    cmd = [
-        "ffmpeg",
-        *inputs,
-        "-filter_complex", filter_complex,
-        "-map", "[v]",
-        "-y",
-        output
-    ]
+    video_url = f"{R2_ENDPOINT}/{R2_BUCKET}/{key}"
 
-    subprocess.run(cmd)
+    return jsonify({
 
+        "status": "rendered",
+        "job_id": job_id,
+        "video": video_url
 
-# ----------------------------------
-# ADD AUDIO
-# ----------------------------------
-
-def add_audio(video_path, voice_path, output_path):
-
-    cmd = [
-        "ffmpeg",
-        "-i", video_path,
-        "-i", voice_path,
-        "-i", str(MUSIC_PATH),
-        "-filter_complex",
-        "[1:a][2:a]amix=inputs=2:duration=longest[a]",
-        "-map", "0:v",
-        "-map", "[a]",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-shortest",
-        "-y",
-        output_path
-    ]
-
-    subprocess.run(cmd)
+    })
 
 
-# ----------------------------------
-# ADD SUBTITLES
-# ----------------------------------
+# --------------------------------------------------
+# HEALTH CHECK
+# --------------------------------------------------
 
-def add_subtitles(video_path, subtitle_path, output):
+@app.route("/")
+def health():
 
-    cmd = [
-        "ffmpeg",
-        "-i", video_path,
-        "-vf", f"subtitles={subtitle_path}",
-        "-c:a", "copy",
-        "-y",
-        output
-    ]
+    return jsonify({
 
-    subprocess.run(cmd)
+        "service": "india20sixty-render",
+        "status": "running"
+
+    })
 
 
-# ----------------------------------
-# JOB PROCESSOR
-# ----------------------------------
-
-def process_job(job):
-
-    job_id = job["job_id"]
-
-    images = job["images"]
-
-    voice = job["audio_voice"]
-
-    subtitles = job["subtitles"]
-
-    temp_clips = []
-
-    for i, image in enumerate(images):
-
-        clip = f"temp_clip_{i}.mp4"
-
-        create_motion_clip(image, clip)
-
-        temp_clips.append(clip)
-
-    merged_video = f"merged_{job_id}.mp4"
-
-    merge_clips(temp_clips, merged_video)
-
-    audio_video = f"audio_{job_id}.mp4"
-
-    add_audio(merged_video, voice, audio_video)
-
-    final_video = VIDEO_FOLDER / f"{job_id}.mp4"
-
-    add_subtitles(audio_video, subtitles, str(final_video))
-
-    job["video_path"] = str(final_video)
-
-    job["status"] = "video_ready"
-
-    return job
-
-
-# ----------------------------------
-# WORKER LOOP
-# ----------------------------------
-
-def run_worker():
-
-    print("Render Worker Started")
-
-    while True:
-
-        try:
-
-            job = {
-
-                "job_id": str(uuid.uuid4()),
-
-                "images": [
-                    "assets/images/test/image1.png",
-                    "assets/images/test/image2.png",
-                    "assets/images/test/image3.png",
-                    "assets/images/test/image4.png",
-                    "assets/images/test/image5.png"
-                ],
-
-                "audio_voice": "voice.mp3",
-
-                "subtitles": "subtitles.srt"
-            }
-
-            job = process_job(job)
-
-            print("\nVideo created:")
-
-            print(job["video_path"])
-
-            break
-
-        except Exception as e:
-
-            print("Render error:", e)
-
+# --------------------------------------------------
+# RUN SERVER
+# --------------------------------------------------
 
 if __name__ == "__main__":
 
-    run_worker()
+    app.run(host="0.0.0.0", port=10000)
