@@ -15,14 +15,14 @@ export default {
       }
 
       // --------------------------------
-      // ROOT
+      // HEALTH CHECK
       // --------------------------------
 
       if (url.pathname === "/") {
 
         return Response.json({
           system: "India20Sixty",
-          status: "Worker running"
+          status: "running"
         })
 
       }
@@ -34,7 +34,7 @@ export default {
       if (url.pathname === "/topics") {
 
         const res = await fetch(
-          `${base}/topics?select=*&limit=10`,
+          `${base}/topics?select=*&limit=20`,
           { headers }
         )
 
@@ -45,7 +45,7 @@ export default {
       }
 
       // --------------------------------
-      // GET NEXT UNUSED TOPIC
+      // GET NEXT TOPIC
       // --------------------------------
 
       if (url.pathname === "/topic") {
@@ -65,20 +65,7 @@ export default {
 
         }
 
-        const topic = rows[0]
-
-        await fetch(
-          `${base}/topics?id=eq.${topic.id}`,
-          {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({
-              used: true
-            })
-          }
-        )
-
-        return Response.json(topic)
+        return Response.json(rows[0])
 
       }
 
@@ -93,9 +80,9 @@ export default {
           { headers }
         )
 
-        const topics = await topicRes.json()
+        const rows = await topicRes.json()
 
-        if (!topics.length) {
+        if (!rows.length) {
 
           return Response.json({
             error: "No topics left"
@@ -103,7 +90,7 @@ export default {
 
         }
 
-        const topic = topics[0]
+        const topic = rows[0]
 
         const jobRes = await fetch(
           `${base}/jobs`,
@@ -116,7 +103,7 @@ export default {
             body: JSON.stringify({
               topic: topic.topic,
               cluster: topic.cluster,
-              status: "topic_generated"
+              status: "job_created"
             })
           }
         )
@@ -128,13 +115,11 @@ export default {
           {
             method: "PATCH",
             headers,
-            body: JSON.stringify({
-              used: true
-            })
+            body: JSON.stringify({ used: true })
           }
         )
 
-        return Response.json(job)
+        return Response.json(job[0])
 
       }
 
@@ -145,7 +130,7 @@ export default {
       if (url.pathname === "/jobs") {
 
         const res = await fetch(
-          `${base}/jobs?select=*`,
+          `${base}/jobs?select=*&order=id.desc`,
           { headers }
         )
 
@@ -161,12 +146,12 @@ export default {
 
       if (url.pathname === "/script") {
 
-        const res = await fetch(
+        const topicRes = await fetch(
           `${base}/topics?used=eq.false&limit=1`,
           { headers }
         )
 
-        const rows = await res.json()
+        const rows = await topicRes.json()
 
         if (!rows.length) {
 
@@ -179,10 +164,15 @@ export default {
         const topic = rows[0]
 
         const hooks = [
-          `Socho agar ${topic.topic} reality ban jaye…`,
-          `Sach bataun… ${topic.topic} India mein possible hai`,
+
+          `Socho agar ${topic.topic} reality ban jaye...`,
+
+          `Sach bataun... ${topic.topic} India mein possible hai`,
+
           `2035 tak ${topic.topic} common ho sakta hai`,
+
           `Kya India ${topic.topic} ke liye ready hai?`
+
         ]
 
         const hook =
@@ -213,7 +203,7 @@ export default {
       }
 
       // --------------------------------
-      // VISUAL PROMPT GENERATOR
+      // IMAGE PROMPTS
       // --------------------------------
 
       if (url.pathname === "/prompts") {
@@ -235,20 +225,20 @@ export default {
 
         const topic = rows[0].topic
 
-        const baseStyle =
+        const style =
           "futuristic India, advanced technology, cinematic lighting, ultra realistic, blue neon accents"
 
         const prompts = [
 
-          `Indian futuristic city skyline sunrise, ${baseStyle}`,
+          `futuristic Indian city skyline sunrise, ${style}`,
 
-          `AI medical system operating in Indian hospital, ${baseStyle}`,
+          `AI hospital system treating patients in India, ${style}`,
 
-          `robotic technology assisting humans in India, ${baseStyle}`,
+          `robotic technology assisting humans India, ${style}`,
 
-          `India 2060 futuristic megacity infrastructure, ${baseStyle}`,
+          `India 2060 smart megacity infrastructure, ${style}`,
 
-          `wide cinematic shot futuristic India skyline sunset, ${baseStyle}`
+          `wide cinematic futuristic India skyline sunset, ${style}`
 
         ]
 
@@ -263,7 +253,7 @@ export default {
       // FALLBACK
       // --------------------------------
 
-      return new Response("India20Sixty API")
+      return new Response("India20Sixty Worker")
 
     }
 
