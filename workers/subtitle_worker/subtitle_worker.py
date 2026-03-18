@@ -16,13 +16,15 @@ SUBTITLE_FOLDER.mkdir(parents=True, exist_ok=True)
 
 def extract_keywords(script):
 
-    subtitles = []
+    subtitles = [
 
-    subtitles.append("SOCHO AGAR")
-    subtitles.append("AI TREND")
-    subtitles.append("SMART TECHNOLOGY")
-    subtitles.append("INDIA 2060")
-    subtitles.append("INDIA READY?")
+        script["hook"].upper(),
+        script["trend"].upper(),
+        script["insight"].upper(),
+        script["future"].upper(),
+        script["question"].upper()
+
+    ]
 
     return subtitles
 
@@ -33,12 +35,14 @@ def extract_keywords(script):
 
 def build_srt(subtitles, job_id):
 
+    # timing matches 5 scenes (≈26 seconds)
+
     times = [
-        ("00:00:00,000", "00:00:03,000"),
-        ("00:00:04,000", "00:00:07,000"),
-        ("00:00:08,000", "00:00:12,000"),
+        ("00:00:00,000", "00:00:04,000"),
+        ("00:00:04,000", "00:00:08,000"),
+        ("00:00:08,000", "00:00:13,000"),
         ("00:00:13,000", "00:00:18,000"),
-        ("00:00:19,000", "00:00:25,000"),
+        ("00:00:18,000", "00:00:26,000"),
     ]
 
     lines = []
@@ -75,7 +79,7 @@ def process_job(job):
 
     srt_file = build_srt(subtitles, job_id)
 
-    job["subtitles"] = srt_file
+    job["subtitle_file"] = srt_file
 
     job["status"] = "subtitles_ready"
 
@@ -107,7 +111,7 @@ def run_worker():
 
     print("\nSubtitle file created:")
 
-    print(job["subtitles"])
+    print(job["subtitle_file"])
 
 
 if __name__ == "__main__":
