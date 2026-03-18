@@ -2,6 +2,16 @@ export default {
 
   async fetch(request, env) {
 
+    const cors = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    }
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: cors })
+    }
+
     try {
 
       const url = new URL(request.url)
@@ -14,22 +24,22 @@ export default {
         "Content-Type": "application/json"
       }
 
-      // --------------------------------
+      // -------------------------------
       // HEALTH CHECK
-      // --------------------------------
+      // -------------------------------
 
       if (url.pathname === "/") {
 
         return Response.json({
           system: "India20Sixty",
           status: "running"
-        })
+        }, { headers: cors })
 
       }
 
-      // --------------------------------
+      // -------------------------------
       // LIST TOPICS
-      // --------------------------------
+      // -------------------------------
 
       if (url.pathname === "/topics") {
 
@@ -40,13 +50,13 @@ export default {
 
         const data = await res.json()
 
-        return Response.json(data)
+        return Response.json(data, { headers: cors })
 
       }
 
-      // --------------------------------
-      // GET NEXT TOPIC
-      // --------------------------------
+      // -------------------------------
+      // GET NEXT UNUSED TOPIC
+      // -------------------------------
 
       if (url.pathname === "/topic") {
 
@@ -58,20 +68,19 @@ export default {
         const rows = await res.json()
 
         if (!rows.length) {
-
-          return Response.json({
-            error: "No topics available"
-          })
-
+          return Response.json(
+            { error: "No topics available" },
+            { headers: cors }
+          )
         }
 
-        return Response.json(rows[0])
+        return Response.json(rows[0], { headers: cors })
 
       }
 
-      // --------------------------------
+      // -------------------------------
       // CREATE JOB
-      // --------------------------------
+      // -------------------------------
 
       if (url.pathname === "/create-job") {
 
@@ -83,11 +92,10 @@ export default {
         const rows = await topicRes.json()
 
         if (!rows.length) {
-
-          return Response.json({
-            error: "No topics left"
-          })
-
+          return Response.json(
+            { error: "No topics left" },
+            { headers: cors }
+          )
         }
 
         const topic = rows[0]
@@ -119,13 +127,13 @@ export default {
           }
         )
 
-        return Response.json(job[0])
+        return Response.json(job[0], { headers: cors })
 
       }
 
-      // --------------------------------
+      // -------------------------------
       // LIST JOBS
-      // --------------------------------
+      // -------------------------------
 
       if (url.pathname === "/jobs") {
 
@@ -136,43 +144,37 @@ export default {
 
         const data = await res.json()
 
-        return Response.json(data)
+        return Response.json(data, { headers: cors })
 
       }
 
-      // --------------------------------
+      // -------------------------------
       // SCRIPT GENERATOR
-      // --------------------------------
+      // -------------------------------
 
       if (url.pathname === "/script") {
 
-        const topicRes = await fetch(
+        const res = await fetch(
           `${base}/topics?used=eq.false&limit=1`,
           { headers }
         )
 
-        const rows = await topicRes.json()
+        const rows = await res.json()
 
         if (!rows.length) {
-
-          return Response.json({
-            error: "No topics available"
-          })
-
+          return Response.json(
+            { error: "No topics available" },
+            { headers: cors }
+          )
         }
 
         const topic = rows[0]
 
         const hooks = [
-
           `Socho agar ${topic.topic} reality ban jaye...`,
-
           `Sach bataun... ${topic.topic} India mein possible hai`,
-
           `2035 tak ${topic.topic} common ho sakta hai`,
-
           `Kya India ${topic.topic} ke liye ready hai?`
-
         ]
 
         const hook =
@@ -198,29 +200,28 @@ export default {
 
         }
 
-        return Response.json(script)
+        return Response.json(script, { headers: cors })
 
       }
 
-      // --------------------------------
+      // -------------------------------
       // IMAGE PROMPTS
-      // --------------------------------
+      // -------------------------------
 
       if (url.pathname === "/prompts") {
 
-        const topicRes = await fetch(
+        const res = await fetch(
           `${base}/topics?used=eq.false&limit=1`,
           { headers }
         )
 
-        const rows = await topicRes.json()
+        const rows = await res.json()
 
         if (!rows.length) {
-
-          return Response.json({
-            error: "No topics available"
-          })
-
+          return Response.json(
+            { error: "No topics available" },
+            { headers: cors }
+          )
         }
 
         const topic = rows[0].topic
@@ -245,23 +246,25 @@ export default {
         return Response.json({
           topic,
           prompts
-        })
+        }, { headers: cors })
 
       }
 
-      // --------------------------------
+      // -------------------------------
       // FALLBACK
-      // --------------------------------
+      // -------------------------------
 
-      return new Response("India20Sixty Worker")
+      return new Response(
+        "India20Sixty Worker",
+        { headers: cors }
+      )
 
     }
 
     catch (error) {
 
       return Response.json({
-        error: error.message,
-        stack: error.stack
+        error: error.message
       })
 
     }
