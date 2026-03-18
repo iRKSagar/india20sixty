@@ -1,5 +1,5 @@
-from queue.queue_manager import QueueManager
-from queue.job_schema import Job
+from job_queue.queue_manager import QueueManager
+from job_queue.job_schema import Job
 
 queue = QueueManager()
 
