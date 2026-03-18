@@ -2,97 +2,179 @@ from flask import Flask, request, jsonify
 import os
 import requests
 import subprocess
+import uuid
+import traceback
 
 app = Flask(__name__)
 
-TMP_DIR = "/tmp"
-VIDEO_DIR = "/tmp/videos"
+TMP_DIR = "/tmp/india20sixty"
+VIDEO_DIR = f"{TMP_DIR}/videos"
 
+os.makedirs(TMP_DIR, exist_ok=True)
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
 
+# ----------------------------------------
+# HEALTH CHECK
+# ----------------------------------------
+
 @app.route("/")
 def health():
-    return {
+    return jsonify({
         "service": "india20sixty-render",
         "status": "running"
-    }
+    })
 
+
+# ----------------------------------------
+# SAFE FILE DOWNLOAD
+# ----------------------------------------
 
 def download_file(url, path):
-    r = requests.get(url)
-    with open(path, "wb") as f:
-        f.write(r.content)
 
+    try:
+        r = requests.get(url, timeout=20)
+
+        if r.status_code != 200:
+            raise Exception(f"Download failed {url}")
+
+        with open(path, "wb") as f:
+            f.write(r.content)
+
+        return True
+
+    except Exception as e:
+        return str(e)
+
+
+# ----------------------------------------
+# RENDER ENDPOINT
+# ----------------------------------------
 
 @app.route("/render", methods=["POST"])
 def render_video():
 
-    data = request.json
+    try:
 
-    job_id = data["job_id"]
-    images = data["images"]
-    audio = data["audio"]
+        data = request.json
 
-    image_paths = []
+        job_id = data.get("job_id", str(uuid.uuid4()))
+        images = data.get("images", [])
+        audio = data.get("audio")
 
-    # -----------------------------
-    # Download Images
-    # -----------------------------
+        if not images:
+            return jsonify({"error": "No images provided"}), 400
 
-    for i, img_url in enumerate(images):
+        job_dir = f"{TMP_DIR}/{job_id}"
+        os.makedirs(job_dir, exist_ok=True)
 
-        path = f"{TMP_DIR}/img{i}.png"
+        image_paths = []
 
-        download_file(img_url, path)
+        # --------------------------------
+        # DOWNLOAD IMAGES
+        # --------------------------------
 
-        image_paths.append(path)
+        for i, img_url in enumerate(images):
 
-    # -----------------------------
-    # Download Audio
-    # -----------------------------
+            img_path = f"{job_dir}/img{i}.png"
 
-    audio_path = f"{TMP_DIR}/audio.mp3"
+            result = download_file(img_url, img_path)
 
-    download_file(audio, audio_path)
+            if result is not True:
+                return jsonify({
+                    "error": "image download failed",
+                    "url": img_url,
+                    "details": result
+                }), 400
 
-    # -----------------------------
-    # Create FFmpeg Input List
-    # -----------------------------
+            image_paths.append(img_path)
 
-    list_file = f"{TMP_DIR}/images.txt"
+        # --------------------------------
+        # DOWNLOAD AUDIO
+        # --------------------------------
 
-    with open(list_file, "w") as f:
-        for path in image_paths:
-            f.write(f"file '{path}'\n")
-            f.write("duration 5\n")
+        audio_path = f"{job_dir}/audio.mp3"
 
-    output_video = f"{VIDEO_DIR}/{job_id}.mp4"
+        result = download_file(audio, audio_path)
 
-    # -----------------------------
-    # Run FFmpeg
-    # -----------------------------
+        if result is not True:
+            return jsonify({
+                "error": "audio download failed",
+                "details": result
+            }), 400
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", list_file,
-        "-i", audio_path,
-        "-vsync", "vfr",
-        "-pix_fmt", "yuv420p",
-        "-shortest",
-        output_video
-    ]
+        # --------------------------------
+        # BUILD FFMPEG LIST
+        # --------------------------------
 
-    subprocess.run(cmd)
+        list_file = f"{job_dir}/images.txt"
 
-    return jsonify({
-        "status": "rendered",
-        "video": output_video
-    })
+        with open(list_file, "w") as f:
 
+            for img in image_paths:
+                f.write(f"file '{img}'\n")
+                f.write("duration 5\n")
+
+        output_video = f"{VIDEO_DIR}/{job_id}.mp4"
+
+        # --------------------------------
+        # RUN FFMPEG
+        # --------------------------------
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_file,
+            "-i", audio_path,
+            "-vsync", "vfr",
+            "-pix_fmt", "yuv420p",
+            "-shortest",
+            output_video
+        ]
+
+        process = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        if process.returncode != 0:
+
+            return jsonify({
+                "error": "ffmpeg failed",
+                "details": process.stderr.decode()
+            }), 500
+
+        # --------------------------------
+        # SUCCESS RESPONSE
+        # --------------------------------
+
+        return jsonify({
+            "status": "rendered",
+            "job_id": job_id,
+            "video": output_video
+        })
+
+    except Exception as e:
+
+        return jsonify({
+            "error": "server_exception",
+            "message": str(e),
+            "trace": traceback.format_exc()
+        }), 500
+
+
+# ----------------------------------------
+# SERVER START
+# ----------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+    port = int(os.environ.get("PORT", 10000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
