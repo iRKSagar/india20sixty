@@ -1,220 +1,228 @@
 import os
-import subprocess
+import time
+import uuid
 import requests
-import boto3
+import subprocess
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-
-R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
-R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
-R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
-R2_BUCKET = os.environ.get("R2_BUCKET")
-
 TMP_DIR = "/tmp/india20sixty"
-IMAGE_DIR = f"{TMP_DIR}/images"
-AUDIO_DIR = f"{TMP_DIR}/audio"
-VIDEO_DIR = f"{TMP_DIR}/videos"
+IMG_DIR = f"{TMP_DIR}/images"
+AUD_DIR = f"{TMP_DIR}/audio"
+VID_DIR = f"{TMP_DIR}/videos"
 
-os.makedirs(IMAGE_DIR, exist_ok=True)
-os.makedirs(AUDIO_DIR, exist_ok=True)
-os.makedirs(VIDEO_DIR, exist_ok=True)
+os.makedirs(IMG_DIR, exist_ok=True)
+os.makedirs(AUD_DIR, exist_ok=True)
+os.makedirs(VID_DIR, exist_ok=True)
 
-# Background music file bundled in repo
-MUSIC_FILE = "assets/music.mp3"
+LEONARDO_API_KEY = os.environ["LEONARDO_API_KEY"]
+ELEVENLABS_API_KEY = os.environ["ELEVENLABS_API_KEY"]
 
-# -----------------------------
-# R2 CLIENT
-# -----------------------------
+VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 
-r2 = boto3.client(
-    "s3",
-    endpoint_url=R2_ENDPOINT,
-    aws_access_key_id=R2_ACCESS_KEY,
-    aws_secret_access_key=R2_SECRET_KEY
-)
 
-# -----------------------------
-# DOWNLOAD
-# -----------------------------
+# ---------------- IMAGE GENERATION ----------------
 
-def download(url, path):
+def generate_image(prompt):
 
-    r = requests.get(url)
+    create = requests.post(
+        "https://cloud.leonardo.ai/api/rest/v1/generations",
+        headers={
+            "Authorization": f"Bearer {LEONARDO_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "prompt": prompt,
+            "modelId": "b2614463-296c-462a-9586-aafdb8f00e36",
+            "width": 1080,
+            "height": 1536,
+            "num_images": 1
+        }
+    ).json()
 
-    with open(path, "wb") as f:
-        f.write(r.content)
+    generation_id = create["sdGenerationJob"]["generationId"]
 
-# -----------------------------
-# RENDER
-# -----------------------------
+    for _ in range(12):
 
-@app.route("/render", methods=["POST"])
-def render():
+        time.sleep(2)
 
-    data = request.json
+        res = requests.get(
+            f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
+            headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"}
+        ).json()
 
-    job_id = data["job_id"]
-    images = data["images"]
-    audio = data["audio"]
+        g = res["generations_by_pk"]
 
-    image_paths = []
+        if g["status"] == "COMPLETE" and g["generated_images"]:
+            return g["generated_images"][0]["url"]
 
-    # -----------------------------
-    # DOWNLOAD IMAGES
-    # -----------------------------
+    raise Exception("Leonardo generation timeout")
+
+
+# ---------------- VOICE ----------------
+
+def generate_voice(text, job_id):
+
+    audio_path = f"{AUD_DIR}/{job_id}.mp3"
+
+    res = requests.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
+        headers={
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json"
+        },
+        json={
+            "text": text,
+            "model_id": "eleven_multilingual_v2"
+        }
+    )
+
+    with open(audio_path, "wb") as f:
+        f.write(res.content)
+
+    return audio_path
+
+
+# ---------------- VIDEO RENDER ----------------
+
+def render_video(images, audio, job_id):
+
+    video_path = f"{VID_DIR}/{job_id}.mp4"
+
+    inputs = []
+    filters = []
 
     for i, img in enumerate(images):
 
-        path = f"{IMAGE_DIR}/{job_id}_{i}.jpg"
+        img_path = f"{IMG_DIR}/{job_id}_{i}.jpg"
 
-        download(img, path)
+        r = requests.get(img)
 
-        image_paths.append(path)
+        with open(img_path, "wb") as f:
+            f.write(r.content)
 
-    # -----------------------------
-    # DOWNLOAD VOICE
-    # -----------------------------
+        inputs.extend(["-loop", "1", "-t", "5", "-i", img_path])
 
-    audio_path = f"{AUDIO_DIR}/{job_id}.mp3"
+        filters.append(
+            f"[{i}:v]zoompan=z='min(zoom+0.0015,1.2)':d=125:s=1080x1920[v{i}]"
+        )
 
-    download(audio, audio_path)
+    filter_complex = ";".join(filters)
 
-    # -----------------------------
-    # CREATE VIDEO SEGMENTS
-    # -----------------------------
-
-    segments = []
-
-    for i, img in enumerate(image_paths):
-
-        segment = f"{VIDEO_DIR}/{job_id}_seg{i}.mp4"
-
-        cmd = [
-
-            "ffmpeg",
-            "-y",
-            "-loop", "1",
-            "-i", img,
-            "-t", "5",
-
-            "-vf",
-
-            # Ken Burns zoom
-            "zoompan=z='min(zoom+0.0015,1.2)':d=125:s=1080x1920",
-
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libx264",
-
-            segment
-        ]
-
-        subprocess.run(cmd)
-
-        segments.append(segment)
-
-    # -----------------------------
-    # CONCAT FILE
-    # -----------------------------
-
-    concat_file = f"{TMP_DIR}/{job_id}_concat.txt"
-
-    with open(concat_file, "w") as f:
-
-        for s in segments:
-
-            f.write(f"file '{s}'\n")
-
-    merged = f"{VIDEO_DIR}/{job_id}_merged.mp4"
-
-    subprocess.run([
+    cmd = [
         "ffmpeg",
         "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concat_file,
-        "-c", "copy",
-        merged
-    ])
-
-    # -----------------------------
-    # ADD AUDIO + MUSIC
-    # -----------------------------
-
-    final_video = f"{VIDEO_DIR}/{job_id}.mp4"
-
-    subprocess.run([
-
-        "ffmpeg",
-        "-y",
-        "-i", merged,
-        "-i", audio_path,
-        "-i", MUSIC_FILE,
-
-        "-filter_complex",
-
-        "[1:a]volume=1[a1];"
-        "[2:a]volume=0.15[a2];"
-        "[a1][a2]amix=inputs=2[aout]",
-
-        "-map", "0:v",
-        "-map", "[aout]",
-
+        *inputs,
+        "-i", audio,
+        "-filter_complex", filter_complex,
+        "-map", "[v0]",
+        "-map", f"{len(images)}:a",
         "-shortest",
-        "-c:v", "copy",
+        "-pix_fmt", "yuv420p",
+        video_path
+    ]
 
-        final_video
-    ])
+    subprocess.run(cmd)
 
-    # -----------------------------
-    # UPLOAD TO R2
-    # -----------------------------
+    return video_path
 
-    key = f"videos/{job_id}.mp4"
 
-    r2.upload_file(
+# ---------------- YOUTUBE UPLOAD ----------------
 
-        final_video,
-        R2_BUCKET,
-        key,
-        ExtraArgs={"ContentType": "video/mp4"}
+def upload_to_youtube(video_path, title):
 
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+    from google.oauth2.credentials import Credentials
+
+    SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+    TOKEN = "/tmp/youtube_token.json"
+
+    client_config = {
+        "installed": {
+            "client_id": os.environ["YOUTUBE_CLIENT_ID"],
+            "project_id": os.environ["YOUTUBE_PROJECT_ID"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": os.environ["YOUTUBE_CLIENT_SECRET"],
+            "redirect_uris": ["http://localhost"]
+        }
+    }
+
+    creds = None
+
+    if os.path.exists(TOKEN):
+        creds = Credentials.from_authorized_user_file(TOKEN, SCOPES)
+
+    if not creds or not creds.valid:
+
+        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+        creds = flow.run_local_server(port=0)
+
+        with open(TOKEN, "w") as f:
+            f.write(creds.to_json())
+
+    youtube = build("youtube", "v3", credentials=creds)
+
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body={
+            "snippet": {
+                "title": title,
+                "description": "Future of India 2060",
+                "tags": ["India2060", "FutureTech", "AI"],
+                "categoryId": "28"
+            },
+            "status": {
+                "privacyStatus": "public"
+            }
+        },
+        media_body=MediaFileUpload(video_path)
     )
 
-    video_url = f"{R2_ENDPOINT}/{R2_BUCKET}/{key}"
+    res = request.execute()
+
+    return res["id"]
+
+
+# ---------------- PIPELINE ----------------
+
+@app.route("/full-pipeline", methods=["POST"])
+def pipeline():
+
+    data = request.json
+
+    job_id = data.get("job_id", str(uuid.uuid4()))
+    prompts = data["prompts"]
+    script = data["script"]
+
+    images = []
+
+    for prompt in prompts:
+        images.append(generate_image(prompt))
+
+    narration = ". ".join(script)
+
+    audio = generate_voice(narration, job_id)
+
+    video = render_video(images, audio, job_id)
+
+    youtube_id = upload_to_youtube(video, "AI Doctors in India 🇮🇳")
 
     return jsonify({
-
-        "status": "rendered",
         "job_id": job_id,
-        "video": video_url
-
+        "video": video,
+        "youtube_id": youtube_id
     })
 
-
-# -----------------------------
-# HEALTH
-# -----------------------------
 
 @app.route("/")
 def health():
+    return jsonify({"status": "render server running"})
 
-    return jsonify({
-
-        "service": "india20sixty-render",
-        "status": "running"
-
-    })
-
-
-# -----------------------------
-# RUN
-# -----------------------------
 
 if __name__ == "__main__":
-
     app.run(host="0.0.0.0", port=10000)
