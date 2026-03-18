@@ -1,25 +1,40 @@
 import requests
-import json
 import uuid
+import os
+import boto3
 from pathlib import Path
 
 # ----------------------------------
 # CONFIG
 # ----------------------------------
 
-ELEVENLABS_API_KEY = "YOUR_API_KEY"
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 
-VOICE_ID = "YOUR_VOICE_ID"
+VOICE_ID = "JsXbD9h4nEpbBMDxuEvT"
 
 API_URL = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
 
-AUDIO_FOLDER = Path("assets/audio")
+R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
+R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
+R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
+R2_BUCKET = os.environ.get("R2_BUCKET")
 
+AUDIO_FOLDER = Path("/tmp/audio")
 AUDIO_FOLDER.mkdir(parents=True, exist_ok=True)
 
+# ----------------------------------
+# R2 CLIENT
+# ----------------------------------
+
+r2 = boto3.client(
+    "s3",
+    endpoint_url=R2_ENDPOINT,
+    aws_access_key_id=R2_ACCESS_KEY,
+    aws_secret_access_key=R2_SECRET_KEY,
+)
 
 # ----------------------------------
-# SCRIPT TO TEXT
+# SCRIPT → NARRATION
 # ----------------------------------
 
 def build_narration(script):
@@ -36,7 +51,7 @@ def build_narration(script):
 
 
 # ----------------------------------
-# GENERATE AUDIO
+# GENERATE VOICE
 # ----------------------------------
 
 def generate_voice(text, job_id):
@@ -62,7 +77,27 @@ def generate_voice(text, job_id):
     with open(audio_path, "wb") as f:
         f.write(response.content)
 
-    return str(audio_path)
+    return audio_path
+
+
+# ----------------------------------
+# UPLOAD AUDIO TO R2
+# ----------------------------------
+
+def upload_audio(audio_path, job_id):
+
+    r2_key = f"audio/{job_id}.mp3"
+
+    r2.upload_file(
+        str(audio_path),
+        R2_BUCKET,
+        r2_key,
+        ExtraArgs={"ContentType": "audio/mpeg"}
+    )
+
+    audio_url = f"{R2_ENDPOINT}/{R2_BUCKET}/{r2_key}"
+
+    return audio_url
 
 
 # ----------------------------------
@@ -79,7 +114,9 @@ def process_job(job):
 
     audio_file = generate_voice(narration, job_id)
 
-    job["audio_voice"] = audio_file
+    audio_url = upload_audio(audio_file, job_id)
+
+    job["audio_voice"] = audio_url
 
     job["status"] = "voice_ready"
 
@@ -94,28 +131,22 @@ def run_worker():
 
     print("Voice Worker Started")
 
-    while True:
-
-        job = {
-            "job_id": str(uuid.uuid4()),
-            "script": {
-                "hook": "Socho agar AI doctors India mein common ho jayein.",
-                "trend": "AI already hospitals mein scans analyse kar raha hai.",
-                "insight": "Machines thousands of reports seconds mein process kar sakti hain.",
-                "future": "2060 tak AI doctors rural India tak healthcare pahucha sakte hain.",
-                "question": "Kya India ready hai AI healthcare revolution ke liye?"
-            }
+    job = {
+        "job_id": str(uuid.uuid4()),
+        "script": {
+            "hook": "Socho agar AI doctors India mein common ho jayein.",
+            "trend": "AI already hospitals mein scans analyse kar raha hai.",
+            "insight": "Machines thousands of reports seconds mein process kar sakti hain.",
+            "future": "2060 tak AI doctors rural India tak healthcare pahucha sakte hain.",
+            "question": "Kya India ready hai AI healthcare revolution ke liye?"
         }
+    }
 
-        job = process_job(job)
+    job = process_job(job)
 
-        print("\nVoice Generated:")
-
-        print(job["audio_voice"])
-
-        break
+    print("\nVoice Generated:")
+    print(job["audio_voice"])
 
 
 if __name__ == "__main__":
-
     run_worker()
