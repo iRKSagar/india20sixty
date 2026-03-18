@@ -39,7 +39,7 @@ r2 = boto3.client(
 
 def build_narration(script):
 
-    narration = " ".join([
+    narration = ". ".join([
         script["hook"],
         script["trend"],
         script["insight"],
