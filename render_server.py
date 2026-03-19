@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-import uuid
 import subprocess
 import json
 
@@ -22,52 +21,58 @@ YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 # UPDATE JOB STATUS
 # ------------------------------------------------
 
-def update_status(job_id,status):
+def update_status(job_id, status):
 
     try:
 
         requests.patch(
             f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
             headers={
-                "apikey":SUPABASE_ANON_KEY,
-                "Authorization":f"Bearer {SUPABASE_ANON_KEY}",
-                "Content-Type":"application/json"
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
             },
             json={
-                "status":status
+                "status": status,
+                "updated_at": "now()"
             }
         )
 
-    except:
-        pass
+    except Exception as e:
+        print("STATUS UPDATE ERROR", e)
 
 
 # ------------------------------------------------
 # GENERATE VOICE
 # ------------------------------------------------
 
-def generate_voice(script,job_id):
+def generate_voice(script, job_id):
 
-    update_status(job_id,"voice")
+    print("VOICE START")
+
+    update_status(job_id, "voice")
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
 
     r = requests.post(
         url,
         headers={
-            "xi-api-key":ELEVENLABS_API_KEY,
-            "Content-Type":"application/json"
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json"
         },
         json={
-            "text":script,
-            "model_id":"eleven_multilingual_v2"
+            "text": script,
+            "model_id": "eleven_multilingual_v2"
         }
     )
 
-    audio_path=f"/tmp/{job_id}.mp3"
+    audio_path = f"/tmp/{job_id}.mp3"
 
-    with open(audio_path,"wb") as f:
+    with open(audio_path, "wb") as f:
         f.write(r.content)
+
+    print("VOICE DONE")
 
     return audio_path
 
@@ -78,23 +83,28 @@ def generate_voice(script,job_id):
 
 def generate_images(job_id):
 
-    update_status(job_id,"images")
+    print("IMAGES START")
 
-    paths=[]
+    update_status(job_id, "images")
+
+    paths = []
 
     for i in range(5):
 
-        path=f"/tmp/{job_id}_{i}.png"
+        path = f"/tmp/{job_id}_{i}.png"
 
         subprocess.run([
             "ffmpeg",
-            "-f","lavfi",
-            "-i","color=c=blue:s=1080x1920",
-            "-frames:v","1",
+            "-f", "lavfi",
+            "-i", "color=c=blue:s=1080x1920",
+            "-frames:v", "1",
+            "-y",
             path
         ])
 
         paths.append(path)
+
+    print("IMAGES DONE")
 
     return paths
 
@@ -103,47 +113,63 @@ def generate_images(job_id):
 # RENDER VIDEO
 # ------------------------------------------------
 
-def render_video(images,audio,job_id):
+def render_video(images, audio, job_id):
 
-    update_status(job_id,"render")
+    print("RENDER START")
 
-    video_path=f"/tmp/{job_id}.mp4"
+    update_status(job_id, "render")
 
-    inputs=[]
+    slideshow = f"/tmp/{job_id}_slideshow.mp4"
+    video_path = f"/tmp/{job_id}.mp4"
 
-    for img in images:
-        inputs+=["-loop","1","-t","3","-i",img]
+    list_file = f"/tmp/{job_id}_list.txt"
 
-    cmd=[
+    with open(list_file, "w") as f:
+        for img in images:
+            f.write(f"file '{img}'\n")
+            f.write("duration 3\n")
+
+    subprocess.run([
         "ffmpeg",
-        *inputs,
-        "-i",audio,
-        "-filter_complex",
-        f"concat=n={len(images)}:v=1:a=0",
-        "-shortest",
-        "-s","1080x1920",
-        "-pix_fmt","yuv420p",
-        video_path
-    ]
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file,
+        "-vsync", "vfr",
+        "-pix_fmt", "yuv420p",
+        "-s", "1080x1920",
+        "-y",
+        slideshow
+    ])
 
-    subprocess.run(cmd)
+    subprocess.run([
+        "ffmpeg",
+        "-i", slideshow,
+        "-i", audio,
+        "-shortest",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-y",
+        video_path
+    ])
+
+    print("RENDER DONE")
 
     return video_path
 
 
 # ------------------------------------------------
-# YOUTUBE ACCESS TOKEN
+# GET YOUTUBE ACCESS TOKEN
 # ------------------------------------------------
 
 def get_youtube_token():
 
-    r=requests.post(
+    r = requests.post(
         "https://oauth2.googleapis.com/token",
         data={
-            "client_id":YOUTUBE_CLIENT_ID,
-            "client_secret":YOUTUBE_CLIENT_SECRET,
-            "refresh_token":YOUTUBE_REFRESH_TOKEN,
-            "grant_type":"refresh_token"
+            "client_id": YOUTUBE_CLIENT_ID,
+            "client_secret": YOUTUBE_CLIENT_SECRET,
+            "refresh_token": YOUTUBE_REFRESH_TOKEN,
+            "grant_type": "refresh_token"
         }
     )
 
@@ -154,42 +180,40 @@ def get_youtube_token():
 # YOUTUBE UPLOAD
 # ------------------------------------------------
 
-def upload_youtube(video_path,title,job_id):
+def upload_youtube(video_path, title, job_id):
 
-    update_status(job_id,"upload")
+    print("UPLOAD START")
 
-    token=get_youtube_token()
+    update_status(job_id, "upload")
 
-    headers={
-        "Authorization":f"Bearer {token}"
+    token = get_youtube_token()
+
+    headers = {
+        "Authorization": f"Bearer {token}"
     }
 
-    params={
-        "part":"snippet,status"
-    }
-
-    metadata={
-        "snippet":{
-            "title":title,
-            "description":"Future India 2060 #shorts",
-            "tags":["india","future","ai"],
-            "categoryId":"28"
+    metadata = {
+        "snippet": {
+            "title": title,
+            "description": "Future India 2060 #shorts",
+            "tags": ["india", "future", "ai"],
+            "categoryId": "28"
         },
-        "status":{
-            "privacyStatus":"public"
+        "status": {
+            "privacyStatus": "public"
         }
     }
 
-    files={
-        "video":open(video_path,"rb")
-    }
-
-    r=requests.post(
+    r = requests.post(
         "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
         headers=headers,
-        data={"metadata":json.dumps(metadata)},
-        files=files
+        files={
+            "snippet": (None, json.dumps(metadata), "application/json"),
+            "video": ("video.mp4", open(video_path, "rb"), "video/mp4")
+        }
     )
+
+    print("UPLOAD DONE")
 
     return r.json()
 
@@ -198,50 +222,60 @@ def upload_youtube(video_path,title,job_id):
 # MAIN PIPELINE
 # ------------------------------------------------
 
-@app.route("/full-pipeline",methods=["POST"])
+@app.route("/full-pipeline", methods=["POST"])
 def full_pipeline():
 
-    data=request.json
+    data = request.json
 
-    job_id=data["job_id"]
-    topic=data.get("topic","Future India")
+    job_id = data["job_id"]
+    topic = data.get("topic", "Future India")
+
+    print("PIPELINE START", job_id, topic)
 
     try:
 
-        script=f"{topic}. This is how India will look in the future."
+        script = f"{topic}. This is how India will look in the future."
 
-        images=generate_images(job_id)
+        images = generate_images(job_id)
 
-        audio=generate_voice(script,job_id)
+        audio = generate_voice(script, job_id)
 
-        video=render_video(images,audio,job_id)
+        video = render_video(images, audio, job_id)
 
-        upload_youtube(video,topic,job_id)
+        upload_youtube(video, topic, job_id)
 
-        update_status(job_id,"complete")
+        update_status(job_id, "complete")
+
+        print("PIPELINE COMPLETE")
 
         return jsonify({
-            "status":"complete"
+            "status": "complete"
         })
 
     except Exception as e:
 
-        update_status(job_id,"failed")
+        update_status(job_id, "failed")
+
+        print("PIPELINE FAILED", str(e))
 
         return jsonify({
-            "error":str(e)
+            "error": str(e)
         })
 
 
 # ------------------------------------------------
+# HEALTH CHECK
+# ------------------------------------------------
 
 @app.route("/")
 def home():
-    return {"status":"render server running"}
+    return {"status": "render server running"}
 
 
-if __name__=="__main__":
+# ------------------------------------------------
 
-    port=int(os.environ.get("PORT",10000))
+if __name__ == "__main__":
 
-    app.run(host="0.0.0.0",port=port)
+    port = int(os.environ.get("PORT", 10000))
+
+    app.run(host="0.0.0.0", port=port)
