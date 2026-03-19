@@ -1,10 +1,9 @@
 const DASHBOARD_HTML = `
-
 <!DOCTYPE html>
 <html>
 <head>
 
-<title>India20Sixty Dashboard</title>
+<title>India20Sixty Pipeline Dashboard</title>
 
 <style>
 
@@ -24,7 +23,6 @@ border-radius:8px;
 
 button{
 padding:10px 16px;
-margin-right:10px;
 cursor:pointer;
 }
 
@@ -52,34 +50,23 @@ height:100%;
 background:#2ecc71;
 }
 
-.stage{
-font-size:18px;
-}
-
 </style>
 
 </head>
 
 <body>
 
-<h1>India20Sixty Dashboard</h1>
+<h1>India20Sixty Pipeline Dashboard</h1>
 
 <div class="card">
-
-<h2>Create Job</h2>
-
 <button onclick="createJob()">Create Video Job</button>
-
 </div>
 
 <div class="card">
 
-<h2>Video Pipeline</h2>
-
 <table id="jobs">
 
 <thead>
-
 <tr>
 <th>Topic</th>
 <th>Images</th>
@@ -88,7 +75,6 @@ font-size:18px;
 <th>Upload</th>
 <th>Progress</th>
 </tr>
-
 </thead>
 
 <tbody></tbody>
@@ -99,37 +85,23 @@ font-size:18px;
 
 <script>
 
-async function createJob(){
-
-const r = await fetch("/run")
-const data = await r.json()
-
-alert("Job created: " + data.job_id)
-
-loadJobs()
-
-}
-
 function stageIcon(stage,current){
 
-const order = ["pending","processing","images","voice","render","upload","complete"]
+var order=["pending","processing","images","voice","render","upload","complete"]
 
-const currentIndex = order.indexOf(current)
-const stageIndex = order.indexOf(stage)
+var c=order.indexOf(current)
+var s=order.indexOf(stage)
 
 if(current==="complete") return "✅"
-
-if(stageIndex < currentIndex) return "✅"
-
-if(stageIndex === currentIndex) return "🔄"
-
+if(s<c) return "✅"
+if(s===c) return "🔄"
 return "⏳"
 
 }
 
 function progressValue(status){
 
-const map={
+var map={
 pending:5,
 processing:10,
 images:25,
@@ -139,48 +111,47 @@ upload:90,
 complete:100
 }
 
-return map[status] || 0
+return map[status]||0
+
+}
+
+async function createJob(){
+
+var r=await fetch("/run")
+var data=await r.json()
+
+alert("Job created: "+data.job_id)
+
+loadJobs()
 
 }
 
 async function loadJobs(){
 
-const r = await fetch("/jobs")
-const jobs = await r.json()
+var r=await fetch("/jobs")
+var jobs=await r.json()
 
-const tbody = document.querySelector("#jobs tbody")
+var tbody=document.querySelector("#jobs tbody")
 
 tbody.innerHTML=""
 
-jobs.forEach(j=>{
+jobs.forEach(function(j){
 
-const row=document.createElement("tr")
+var progress=progressValue(j.status)
 
-const progress = progressValue(j.status)
+var row=document.createElement("tr")
 
-row.innerHTML=\`
-
-<td>\${j.topic}</td>
-
-<td class="stage">\${stageIcon("images",j.status)}</td>
-
-<td class="stage">\${stageIcon("voice",j.status)}</td>
-
-<td class="stage">\${stageIcon("render",j.status)}</td>
-
-<td class="stage">\${stageIcon("upload",j.status)}</td>
-
-<td>
-
-<div class="progress">
-<div class="bar" style="width:\${progress}%"></div>
-</div>
-
-\${progress}%
-
-</td>
-
-\`
+row.innerHTML=
+"<td>"+j.topic+"</td>"+
+"<td>"+stageIcon("images",j.status)+"</td>"+
+"<td>"+stageIcon("voice",j.status)+"</td>"+
+"<td>"+stageIcon("render",j.status)+"</td>"+
+"<td>"+stageIcon("upload",j.status)+"</td>"+
+"<td>"+
+"<div class='progress'>"+
+"<div class='bar' style='width:"+progress+"%'></div>"+
+"</div>"+progress+"%"+
+"</td>"
 
 tbody.appendChild(row)
 
@@ -196,5 +167,4 @@ setInterval(loadJobs,5000)
 
 </body>
 </html>
-
 `
