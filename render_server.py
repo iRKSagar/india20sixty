@@ -3,20 +3,27 @@ import requests
 import os
 import uuid
 import subprocess
+import time
 
 app = Flask(__name__)
+
+
+# =============================
+# HEALTH CHECK
+# =============================
+
 @app.route("/")
 def home():
     return {"status": "India20Sixty Render Server Running"}
 
+
+# =============================
+# ENV
+# =============================
+
 LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-
 VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID")
-
-YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
-YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
-YOUTUBE_PROJECT_ID = os.environ.get("YOUTUBE_PROJECT_ID")
 
 
 # =============================
@@ -26,13 +33,24 @@ YOUTUBE_PROJECT_ID = os.environ.get("YOUTUBE_PROJECT_ID")
 @app.route("/full-pipeline", methods=["POST"])
 def full_pipeline():
 
-    data = request.json
+    data = request.json or {}
 
     job_id = str(uuid.uuid4())
 
-    topic = data["topic"]
-    script = data["script"]
-    prompts = data["visual_prompts"]
+    topic = data.get("topic", "Future India")
+    script = data.get("script", "Future technology in India.")
+    prompts = data.get("visual_prompts", [])
+
+    if len(prompts) == 0:
+        prompts = [
+            "futuristic Indian hospital AI doctors",
+            "advanced Indian city skyline future",
+            "robotics healthcare India",
+            "AI medical lab India future",
+            "smart hospital India 2040"
+        ]
+
+    print("JOB STARTED:", job_id)
 
     image_paths = generate_images(prompts, job_id)
 
@@ -59,10 +77,13 @@ def generate_images(prompts, job_id):
 
     for i, prompt in enumerate(prompts):
 
+        print("Generating image:", prompt)
+
         r = requests.post(
             "https://cloud.leonardo.ai/api/rest/v1/generations",
             headers={
-                "Authorization": f"Bearer {LEONARDO_API_KEY}"
+                "Authorization": f"Bearer {LEONARDO_API_KEY}",
+                "Content-Type": "application/json"
             },
             json={
                 "prompt": prompt,
@@ -71,7 +92,18 @@ def generate_images(prompts, job_id):
             }
         )
 
-        img_url = r.json()["generations_by_pk"]["generated_images"][0]["url"]
+        gen_id = r.json()["sdGenerationJob"]["generationId"]
+
+        time.sleep(5)
+
+        r2 = requests.get(
+            f"https://cloud.leonardo.ai/api/rest/v1/generations/{gen_id}",
+            headers={
+                "Authorization": f"Bearer {LEONARDO_API_KEY}"
+            }
+        )
+
+        img_url = r2.json()["generations_by_pk"]["generated_images"][0]["url"]
 
         img_data = requests.get(img_url).content
 
@@ -90,6 +122,8 @@ def generate_images(prompts, job_id):
 # =============================
 
 def generate_voice(script, job_id):
+
+    print("Generating voice...")
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
 
@@ -119,19 +153,21 @@ def generate_voice(script, job_id):
 
 def render_video(images, audio, job_id):
 
+    print("Rendering video...")
+
     video_path = f"/tmp/{job_id}.mp4"
 
-    image_inputs = []
+    inputs = []
 
     for img in images:
-        image_inputs.extend(["-loop", "1", "-t", "5", "-i", img])
+        inputs.extend(["-loop", "1", "-t", "5", "-i", img])
 
     cmd = [
         "ffmpeg",
-        *image_inputs,
+        *inputs,
         "-i", audio,
         "-filter_complex",
-        "concat=n=5:v=1:a=0",
+        f"concat=n={len(images)}:v=1:a=0",
         "-shortest",
         "-s", "1080x1920",
         "-pix_fmt", "yuv420p",
@@ -144,13 +180,10 @@ def render_video(images, audio, job_id):
 
 
 # =============================
-# YOUTUBE UPLOAD
+# YOUTUBE UPLOAD (PLACEHOLDER)
 # =============================
 
 def upload_youtube(video_path, topic):
-
-    # placeholder
-    # integrate google-api-python-client here
 
     print("Uploading to YouTube:", video_path)
 
@@ -159,8 +192,8 @@ def upload_youtube(video_path, topic):
 
 # =============================
 
-import os
-
 if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 10000))
+
     app.run(host="0.0.0.0", port=port)
