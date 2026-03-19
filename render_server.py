@@ -6,6 +6,8 @@ import json
 import time
 import shutil
 from pathlib import Path
+import boto3
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -25,10 +27,31 @@ YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
+# R2 Configuration
+R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
+R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
+R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
+R2_BUCKET = os.environ.get("R2_BUCKET")
+
 TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"
+REVIEW_MODE = os.environ.get("REVIEW_MODE", "true").lower() == "true"  # New: review before publish
+
 TMP_DIR = "/tmp/india20sixty"
 
 Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
+
+# ==========================================
+# R2 CLIENT
+# ==========================================
+
+def get_r2_client():
+    return boto3.client(
+        's3',
+        endpoint_url=R2_ENDPOINT,
+        aws_access_key_id=R2_ACCESS_KEY,
+        aws_secret_access_key=R2_SECRET_KEY,
+        region_name='auto'
+    )
 
 # ==========================================
 # STATUS UPDATES
@@ -38,7 +61,7 @@ def update_status(job_id, status, data=None):
     try:
         payload = {
             "status": status,
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            "updated_at": datetime.utcnow().isoformat()
         }
         if data:
             payload.update(data)
@@ -82,11 +105,6 @@ STRUCTURE:
 4. FUTURE (5 sec): English vision
 5. CTA (4 sec): Hinglish like "Aapko kya lagta? Comment karo!"
 
-EXAMPLE HOOKS:
-- "Socho agar AI doctors har gaon mein ho..."
-- "Ek minute! Kya India 2035 tak superpower ban jayega?"
-- "Desi tech global stage par..."
-
 Return ONLY the script text, no labels, no markdown. 40-50 words total."""
 
     try:
@@ -107,7 +125,6 @@ Return ONLY the script text, no labels, no markdown. 40-50 words total."""
         r.raise_for_status()
         
         text = r.json()["choices"][0]["message"]["content"].strip()
-        # Clean up
         text = text.replace('"', '').replace("'", "")
         lines = [line.strip() for line in text.split('\n') if line.strip()]
         script = ' '.join(lines)
@@ -168,13 +185,12 @@ def generate_visual_scenes(topic):
     return scenes
 
 # ==========================================
-# LEONARDO IMAGES (With Retry)
+# LEONARDO IMAGES
 # ==========================================
 
 def generate_image_with_retry(prompt, output_path, max_retries=3):
     for attempt in range(max_retries):
         try:
-            # Create generation
             r = requests.post(
                 "https://cloud.leonardo.ai/api/rest/v1/generations",
                 headers={
@@ -199,7 +215,6 @@ def generate_image_with_retry(prompt, output_path, max_retries=3):
             
             generation_id = data["sdGenerationJob"]["generationId"]
             
-            # Poll for completion
             for poll in range(30):
                 time.sleep(2)
                 
@@ -307,7 +322,6 @@ def render_video(images, audio, job_id):
     audio_duration = get_audio_duration(audio)
     scene_duration = audio_duration / len(images)
     
-    # Build ffmpeg command with Ken Burns
     inputs = []
     filter_parts = []
     
@@ -357,6 +371,30 @@ def render_video(images, audio, job_id):
         raise Exception("Video file too small or missing")
     
     return video_path
+
+# ==========================================
+# R2 UPLOAD FOR REVIEW
+# ==========================================
+
+def upload_to_r2(video_path, job_id, folder="review"):
+    """Upload video to R2 and return presigned URL"""
+    try:
+        s3 = get_r2_client()
+        key = f"{folder}/{job_id}.mp4"
+        
+        s3.upload_file(video_path, R2_BUCKET, key)
+        
+        # Generate presigned URL (7 days)
+        url = s3.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': R2_BUCKET, 'Key': key},
+            ExpiresIn=604800
+        )
+        
+        return url
+    except Exception as e:
+        print(f"R2 upload failed: {e}")
+        return None
 
 # ==========================================
 # YOUTUBE UPLOAD
@@ -427,10 +465,12 @@ def pipeline():
     data = request.json
     job_id = data.get("job_id", str(uuid.uuid4()))
     topic = data.get("topic", "Future India")
+    skip_review = data.get("skip_review", False)  # Allow force publish
     
     print(f"\n{'='*60}")
     print(f"PIPELINE START: {job_id}")
     print(f"TOPIC: {topic}")
+    print(f"REVIEW_MODE: {REVIEW_MODE}")
     print(f"{'='*60}\n")
     
     try:
@@ -442,32 +482,48 @@ def pipeline():
         audio = generate_voice(script, job_id)
         video = render_video(images, audio, job_id)
         
+        # Upload to R2 for review
+        review_url = upload_to_r2(video, job_id, "review")
+        print(f"REVIEW URL: {review_url}")
+        
+        # Decide: review queue or direct publish
+        should_review = REVIEW_MODE and not skip_review and not TEST_MODE
+        
         if TEST_MODE:
-            print("TEST MODE: Skipping YouTube upload")
+            print("TEST MODE: Video generated, not uploading")
             video_id = "TEST_MODE"
+            final_status = "test_complete"
+        elif should_review:
+            print("REVIEW MODE: Video pending approval")
+            video_id = "PENDING_REVIEW"
+            final_status = "pending_review"
         else:
+            # Direct publish
             title = f"{topic} India2060 shorts"
             video_id = upload_to_youtube(video, title, script, job_id)
+            final_status = "complete"
         
-        update_status(job_id, "complete", {
+        update_status(job_id, final_status, {
             "youtube_id": video_id,
             "script": script,
+            "review_url": review_url,
             "video_path": video
         })
         
-        # Cleanup
+        # Cleanup temp files
         for img in images:
             try: os.remove(img)
             except: pass
         try: os.remove(audio)
-        except: pass
+            except: pass
         
         print(f"\n✅ PIPELINE COMPLETE: {video_id}\n")
         
         return jsonify({
-            "status": "complete",
+            "status": final_status,
             "job_id": job_id,
             "youtube_id": video_id,
+            "review_url": review_url,
             "script": script
         })
         
@@ -483,11 +539,135 @@ def pipeline():
             "error": error_msg
         }), 500
 
+@app.route("/approve-and-publish", methods=["POST"])
+def approve_and_publish():
+    """Approve pending video and publish to YouTube"""
+    data = request.json
+    job_id = data.get("job_id")
+    
+    if not job_id:
+        return jsonify({"error": "job_id required"}), 400
+    
+    try:
+        # Get job from Supabase
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}"
+            },
+            timeout=10
+        )
+        jobs = r.json()
+        
+        if not jobs:
+            return jsonify({"error": "Job not found"}), 404
+        
+        job = jobs[0]
+        
+        if job["status"] != "pending_review":
+            return jsonify({"error": f"Job status is {job['status']}, not pending_review"}), 400
+        
+        # Download from R2
+        s3 = get_r2_client()
+        video_path = f"{TMP_DIR}/{job_id}_approve.mp4"
+        
+        s3.download_file(R2_BUCKET, f"review/{job_id}.mp4", video_path)
+        
+        # Upload to YouTube
+        title = f"{job['topic']} India2060 shorts"
+        video_id = upload_to_youtube(video_path, title, job.get("script", ""), job_id)
+        
+        # Move to published folder in R2
+        s3.copy_object(
+            Bucket=R2_BUCKET,
+            CopySource={'Bucket': R2_BUCKET, 'Key': f"review/{job_id}.mp4"},
+            Key=f"published/{job_id}.mp4"
+        )
+        s3.delete_object(Bucket=R2_BUCKET, Key=f"review/{job_id}.mp4")
+        
+        # Update status
+        update_status(job_id, "complete", {
+            "youtube_id": video_id,
+            "published_at": datetime.utcnow().isoformat()
+        })
+        
+        # Cleanup
+        try: os.remove(video_path)
+        except: pass
+        
+        return jsonify({
+            "status": "published",
+            "job_id": job_id,
+            "youtube_id": video_id
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/cleanup", methods=["POST"])
+def cleanup():
+    """Cleanup old videos and jobs"""
+    data = request.json
+    mode = data.get("mode", "weekly")  # weekly or monthly
+    
+    try:
+        s3 = get_r2_client()
+        
+        # Calculate cutoff date
+        if mode == "monthly":
+            days = 30
+        else:
+            days = 7
+        
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        # List and delete old review videos
+        deleted = []
+        
+        # Get objects from R2
+        response = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix="review/")
+        
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                if obj['LastModified'].replace(tzinfo=None) < cutoff:
+                    s3.delete_object(Bucket=R2_BUCKET, Key=obj['Key'])
+                    deleted.append(obj['Key'])
+        
+        # Also cleanup old failed jobs from Supabase
+        old_jobs = requests.get(
+            f"{SUPABASE_URL}/rest/v1/jobs?status=eq.failed&created_at=lt.{cutoff.isoformat()}",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}"
+            }
+        ).json()
+        
+        for job in old_jobs:
+            requests.delete(
+                f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job['id']}",
+                headers={
+                    "apikey": SUPABASE_ANON_KEY,
+                    "Authorization": f"Bearer {SUPABASE_ANON_KEY}"
+                }
+            )
+        
+        return jsonify({
+            "status": "cleaned",
+            "mode": mode,
+            "r2_files_deleted": len(deleted),
+            "old_jobs_deleted": len(old_jobs)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/health")
 def health():
     return jsonify({
         "status": "healthy",
-        "test_mode": TEST_MODE
+        "test_mode": TEST_MODE,
+        "review_mode": REVIEW_MODE
     })
 
 if __name__ == "__main__":
