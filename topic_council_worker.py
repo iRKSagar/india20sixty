@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import json
-from datetime import datetime
 
 app = Flask(__name__)
 
@@ -10,17 +9,8 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
 
-# ==========================================
-# COUNCIL EVALUATION ENDPOINT
-# ==========================================
-
 @app.route("/evaluate", methods=["POST"])
 def evaluate_topic():
-    """
-    Council evaluates a single topic
-    Input: {"topic": "...", "source": "..."}
-    Output: Council evaluation with scores
-    """
     data = request.json
     topic = data.get("topic")
     source = data.get("source", "manual")
@@ -29,16 +19,10 @@ def evaluate_topic():
         return jsonify({"error": "topic required"}), 400
     
     evaluation = run_council(topic, source)
-    
     return jsonify(evaluation)
 
 @app.route("/batch-evaluate", methods=["POST"])
 def batch_evaluate():
-    """
-    Evaluate multiple topics, return only approved
-    Input: {"topics": [{"topic": "...", "source": "..."}, ...]}
-    Output: {"approved": [...], "rejected": [...]}
-    """
     data = request.json
     topics = data.get("topics", [])
     min_score = data.get("min_score", 70)
@@ -53,7 +37,6 @@ def batch_evaluate():
         else:
             rejected.append(result)
     
-    # Sort by score
     approved.sort(key=lambda x: x["council_score"], reverse=True)
     
     return jsonify({
@@ -65,11 +48,6 @@ def batch_evaluate():
 
 @app.route("/generate-script", methods=["POST"])
 def generate_script():
-    """
-    Generate viral script for approved topic
-    Input: {"topic": "...", "council_data": {...}}
-    Output: Complete script package
-    """
     data = request.json
     topic = data.get("topic")
     
@@ -77,21 +55,14 @@ def generate_script():
         return jsonify({"error": "topic required"}), 400
     
     script = architect_script(topic)
-    
     return jsonify(script)
 
 @app.route("/full-pipeline", methods=["POST"])
 def full_pipeline():
-    """
-    Complete pipeline: topic → council → script → save to DB
-    Input: {"topic": "...", "source": "..."}
-    Output: Complete production-ready topic
-    """
     data = request.json
     topic = data.get("topic")
     source = data.get("source", "api")
     
-    # Step 1: Council evaluation
     council_result = run_council(topic, source)
     
     if council_result["recommendation"] != "APPROVE":
@@ -101,10 +72,7 @@ def full_pipeline():
             "evaluation": council_result
         }), 200
     
-    # Step 2: Generate script
     script = architect_script(topic)
-    
-    # Step 3: Save to Supabase
     saved = save_to_supabase(topic, council_result, script)
     
     return jsonify({
@@ -118,25 +86,18 @@ def full_pipeline():
 def health():
     return jsonify({"status": "topic council running"})
 
-# ==========================================
-# COUNCIL LOGIC
-# ==========================================
-
 def run_council(topic, source):
-    """AI Council evaluates topic"""
-    
     prompt = f"""You are the INDIA20SIXTY TOPIC COUNCIL. Evaluate:
 
 TOPIC: "{topic}"
 SOURCE: {source}
 
 Evaluate (score 0-100 each):
-
-1. VIRALITY: Will people share this? Curiosity gap strength?
-2. YOUTUBE_FIT: 3-second hook potential, retention prediction
-3. INSTAGRAM_FIT: Visual stopping power, shareability
-4. SAFETY: Platform compliance (0=dangerous, 100=safe)
-5. VISUAL_EASE: Can AI generate compelling images?
+1. VIRALITY: Will people share this?
+2. YOUTUBE_FIT: 3-second hook potential
+3. INSTAGRAM_FIT: Visual stopping power
+4. SAFETY: Platform compliance
+5. VISUAL_EASE: Can AI generate images?
 
 Return ONLY JSON:
 {{"virality": 85, "youtube_fit": 90, "instagram_fit": 75, "safety": 95, "visual_ease": 80, "council_score": 85, "recommendation": "APPROVE", "improved_title": "better version"}}"""
@@ -174,16 +135,16 @@ Return ONLY JSON:
         }
 
 def architect_script(topic):
-    """Generate viral script"""
-    
-    prompt = f"""Create viral YouTube Shorts script for: {topic}
+    prompt = f"""Create viral YouTube Shorts script for India20Sixty about: {topic}
 
-RULES:
-- Hook in first 3 seconds (pattern interrupt)
-- Short sentences (under 8 words)
-- 1 shocking fact/statistic
-- End with comment-driving question
-- Use Hinglish naturally
+LANGUAGE: 70% English, 30% Hinglish (Hindi for emotions/CTAs)
+
+STRUCTURE (25 seconds):
+1. HOOK (3 sec): Hinglish pattern interrupt ("Socho...", "Ek minute...")
+2. CONTEXT (5 sec): English setup with Indian context
+3. INSIGHT (8 sec): Mixed Hinglish-English
+4. FUTURE (5 sec): English vision
+5. CTA (4 sec): Hinglish ("Aapko kya lagta? Comment karo! 👇")
 
 Return JSON:
 {{"title": "...", "hook": "...", "script_lines": ["..."], "full_script": "...", "cta": "...", "hashtags": ["..."], "visual_scenes": ["..."], "duration_sec": 25}}"""
@@ -208,22 +169,19 @@ Return JSON:
     except Exception as e:
         return {
             "title": f"{topic} 🇮🇳",
-            "hook": f"What if {topic} became reality?",
-            "script_lines": [f"Socho agar {topic} sach ho jaye.", "Future is closer than you think."],
-            "full_script": f"What if {topic} became reality? This future isn't far.",
-            "cta": "Comment your thoughts! 👇",
-            "hashtags": ["India2060", "FutureTech", "India"],
-            "visual_scenes": ["futuristic Indian city", "technology in action"],
-            "duration_sec": 20,
-            "error": str(e)
+            "hook": f"Socho, {topic}...",
+            "script_lines": [f"Socho, {topic} reality ban jaye.", "Desi tech, global impact."],
+            "full_script": f"Socho, {topic} reality ban jaye. Desi tech, global impact.",
+            "cta": "Comment karo! 👇",
+            "hashtags": ["India2060", "FutureTech"],
+            "visual_scenes": ["futuristic Indian city"],
+            "duration_sec": 20
         }
 
 def save_to_supabase(topic, council, script):
-    """Save approved topic to database"""
-    
     try:
         data = {
-            "cluster": "AI_Future",  # Could be smarter
+            "cluster": "AI_Future",
             "topic": council.get("improved_title", topic),
             "used": False,
             "council_score": council["council_score"],
