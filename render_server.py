@@ -265,7 +265,25 @@ def upload_youtube(video_path, topic):
 
 # =============================
 # SERVER START
-# =============================
+# =============================if(url.pathname === "/logs"){
+
+const id = url.searchParams.get("job")
+
+const r = await fetch(
+`${env.SUPABASE_URL}/rest/v1/render_logs?job_id=eq.${id}&order=created_at.desc`,
+{
+headers:{
+apikey:env.SUPABASE_ANON_KEY,
+Authorization:`Bearer ${env.SUPABASE_ANON_KEY}`
+}
+}
+)
+
+const logs = await r.json()
+
+return json(logs)
+
+}
 
 if __name__ == "__main__":
 
