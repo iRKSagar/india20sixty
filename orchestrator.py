@@ -7,6 +7,10 @@ import time
 
 app = Flask(__name__)
 
+# ------------------------------------------------
+# ENVIRONMENT
+# ------------------------------------------------
+
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
 
@@ -20,32 +24,40 @@ YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
+TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"
+
+TMP = "/tmp"
 
 # ------------------------------------------------
 # UPDATE JOB STATUS
 # ------------------------------------------------
 
-def update_status(job_id,status):
+def update_status(job_id, status):
 
     try:
+
         requests.patch(
             f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
             headers={
-                "apikey":SUPABASE_ANON_KEY,
-                "Authorization":f"Bearer {SUPABASE_ANON_KEY}",
-                "Content-Type":"application/json"
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type": "application/json"
             },
-            json={"status":status}
+            json={"status": status}
         )
-    except:
-        pass
+
+    except Exception as e:
+
+        print("STATUS UPDATE FAILED:", str(e))
 
 
 # ------------------------------------------------
-# OPENAI SCRIPT GENERATION
+# OPENAI SCRIPT
 # ------------------------------------------------
 
 def generate_script(topic):
+
+    print("SCRIPT START")
 
     prompt = f"""
 Create a 25 second YouTube Shorts script about:
@@ -59,34 +71,44 @@ Insight
 Future
 Question
 
-Keep sentences short.
+Short sentences.
 """
 
     r = requests.post(
+
         "https://api.openai.com/v1/chat/completions",
+
         headers={
-            "Authorization":f"Bearer {OPENAI_API_KEY}",
-            "Content-Type":"application/json"
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
         },
+
         json={
-            "model":"gpt-4o-mini",
-            "messages":[{"role":"user","content":prompt}]
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
         }
+
     )
 
     text = r.json()["choices"][0]["message"]["content"]
+
+    print("SCRIPT DONE")
 
     return text
 
 
 # ------------------------------------------------
-# IMAGE PROMPTS
+# VISUAL PROMPTS
 # ------------------------------------------------
 
 def generate_prompts(script):
 
+    print("PROMPT START")
+
     prompt = f"""
-Break this script into 5 visual scenes.
+Break this script into 5 cinematic visual scenes.
 
 Script:
 {script}
@@ -95,62 +117,83 @@ Return JSON list of prompts.
 """
 
     r = requests.post(
+
         "https://api.openai.com/v1/chat/completions",
+
         headers={
-            "Authorization":f"Bearer {OPENAI_API_KEY}",
-            "Content-Type":"application/json"
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
         },
+
         json={
-            "model":"gpt-4o-mini",
-            "messages":[{"role":"user","content":prompt}]
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
         }
+
     )
 
     txt = r.json()["choices"][0]["message"]["content"]
 
     try:
-        return json.loads(txt)
+
+        prompts = json.loads(txt)
+
     except:
-        return [script]*5
+
+        prompts = [script] * 5
+
+    print("PROMPT DONE")
+
+    return prompts
 
 
 # ------------------------------------------------
-# LEONARDO IMAGE GENERATION
+# LEONARDO IMAGES
 # ------------------------------------------------
 
-def generate_images(prompts,job_id):
+def generate_images(prompts, job_id):
 
-    update_status(job_id,"images")
+    print("IMAGES START")
 
-    images=[]
+    update_status(job_id, "images")
 
-    for i,p in enumerate(prompts):
+    images = []
 
-        r=requests.post(
+    for i, p in enumerate(prompts):
+
+        r = requests.post(
+
             "https://cloud.leonardo.ai/api/rest/v1/generations",
+
             headers={
-                "Authorization":f"Bearer {LEONARDO_API_KEY}",
-                "Content-Type":"application/json"
+                "Authorization": f"Bearer {LEONARDO_API_KEY}",
+                "Content-Type": "application/json"
             },
+
             json={
-                "prompt":p,
-                "width":1080,
-                "height":1920
+                "prompt": p,
+                "width": 1080,
+                "height": 1920
             }
+
         )
 
-        data=r.json()
+        data = r.json()
 
-        img_url=data["generations_by_pk"]["generated_images"][0]["url"]
+        img_url = data["generations_by_pk"]["generated_images"][0]["url"]
 
-        img=requests.get(img_url).content
+        img = requests.get(img_url).content
 
-        path=f"/tmp/{job_id}_{i}.png"
+        path = f"{TMP}/{job_id}_{i}.png"
 
-        with open(path,"wb") as f:
+        with open(path, "wb") as f:
             f.write(img)
 
         images.append(path)
+
+    print("IMAGES DONE")
 
     return images
 
@@ -159,61 +202,77 @@ def generate_images(prompts,job_id):
 # ELEVENLABS VOICE
 # ------------------------------------------------
 
-def generate_voice(script,job_id):
+def generate_voice(script, job_id):
 
-    update_status(job_id,"voice")
+    print("VOICE START")
 
-    url=f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
+    update_status(job_id, "voice")
 
-    r=requests.post(
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
+
+    r = requests.post(
+
         url,
+
         headers={
-            "xi-api-key":ELEVENLABS_API_KEY,
-            "Content-Type":"application/json"
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json"
         },
+
         json={
-            "text":script,
-            "model_id":"eleven_multilingual_v2"
+            "text": script,
+            "model_id": "eleven_multilingual_v2"
         }
+
     )
 
-    audio=f"/tmp/{job_id}.mp3"
+    audio = f"{TMP}/{job_id}.mp3"
 
-    with open(audio,"wb") as f:
+    with open(audio, "wb") as f:
         f.write(r.content)
+
+    print("VOICE DONE")
 
     return audio
 
 
 # ------------------------------------------------
-# KEN BURNS VIDEO
+# VIDEO RENDER
 # ------------------------------------------------
 
-def render_video(images,audio,job_id):
+def render_video(images, audio, job_id):
 
-    update_status(job_id,"render")
+    print("RENDER START")
 
-    video=f"/tmp/{job_id}.mp4"
+    update_status(job_id, "render")
 
-    inputs=[]
+    video = f"{TMP}/{job_id}.mp4"
+
+    inputs = []
 
     for img in images:
-        inputs+=["-loop","1","-t","5","-i",img]
+        inputs += ["-loop", "1", "-t", "5", "-i", img]
 
-    cmd=[
+    cmd = [
+
         "ffmpeg",
         *inputs,
-        "-i",audio,
+        "-i", audio,
+
         "-filter_complex",
         f"concat=n={len(images)}:v=1:a=0",
+
         "-shortest",
-        "-s","1080x1920",
-        "-pix_fmt","yuv420p",
+        "-s", "1080x1920",
+        "-pix_fmt", "yuv420p",
         "-y",
         video
+
     ]
 
     subprocess.run(cmd)
+
+    print("RENDER DONE")
 
     return video
 
@@ -224,14 +283,17 @@ def render_video(images,audio,job_id):
 
 def get_youtube_token():
 
-    r=requests.post(
+    r = requests.post(
+
         "https://oauth2.googleapis.com/token",
+
         data={
-            "client_id":YOUTUBE_CLIENT_ID,
-            "client_secret":YOUTUBE_CLIENT_SECRET,
-            "refresh_token":YOUTUBE_REFRESH_TOKEN,
-            "grant_type":"refresh_token"
+            "client_id": YOUTUBE_CLIENT_ID,
+            "client_secret": YOUTUBE_CLIENT_SECRET,
+            "refresh_token": YOUTUBE_REFRESH_TOKEN,
+            "grant_type": "refresh_token"
         }
+
     )
 
     return r.json()["access_token"]
@@ -241,79 +303,120 @@ def get_youtube_token():
 # YOUTUBE UPLOAD
 # ------------------------------------------------
 
-def upload_youtube(video,title,job_id):
+def upload_youtube(video, title, job_id):
 
-    update_status(job_id,"upload")
+    print("UPLOAD START")
 
-    token=get_youtube_token()
+    update_status(job_id, "upload")
 
-    headers={
-        "Authorization":f"Bearer {token}"
+    token = get_youtube_token()
+
+    headers = {
+
+        "Authorization": f"Bearer {token}"
+
     }
 
-    metadata={
-        "snippet":{
-            "title":title,
-            "description":"Future India 2060",
-            "tags":["india","future","ai"]
+    metadata = {
+
+        "snippet": {
+            "title": title,
+            "description": "Future India 2060",
+            "tags": ["india", "future", "ai"]
         },
-        "status":{
-            "privacyStatus":"public"
+
+        "status": {
+            "privacyStatus": "public"
         }
+
     }
 
     requests.post(
+
         "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
+
         headers=headers,
+
         files={
-            "snippet":(None,json.dumps(metadata),"application/json"),
-            "video":("video.mp4",open(video,"rb"),"video/mp4")
+            "snippet": (None, json.dumps(metadata), "application/json"),
+            "video": ("video.mp4", open(video, "rb"), "video/mp4")
         }
+
     )
 
+    print("UPLOAD DONE")
+
 
 # ------------------------------------------------
-# PIPELINE
+# MAIN PIPELINE
 # ------------------------------------------------
 
-@app.route("/full-pipeline",methods=["POST"])
+@app.route("/full-pipeline", methods=["POST"])
 def pipeline():
 
-    data=request.json
+    data = request.json
 
-    job_id=data["job_id"]
-    topic=data["topic"]
+    job_id = data["job_id"]
+    topic = data["topic"]
 
     try:
 
-        script=generate_script(topic)
+        print("PIPELINE START", job_id, topic)
 
-        prompts=generate_prompts(script)
+        script = generate_script(topic)
 
-        images=generate_images(prompts,job_id)
+        prompts = generate_prompts(script)
 
-        audio=generate_voice(script,job_id)
+        images = generate_images(prompts, job_id)
 
-        video=render_video(images,audio,job_id)
+        audio = generate_voice(script, job_id)
 
-        upload_youtube(video,topic,job_id)
+        video = render_video(images, audio, job_id)
 
-        update_status(job_id,"complete")
+        if not TEST_MODE:
 
-        return jsonify({"status":"complete"})
+            upload_youtube(video, topic, job_id)
+
+        else:
+
+            print("TEST MODE ACTIVE — SKIPPING YOUTUBE UPLOAD")
+
+        update_status(job_id, "complete")
+
+        return jsonify({
+
+            "status": "complete",
+            "video_path": video
+
+        })
 
     except Exception as e:
 
-        update_status(job_id,"failed")
+        print("PIPELINE FAILED", str(e))
 
-        return jsonify({"error":str(e)})
+        update_status(job_id, "failed")
 
+        return jsonify({"error": str(e)})
+
+
+# ------------------------------------------------
+# HEALTH
+# ------------------------------------------------
 
 @app.route("/")
 def home():
-    return {"status":"render server running"}
+
+    return {
+
+        "status": "render server running"
+
+    }
 
 
-if __name__=="__main__":
-    port=int(os.environ.get("PORT",10000))
-    app.run(host="0.0.0.0",port=port)
+# ------------------------------------------------
+
+if __name__ == "__main__":
+
+    port = int(os.environ.get("PORT", 10000))
+
+    app.run(host="0.0.0.0", port=port)
