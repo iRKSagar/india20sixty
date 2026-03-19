@@ -1,0 +1,34 @@
+<h1>Videos</h1>
+
+<div id="videos"></div>
+
+<script>
+
+async function loadVideos(){
+
+const r = await fetch("/videos");
+
+const vids = await r.json();
+
+const container = document.getElementById("videos");
+
+vids.forEach(v=>{
+
+const el=document.createElement("div");
+
+el.innerHTML=`
+<h3>${v.topic}</h3>
+<a href="https://youtube.com/watch?v=${v.youtube_id}">
+Watch
+</a>
+`;
+
+container.appendChild(el);
+
+});
+
+}
+
+loadVideos();
+
+</script>
