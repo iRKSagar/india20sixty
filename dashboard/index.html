@@ -1,8 +1,10 @@
+const DASHBOARD_HTML = `
+
 <!DOCTYPE html>
 <html>
 <head>
 
-<title>India20Sixty Control Panel</title>
+<title>India20Sixty Dashboard</title>
 
 <style>
 
@@ -13,18 +15,17 @@ color:white;
 padding:40px;
 }
 
-button{
-padding:12px 18px;
-margin:10px;
-font-size:16px;
-cursor:pointer;
-}
-
 .card{
 background:#222;
 padding:20px;
 margin-bottom:20px;
 border-radius:8px;
+}
+
+button{
+padding:10px 16px;
+margin-right:10px;
+cursor:pointer;
 }
 
 table{
@@ -36,23 +37,24 @@ margin-top:20px;
 th,td{
 padding:10px;
 border-bottom:1px solid #333;
-text-align:left;
+text-align:center;
 }
 
-.status{
-padding:4px 8px;
+.progress{
+height:10px;
+background:#333;
 border-radius:4px;
-font-size:12px;
+overflow:hidden;
 }
 
-.pending{background:#444}
-.processing{background:#6b4}
-.images{background:#6b4}
-.voice{background:#6b4}
-.render{background:#6b4}
-.upload{background:#6b4}
-.complete{background:#2ecc71}
-.failed{background:#e74c3c}
+.bar{
+height:100%;
+background:#2ecc71;
+}
+
+.stage{
+font-size:18px;
+}
 
 </style>
 
@@ -67,23 +69,26 @@ font-size:12px;
 <h2>Create Job</h2>
 
 <button onclick="createJob()">Create Video Job</button>
-<button onclick="loadJobs()">Refresh Jobs</button>
 
 </div>
 
 <div class="card">
 
-<h2>Pipeline Jobs</h2>
+<h2>Video Pipeline</h2>
 
 <table id="jobs">
 
 <thead>
+
 <tr>
-<th>ID</th>
 <th>Topic</th>
-<th>Status</th>
-<th>Created</th>
+<th>Images</th>
+<th>Voice</th>
+<th>Render</th>
+<th>Upload</th>
+<th>Progress</th>
 </tr>
+
 </thead>
 
 <tbody></tbody>
@@ -105,6 +110,39 @@ loadJobs()
 
 }
 
+function stageIcon(stage,current){
+
+const order = ["pending","processing","images","voice","render","upload","complete"]
+
+const currentIndex = order.indexOf(current)
+const stageIndex = order.indexOf(stage)
+
+if(current==="complete") return "✅"
+
+if(stageIndex < currentIndex) return "✅"
+
+if(stageIndex === currentIndex) return "🔄"
+
+return "⏳"
+
+}
+
+function progressValue(status){
+
+const map={
+pending:5,
+processing:10,
+images:25,
+voice:50,
+render:75,
+upload:90,
+complete:100
+}
+
+return map[status] || 0
+
+}
+
 async function loadJobs(){
 
 const r = await fetch("/jobs")
@@ -118,18 +156,31 @@ jobs.forEach(j=>{
 
 const row=document.createElement("tr")
 
-row.innerHTML=`
+const progress = progressValue(j.status)
 
-<td>${j.id}</td>
-<td>${j.topic}</td>
+row.innerHTML=\`
+
+<td>\${j.topic}</td>
+
+<td class="stage">\${stageIcon("images",j.status)}</td>
+
+<td class="stage">\${stageIcon("voice",j.status)}</td>
+
+<td class="stage">\${stageIcon("render",j.status)}</td>
+
+<td class="stage">\${stageIcon("upload",j.status)}</td>
+
 <td>
-<span class="status ${j.status}">
-${j.status}
-</span>
-</td>
-<td>${j.created_at}</td>
 
-`
+<div class="progress">
+<div class="bar" style="width:\${progress}%"></div>
+</div>
+
+\${progress}%
+
+</td>
+
+\`
 
 tbody.appendChild(row)
 
@@ -145,3 +196,5 @@ setInterval(loadJobs,5000)
 
 </body>
 </html>
+
+`
