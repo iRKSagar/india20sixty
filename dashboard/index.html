@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>India20Sixty Control Panel</title>
+<style>
+
+body{
+font-family: Arial;
+background:#111;
+color:white;
+padding:40px;
+}
+
+button{
+padding:12px 20px;
+margin:10px;
+font-size:16px;
+cursor:pointer;
+}
+
+.card{
+background:#222;
+padding:20px;
+margin-bottom:20px;
+border-radius:6px;
+}
+
+</style>
+</head>
+
+<body>
+
+<h1>India20Sixty Dashboard</h1>
+
+<div class="card">
+
+<h2>Pipeline</h2>
+
+<button onclick="runPipeline()">Run Pipeline</button>
+
+<button onclick="testRender()">Test Render</button>
+
+</div>
+
+<div class="card">
+
+<h2>Navigation</h2>
+
+<a href="/dashboard/jobs">Jobs</a><br>
+<a href="/dashboard/videos">Videos</a><br>
+<a href="/dashboard/topics">Topics</a>
+
+</div>
+
+<script src="/static/dashboard.js"></script>
+
+</body>
+</html>
