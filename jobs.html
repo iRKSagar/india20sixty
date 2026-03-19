@@ -1,0 +1,37 @@
+<h1>Jobs</h1>
+
+<table id="jobs">
+
+<tr>
+<th>Job</th>
+<th>Topic</th>
+<th>Status</th>
+</tr>
+
+</table>
+
+<script>
+
+async function loadJobs(){
+
+const r = await fetch("/jobs");
+
+const jobs = await r.json();
+
+const table = document.getElementById("jobs");
+
+jobs.forEach(j=>{
+
+const row = table.insertRow();
+
+row.insertCell().innerText=j.id;
+row.insertCell().innerText=j.topic;
+row.insertCell().innerText=j.status;
+
+});
+
+}
+
+loadJobs();
+
+</script>
