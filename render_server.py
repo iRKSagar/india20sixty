@@ -7,9 +7,20 @@ import time
 
 app = Flask(__name__)
 
+# =============================
+# ENV
+# =============================
+
+LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+
 
 # =============================
-# HEALTH CHECK
+# HEALTH
 # =============================
 
 @app.route("/")
@@ -18,12 +29,31 @@ def home():
 
 
 # =============================
-# ENV
+# SUPABASE JOB UPDATE
 # =============================
 
-LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID")
+def update_job(job_id, status):
+
+    try:
+
+        url = f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}"
+
+        requests.patch(
+            url,
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "status": status,
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")
+            }
+        )
+
+    except Exception as e:
+
+        print("Supabase update failed:", e)
 
 
 # =============================
@@ -35,40 +65,61 @@ def full_pipeline():
 
     data = request.json or {}
 
-    job_id = str(uuid.uuid4())
-
+    job_id = data.get("job_id", str(uuid.uuid4()))
     topic = data.get("topic", "Future India")
     script = data.get("script", "Future technology in India.")
     prompts = data.get("visual_prompts", [])
 
     if len(prompts) == 0:
+
         prompts = [
-            "futuristic Indian hospital AI doctors",
-            "advanced Indian city skyline future",
+            "futuristic Indian AI hospital",
+            "advanced smart city India future",
             "robotics healthcare India",
-            "AI medical lab India future",
-            "smart hospital India 2040"
+            "AI powered hospital lab India",
+            "smart healthcare India 2040"
         ]
 
-    print("JOB STARTED:", job_id)
+    try:
 
-    image_paths = generate_images(prompts, job_id)
+        print("JOB STARTED:", job_id)
 
-    audio_path = generate_voice(script, job_id)
+        update_job(job_id, "images")
 
-    video_path = render_video(image_paths, audio_path, job_id)
+        image_paths = generate_images(prompts, job_id)
 
-    youtube_id = upload_youtube(video_path, topic)
+        update_job(job_id, "voice")
 
-    return jsonify({
-        "status": "complete",
-        "job_id": job_id,
-        "youtube_id": youtube_id
-    })
+        audio_path = generate_voice(script, job_id)
+
+        update_job(job_id, "render")
+
+        video_path = render_video(image_paths, audio_path, job_id)
+
+        update_job(job_id, "upload")
+
+        youtube_id = upload_youtube(video_path, topic)
+
+        update_job(job_id, "complete")
+
+        return jsonify({
+            "status": "complete",
+            "job_id": job_id,
+            "youtube_id": youtube_id
+        })
+
+    except Exception as e:
+
+        update_job(job_id, "failed")
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
 
 # =============================
-# IMAGE GENERATION
+# LEONARDO IMAGE GENERATION
 # =============================
 
 def generate_images(prompts, job_id):
@@ -92,18 +143,11 @@ def generate_images(prompts, job_id):
             }
         )
 
-        gen_id = r.json()["sdGenerationJob"]["generationId"]
+        data = r.json()
 
-        time.sleep(5)
+        gen_id = data["sdGenerationJob"]["generationId"]
 
-        r2 = requests.get(
-            f"https://cloud.leonardo.ai/api/rest/v1/generations/{gen_id}",
-            headers={
-                "Authorization": f"Bearer {LEONARDO_API_KEY}"
-            }
-        )
-
-        img_url = r2.json()["generations_by_pk"]["generated_images"][0]["url"]
+        img_url = wait_for_image(gen_id)
 
         img_data = requests.get(img_url).content
 
@@ -118,7 +162,35 @@ def generate_images(prompts, job_id):
 
 
 # =============================
-# VOICE GENERATION
+# LEONARDO POLLING FIX
+# =============================
+
+def wait_for_image(gen_id):
+
+    for _ in range(20):
+
+        r = requests.get(
+            f"https://cloud.leonardo.ai/api/rest/v1/generations/{gen_id}",
+            headers={
+                "Authorization": f"Bearer {LEONARDO_API_KEY}"
+            }
+        )
+
+        data = r.json()
+
+        images = data.get("generations_by_pk", {}).get("generated_images")
+
+        if images:
+
+            return images[0]["url"]
+
+        time.sleep(2)
+
+    raise Exception("Leonardo image timeout")
+
+
+# =============================
+# ELEVENLABS VOICE
 # =============================
 
 def generate_voice(script, job_id):
@@ -160,6 +232,7 @@ def render_video(images, audio, job_id):
     inputs = []
 
     for img in images:
+
         inputs.extend(["-loop", "1", "-t", "5", "-i", img])
 
     cmd = [
@@ -190,6 +263,8 @@ def upload_youtube(video_path, topic):
     return "youtube_video_id_placeholder"
 
 
+# =============================
+# SERVER START
 # =============================
 
 if __name__ == "__main__":
