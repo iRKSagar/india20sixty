@@ -5,6 +5,9 @@ import uuid
 import subprocess
 
 app = Flask(__name__)
+@app.route("/")
+def home():
+    return {"status": "India20Sixty Render Server Running"}
 
 LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
