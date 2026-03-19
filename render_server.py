@@ -4,8 +4,7 @@ import os
 import subprocess
 import json
 import time
-import uuid
-from pathlib import Path
+import shutil
 
 app = Flask(__name__)
 
@@ -16,7 +15,7 @@ app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")  # Adam voice
+VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
@@ -28,7 +27,6 @@ YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"
 TMP_DIR = "/tmp/india20sixty"
 
-# Ensure temp directory exists
 Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
 
 # ==========================================
@@ -36,7 +34,6 @@ Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
 # ==========================================
 
 def update_status(job_id, status, data=None):
-    """Update job status in Supabase with optional data"""
     try:
         payload = {
             "status": status,
@@ -60,39 +57,36 @@ def update_status(job_id, status, data=None):
         print(f"STATUS UPDATE FAILED: {e}")
 
 def log_step(job_id, step, message):
-    """Log step to console and update status"""
     print(f"[{job_id}] {step}: {message}")
     update_status(job_id, step.lower())
 
 # ==========================================
-# SCRIPT GENERATION (Hook-First)
+# SCRIPT GENERATION (Indianized Hinglish)
 # ==========================================
 
 def generate_script(topic):
-    """Generate viral short-form script with pattern interrupt"""
+    print("SCRIPT START")
     
     prompt = f"""Create a viral 25-second YouTube Shorts script about: {topic}
 
-CRITICAL RULES:
-- FIRST LINE must be a pattern interrupt (shocking fact, bold prediction, or curiosity gap)
-- Use short punchy sentences (5-8 words max)
-- Include 1 mind-blowing statistic or prediction
-- End with open-loop question
-- Total: 40-50 words max
+LANGUAGE RULES:
+- 70 percent English, 30 percent Hinglish (Hindi phrases)
+- Use Hindi for: emotions, hooks, CTAs, cultural references
+- Use English for: technical terms, data, years
 
 STRUCTURE:
-Line 1: HOOK (pattern interrupt)
-Line 2-3: Context
-Line 4-5: Insight/shocking fact
-Line 6: Future prediction
-Line 7: Question to audience
+1. HOOK (3 sec): Hinglish pattern interrupt like "Socho...", "Ek minute...", "Kya aapne socha..."
+2. CONTEXT (5 sec): English setup with Indian context
+3. INSIGHT (8 sec): Mixed Hinglish-English
+4. FUTURE (5 sec): English vision
+5. CTA (4 sec): Hinglish like "Aapko kya lagta? Comment karo!"
 
 EXAMPLE HOOKS:
-"India's about to disappear 80% of its doctors..."
-"By 2060, Mumbai won't exist where it is today..."
-"This Indian village has zero teachers. Yet students rank #1..."
+- "Socho agar AI doctors har gaon mein ho..."
+- "Ek minute! Kya India 2035 tak superpower ban jayega?"
+- "Desi tech global stage par..."
 
-Write only the script, no labels, no markdown."""
+Return ONLY the script text, no labels, no markdown. 40-50 words total."""
 
     try:
         r = requests.post(
@@ -105,105 +99,81 @@ Write only the script, no labels, no markdown."""
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.8,
-                "max_tokens": 150
+                "max_tokens": 200
             },
             timeout=30
         )
         r.raise_for_status()
-        script = r.json()["choices"][0]["message"]["content"].strip()
         
-        # Clean up script
-        script = script.replace('"', '').replace("'", "")
-        lines = [line.strip() for line in script.split('\n') if line.strip()]
+        text = r.json()["choices"][0]["message"]["content"].strip()
+        # Clean up
+        text = text.replace('"', '').replace("'", "")
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
         script = ' '.join(lines)
         
-        print(f"GENERATED SCRIPT: {script[:100]}...")
+        print(f"SCRIPT DONE: {script[:80]}...")
         return script
         
     except Exception as e:
         print(f"SCRIPT GEN FAILED: {e}")
-        # Fallback script
-        return f"{topic}. Imagine how India transforms by 2060. The future is closer than you think. What do you believe?"
+        return f"Socho, {topic} reality ban jaye. Ye future door nahi hai. India 2060 mein yeh normal hoga. Aapko kya lagta? Comment karo!"
 
 # ==========================================
-# VISUAL SCENE GENERATION
+# VISUAL PROMPTS (Indianized)
 # ==========================================
 
 SCENE_TEMPLATES = {
     "hook": [
-        "cinematic wide shot futuristic Indian city skyline 2060, neon lights, flying vehicles, ultra detailed, 8k, dramatic lighting",
-        "close up Indian astronaut helmet reflection showing space station, cinematic lighting, ultra realistic",
-        "aerial view smart Indian megacity with vertical gardens, sunset, cinematic, 8k"
+        "futuristic Indian megacity sunrise lotus-shaped skyscrapers flying vehicles with rangoli LED patterns diverse Indian crowd saffron teal colors cinematic",
+        "advanced AI research center India engineers in kurtas with holographic interfaces temple architecture fused with glass buildings morning light cinematic",
+        "Indian spaceport rocket launching ISRO logo visible traditional lamp ceremony crowd cheering dramatic lighting cinematic",
+        "smart village India 2060 traditional huts with solar roofs robots helping farmers green fields sunrise warm colors cinematic"
     ],
     "context": [
-        "futuristic Indian hospital interior with holographic displays, doctors with AR glasses, cinematic",
-        "Indian farmer controlling drone swarm over green fields, sunset, cinematic composition",
-        "modern Indian classroom with AI teacher hologram, students with tablets, bright lighting"
+        "AI hospital India doctor in white coat with AR glasses examining patient Ganesh statue in background clean modern interior soft lighting cinematic",
+        "Indian classroom 2060 students in uniform with tablets AI teacher hologram Sanskrit script on digital blackboard bright lighting cinematic",
+        "high-tech Indian railway station bullet train with peacock feather design passengers in diverse Indian clothing digital signage Hindi English cinematic",
+        "vertical farm Mumbai traditional marigold flowers in hydroponic towers Indian farmer monitoring with tablet sunset colors cinematic"
     ],
     "insight": [
-        "futuristic Indian laboratory with quantum computer, scientists in traditional clothes, cinematic",
-        "Indian hyperloop station with passengers boarding, sleek design, morning light",
-        "underwater view of floating Indian city with glass domes, marine life, cinematic"
+        "quantum computer Indian lab circuit patterns resembling mandala scientist in saree with safety goggles blue gold lighting cinematic",
+        "Indian ocean cleanup robotic boats with traditional boat designs Mumbai skyline background morning mist cinematic",
+        "desert solar farm Rajasthan panels arranged in geometric rangoli patterns camel in foreground golden hour cinematic",
+        "Indian manufacturing robot arms decorated with mehndi patterns factory floor with diya lamps warm industrial lighting cinematic"
     ],
     "future": [
-        "Indian space elevator reaching into clouds, sunrise, monumental scale, cinematic",
-        "Mars colony with Indian architecture, red planet landscape, earth in sky, cinematic",
-        "futuristic Indian temple with holographic rituals, blend of tradition and tech, sunset"
+        "Mars colony with Indian flag dome habitat with temple architecture astronaut with Om symbol patch red planet landscape cinematic",
+        "underwater city off Kerala coast glass domes with Kerala boat design marine life Indian family looking out blue-green lighting cinematic",
+        "floating city above Ganges river platforms with Varanasi ghats design holy men with tech wearables sunrise golden light cinematic",
+        "Himalayan research station snow-capped peaks monastery fused with observatory prayer flags with solar panels clear sky cinematic"
     ],
     "ending": [
-        "wide shot Indian flag on moon base, earthrise in background, patriotic, cinematic",
-        "time lapse futuristic Indian city day to night, lights coming on, cinematic",
-        "portrait hopeful Indian child looking at futuristic city, golden hour, cinematic"
+        "panoramic view India 2060 diverse landscapes mountains to ocean Taj Mahal preserved with holographic protection sunset patriotic colors cinematic",
+        "generation of Indians elder traditional clothes youth smart wear child with AR glasses looking at futuristic city golden hour emotional cinematic",
+        "Indian flag waving on moon base earthrise in background astronaut doing namaste vast space awe-inspiring cinematic"
     ]
 }
 
 def generate_visual_scenes(topic):
-    """Generate 5 cinematic scenes based on topic keywords"""
-    
-    # Extract keyword from topic
-    keyword = topic.lower()
-    
-    # Select scenes based on topic relevance
-    if "doctor" in keyword or "hospital" in keyword or "health" in keyword:
-        theme = "health"
-    elif "space" in keyword or "mars" in keyword or "moon" in keyword:
-        theme = "space"
-    elif "city" in keyword or "urban" in keyword or "traffic" in keyword:
-        theme = "city"
-    elif "farm" in keyword or "agriculture" in keyword or "food" in keyword:
-        theme = "agriculture"
-    else:
-        theme = "general"
-    
     scenes = []
     for stage in ["hook", "context", "insight", "future", "ending"]:
         templates = SCENE_TEMPLATES[stage]
-        # Rotate through templates based on job hash
         idx = hash(topic + stage) % len(templates)
-        base_prompt = templates[idx]
-        
-        # Add topic-specific modifier
-        if theme != "general":
-            base_prompt = base_prompt.replace("Indian", f"Indian {theme}")
-        
         scenes.append({
             "stage": stage,
-            "prompt": base_prompt,
+            "prompt": templates[idx],
             "duration": 5
         })
-    
     return scenes
 
 # ==========================================
-# LEONARDO IMAGE GENERATION (With Retry)
+# LEONARDO IMAGES (With Retry)
 # ==========================================
 
 def generate_image_with_retry(prompt, output_path, max_retries=3):
-    """Generate image with exponential backoff"""
-    
     for attempt in range(max_retries):
         try:
-            # Step 1: Create generation
+            # Create generation
             r = requests.post(
                 "https://cloud.leonardo.ai/api/rest/v1/generations",
                 headers={
@@ -212,7 +182,7 @@ def generate_image_with_retry(prompt, output_path, max_retries=3):
                 },
                 json={
                     "prompt": prompt,
-                    "modelId": "6bef9f1b-29cb-40c7-b9df-32b51c1f67d3",  # Leonardo Kino XL
+                    "modelId": "6bef9f1b-29cb-40c7-b9df-32b51c1f67d3",
                     "width": 1080,
                     "height": 1920,
                     "num_images": 1,
@@ -228,8 +198,8 @@ def generate_image_with_retry(prompt, output_path, max_retries=3):
             
             generation_id = data["sdGenerationJob"]["generationId"]
             
-            # Step 2: Poll for completion
-            for poll in range(30):  # Max 60 seconds
+            # Poll for completion
+            for poll in range(30):
                 time.sleep(2)
                 
                 r = requests.get(
@@ -244,14 +214,11 @@ def generate_image_with_retry(prompt, output_path, max_retries=3):
                     images = result["generations_by_pk"].get("generated_images", [])
                     if images:
                         img_url = images[0]["url"]
-                        
-                        # Download image
                         img_r = requests.get(img_url, timeout=30)
                         img_r.raise_for_status()
                         
                         with open(output_path, "wb") as f:
                             f.write(img_r.content)
-                        
                         return True
             
             raise Exception("Generation timeout")
@@ -259,15 +226,13 @@ def generate_image_with_retry(prompt, output_path, max_retries=3):
         except Exception as e:
             print(f"Image attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)  # Exponential backoff
+                time.sleep(2 ** attempt)
             else:
                 raise
     
     return False
 
 def generate_all_images(scenes, job_id):
-    """Generate all 5 images with progress tracking"""
-    
     image_paths = []
     for i, scene in enumerate(scenes):
         log_step(job_id, "IMAGES", f"Generating scene {i+1}/5: {scene['stage']}")
@@ -279,10 +244,7 @@ def generate_all_images(scenes, job_id):
             image_paths.append(path)
         except Exception as e:
             print(f"Failed to generate image {i}: {e}")
-            # Create fallback: use previous image or solid color
             if image_paths:
-                # Copy previous image
-                import shutil
                 shutil.copy(image_paths[-1], path)
                 image_paths.append(path)
             else:
@@ -295,8 +257,6 @@ def generate_all_images(scenes, job_id):
 # ==========================================
 
 def generate_voice(script, job_id):
-    """Generate voice with ElevenLabs"""
-    
     log_step(job_id, "VOICE", "Generating audio...")
     
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
@@ -326,11 +286,10 @@ def generate_voice(script, job_id):
     return audio_path
 
 # ==========================================
-# VIDEO RENDERING (Ken Burns + Subtitles)
+# VIDEO RENDERING
 # ==========================================
 
 def get_audio_duration(audio_path):
-    """Get audio duration using ffprobe"""
     try:
         result = subprocess.run([
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -338,31 +297,26 @@ def get_audio_duration(audio_path):
         ], capture_output=True, text=True, timeout=10)
         return float(result.stdout.strip())
     except:
-        return 25  # Default
+        return 25
 
-def render_video(images, audio, script, job_id):
-    """Render video with Ken Burns effect and subtitles"""
-    
+def render_video(images, audio, job_id):
     log_step(job_id, "RENDER", "Starting video render...")
     
     video_path = f"{TMP_DIR}/{job_id}.mp4"
     audio_duration = get_audio_duration(audio)
-    
-    # Calculate scene duration
     scene_duration = audio_duration / len(images)
     
-    # Create complex filter for Ken Burns + concat
-    filter_parts = []
+    # Build ffmpeg command with Ken Burns
     inputs = []
+    filter_parts = []
     
     for i, img in enumerate(images):
         inputs.extend(["-loop", "1", "-t", str(scene_duration), "-i", img])
         
-        # Ken Burns: slow zoom and pan
         zoom_start = 1.0
         zoom_end = 1.15
         x_start = 0
-        x_end = (i % 2) * 20  # Alternate pan direction
+        x_end = (i % 2) * 20
         
         filter_parts.append(
             f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
@@ -372,11 +326,9 @@ def render_video(images, audio, script, job_id):
             f"d={int(scene_duration * 30)}:s=1080x1920[v{i}];"
         )
     
-    # Concatenate all scenes
     concat_inputs = "".join([f"[v{i}]" for i in range(len(images))])
     filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0[video];")
     
-    # Build ffmpeg command
     cmd = [
         "ffmpeg", "-y",
         *inputs,
@@ -400,7 +352,6 @@ def render_video(images, audio, script, job_id):
         print(f"FFMPEG ERROR: {result.stderr}")
         raise Exception("Video render failed")
     
-    # Verify output
     if not os.path.exists(video_path) or os.path.getsize(video_path) < 100000:
         raise Exception("Video file too small or missing")
     
@@ -411,7 +362,6 @@ def render_video(images, audio, script, job_id):
 # ==========================================
 
 def get_youtube_token():
-    """Refresh YouTube access token"""
     r = requests.post(
         "https://oauth2.googleapis.com/token",
         data={
@@ -426,29 +376,26 @@ def get_youtube_token():
     return r.json()["access_token"]
 
 def upload_to_youtube(video_path, title, script, job_id):
-    """Upload video to YouTube"""
-    
     log_step(job_id, "UPLOAD", "Uploading to YouTube...")
     
     token = get_youtube_token()
     
-    # Create SEO-optimized description
     description = f"""{script}
 
-🚀 Exploring India's future by 2060
+Exploring India's future by 2060
 
-#India2060 #FutureTech #IndiaFuture #Shorts #AI #Technology
+India2060 FutureTech IndiaFuture Shorts AI Technology
 
 Follow for daily glimpses into India's future!
 
 This content is AI-generated for educational and entertainment purposes."""
-
+    
     metadata = {
         "snippet": {
-            "title": title[:100],  # YouTube limit
+            "title": title[:100],
             "description": description[:5000],
             "tags": ["India 2060", "Future India", "AI", "Technology", "Shorts", "India Future"],
-            "categoryId": "28"  # Science & Technology
+            "categoryId": "28"
         },
         "status": {
             "privacyStatus": "public",
@@ -456,7 +403,6 @@ This content is AI-generated for educational and entertainment purposes."""
         }
     }
     
-    # Multipart upload
     with open(video_path, "rb") as video_file:
         r = requests.post(
             "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
@@ -469,9 +415,7 @@ This content is AI-generated for educational and entertainment purposes."""
         )
     
     r.raise_for_status()
-    result = r.json()
-    
-    return result["id"]
+    return r.json()["id"]
 
 # ==========================================
 # MAIN PIPELINE
@@ -489,31 +433,63 @@ def pipeline():
     print(f"{'='*60}\n")
     
     try:
-        # Step 1: Generate script
         update_status(job_id, "script", {"topic": topic})
         script = generate_script(topic)
         
-        # Step 2: Generate visual scenes
         scenes = generate_visual_scenes(topic)
-        
-        # Step 3: Generate images
         images = generate_all_images(scenes, job_id)
-        
-        # Step 4: Generate voice
         audio = generate_voice(script, job_id)
+        video = render_video(images, audio, job_id)
         
-        # Step 5: Render video
-        video = render_video(images, scenes, audio, script, job_id)
-        
-        # Step 6: Upload (or skip in test mode)
         if TEST_MODE:
             print("TEST MODE: Skipping YouTube upload")
             video_id = "TEST_MODE"
         else:
-            title = f"{topic} 🇮🇳 #shorts"
+            title = f"{topic} India2060 shorts"
             video_id = upload_to_youtube(video, title, script, job_id)
         
-        # Success
         update_status(job_id, "complete", {
             "youtube_id": video_id,
-            "script
+            "script": script,
+            "video_path": video
+        })
+        
+        # Cleanup
+        for img in images:
+            try: os.remove(img)
+            except: pass
+        try: os.remove(audio)
+        except: pass
+        
+        print(f"\n✅ PIPELINE COMPLETE: {video_id}\n")
+        
+        return jsonify({
+            "status": "complete",
+            "job_id": job_id,
+            "youtube_id": video_id,
+            "script": script
+        })
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"\n❌ PIPELINE FAILED: {error_msg}\n")
+        
+        update_status(job_id, "failed", {"error": error_msg})
+        
+        return jsonify({
+            "status": "failed",
+            "job_id": job_id,
+            "error": error_msg
+        }), 500
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "healthy",
+        "test_mode": TEST_MODE
+    })
+
+if __name__ == "__main__":
+    from pathlib import Path
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, threaded=True)
