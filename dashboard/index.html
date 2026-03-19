@@ -1,18 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
+
 <title>India20Sixty Control Panel</title>
+
 <style>
 
 body{
-font-family: Arial;
+font-family:Arial;
 background:#111;
 color:white;
 padding:40px;
 }
 
 button{
-padding:12px 20px;
+padding:12px 18px;
 margin:10px;
 font-size:16px;
 cursor:pointer;
@@ -22,10 +24,38 @@ cursor:pointer;
 background:#222;
 padding:20px;
 margin-bottom:20px;
-border-radius:6px;
+border-radius:8px;
 }
 
+table{
+width:100%;
+border-collapse:collapse;
+margin-top:20px;
+}
+
+th,td{
+padding:10px;
+border-bottom:1px solid #333;
+text-align:left;
+}
+
+.status{
+padding:4px 8px;
+border-radius:4px;
+font-size:12px;
+}
+
+.pending{background:#444}
+.processing{background:#6b4}
+.images{background:#6b4}
+.voice{background:#6b4}
+.render{background:#6b4}
+.upload{background:#6b4}
+.complete{background:#2ecc71}
+.failed{background:#e74c3c}
+
 </style>
+
 </head>
 
 <body>
@@ -34,25 +64,84 @@ border-radius:6px;
 
 <div class="card">
 
-<h2>Pipeline</h2>
+<h2>Create Job</h2>
 
-<button onclick="runPipeline()">Run Pipeline</button>
-
-<button onclick="testRender()">Test Render</button>
+<button onclick="createJob()">Create Video Job</button>
+<button onclick="loadJobs()">Refresh Jobs</button>
 
 </div>
 
 <div class="card">
 
-<h2>Navigation</h2>
+<h2>Pipeline Jobs</h2>
 
-<a href="/dashboard/jobs">Jobs</a><br>
-<a href="/dashboard/videos">Videos</a><br>
-<a href="/dashboard/topics">Topics</a>
+<table id="jobs">
+
+<thead>
+<tr>
+<th>ID</th>
+<th>Topic</th>
+<th>Status</th>
+<th>Created</th>
+</tr>
+</thead>
+
+<tbody></tbody>
+
+</table>
 
 </div>
 
-<script src="/static/dashboard.js"></script>
+<script>
+
+async function createJob(){
+
+const r = await fetch("/run")
+const data = await r.json()
+
+alert("Job created: " + data.job_id)
+
+loadJobs()
+
+}
+
+async function loadJobs(){
+
+const r = await fetch("/jobs")
+const jobs = await r.json()
+
+const tbody = document.querySelector("#jobs tbody")
+
+tbody.innerHTML=""
+
+jobs.forEach(j=>{
+
+const row=document.createElement("tr")
+
+row.innerHTML=`
+
+<td>${j.id}</td>
+<td>${j.topic}</td>
+<td>
+<span class="status ${j.status}">
+${j.status}
+</span>
+</td>
+<td>${j.created_at}</td>
+
+`
+
+tbody.appendChild(row)
+
+})
+
+}
+
+loadJobs()
+
+setInterval(loadJobs,5000)
+
+</script>
 
 </body>
 </html>
