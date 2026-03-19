@@ -1,142 +1,319 @@
-```python
-import traceback
+from flask import Flask, request, jsonify
+import requests
+import os
+import subprocess
+import json
+import time
+
+app = Flask(__name__)
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID")
+
+YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
+YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
 
-# -----------------------------------
-# WORKER IMPORTS
-# -----------------------------------
+# ------------------------------------------------
+# UPDATE JOB STATUS
+# ------------------------------------------------
 
-from workers.topic_worker.topic_worker import process_job as topic_worker
-from workers.safety_worker.safety_worker import process_job as safety_worker
-from workers.script_worker.script_worker import process_job as script_worker
-from workers.visual_prompt_worker.visual_prompt_worker import process_job as visual_prompt_worker
-from workers.image_cache_worker.image_cache_worker import process_job as image_cache_worker
-from workers.image_worker.image_worker import process_job as image_worker
-from workers.voice_worker.voice_worker import process_job as voice_worker
-from workers.subtitle_worker.subtitle_worker import process_job as subtitle_worker
-from workers.render_worker.render_worker import process_job as render_worker
-from workers.storage_worker.storage_worker import process_job as storage_worker
-from workers.youtube_upload_worker.youtube_upload_worker import process_job as youtube_upload_worker
-from workers.instagram_upload_worker.instagram_upload_worker import process_job as instagram_upload_worker
-from workers.analytics_worker.analytics_worker import process_job as analytics_worker
+def update_status(job_id,status):
 
-
-# -----------------------------------
-# PIPELINE ORDER
-# -----------------------------------
-
-PIPELINE = [
-
-    ("topic_worker", topic_worker),
-    ("safety_worker", safety_worker),
-    ("script_worker", script_worker),
-    ("visual_prompt_worker", visual_prompt_worker),
-    ("image_cache_worker", image_cache_worker),
-    ("image_worker", image_worker),
-    ("voice_worker", voice_worker),
-    ("subtitle_worker", subtitle_worker),
-    ("render_worker", render_worker),
-    ("storage_worker", storage_worker),
-    ("youtube_upload_worker", youtube_upload_worker),
-    ("instagram_upload_worker", instagram_upload_worker),
-    ("analytics_worker", analytics_worker)
-
-]
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
+            headers={
+                "apikey":SUPABASE_ANON_KEY,
+                "Authorization":f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type":"application/json"
+            },
+            json={"status":status}
+        )
+    except:
+        pass
 
 
-# -----------------------------------
-# SAFE WORKER EXECUTION
-# -----------------------------------
+# ------------------------------------------------
+# OPENAI SCRIPT GENERATION
+# ------------------------------------------------
 
-def run_worker(worker_name, worker_func, job):
+def generate_script(topic):
+
+    prompt = f"""
+Create a 25 second YouTube Shorts script about:
+
+{topic}
+
+Structure:
+Hook
+Context
+Insight
+Future
+Question
+
+Keep sentences short.
+"""
+
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization":f"Bearer {OPENAI_API_KEY}",
+            "Content-Type":"application/json"
+        },
+        json={
+            "model":"gpt-4o-mini",
+            "messages":[{"role":"user","content":prompt}]
+        }
+    )
+
+    text = r.json()["choices"][0]["message"]["content"]
+
+    return text
+
+
+# ------------------------------------------------
+# IMAGE PROMPTS
+# ------------------------------------------------
+
+def generate_prompts(script):
+
+    prompt = f"""
+Break this script into 5 visual scenes.
+
+Script:
+{script}
+
+Return JSON list of prompts.
+"""
+
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization":f"Bearer {OPENAI_API_KEY}",
+            "Content-Type":"application/json"
+        },
+        json={
+            "model":"gpt-4o-mini",
+            "messages":[{"role":"user","content":prompt}]
+        }
+    )
+
+    txt = r.json()["choices"][0]["message"]["content"]
+
+    try:
+        return json.loads(txt)
+    except:
+        return [script]*5
+
+
+# ------------------------------------------------
+# LEONARDO IMAGE GENERATION
+# ------------------------------------------------
+
+def generate_images(prompts,job_id):
+
+    update_status(job_id,"images")
+
+    images=[]
+
+    for i,p in enumerate(prompts):
+
+        r=requests.post(
+            "https://cloud.leonardo.ai/api/rest/v1/generations",
+            headers={
+                "Authorization":f"Bearer {LEONARDO_API_KEY}",
+                "Content-Type":"application/json"
+            },
+            json={
+                "prompt":p,
+                "width":1080,
+                "height":1920
+            }
+        )
+
+        data=r.json()
+
+        img_url=data["generations_by_pk"]["generated_images"][0]["url"]
+
+        img=requests.get(img_url).content
+
+        path=f"/tmp/{job_id}_{i}.png"
+
+        with open(path,"wb") as f:
+            f.write(img)
+
+        images.append(path)
+
+    return images
+
+
+# ------------------------------------------------
+# ELEVENLABS VOICE
+# ------------------------------------------------
+
+def generate_voice(script,job_id):
+
+    update_status(job_id,"voice")
+
+    url=f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
+
+    r=requests.post(
+        url,
+        headers={
+            "xi-api-key":ELEVENLABS_API_KEY,
+            "Content-Type":"application/json"
+        },
+        json={
+            "text":script,
+            "model_id":"eleven_multilingual_v2"
+        }
+    )
+
+    audio=f"/tmp/{job_id}.mp3"
+
+    with open(audio,"wb") as f:
+        f.write(r.content)
+
+    return audio
+
+
+# ------------------------------------------------
+# KEN BURNS VIDEO
+# ------------------------------------------------
+
+def render_video(images,audio,job_id):
+
+    update_status(job_id,"render")
+
+    video=f"/tmp/{job_id}.mp4"
+
+    inputs=[]
+
+    for img in images:
+        inputs+=["-loop","1","-t","5","-i",img]
+
+    cmd=[
+        "ffmpeg",
+        *inputs,
+        "-i",audio,
+        "-filter_complex",
+        f"concat=n={len(images)}:v=1:a=0",
+        "-shortest",
+        "-s","1080x1920",
+        "-pix_fmt","yuv420p",
+        "-y",
+        video
+    ]
+
+    subprocess.run(cmd)
+
+    return video
+
+
+# ------------------------------------------------
+# YOUTUBE TOKEN
+# ------------------------------------------------
+
+def get_youtube_token():
+
+    r=requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id":YOUTUBE_CLIENT_ID,
+            "client_secret":YOUTUBE_CLIENT_SECRET,
+            "refresh_token":YOUTUBE_REFRESH_TOKEN,
+            "grant_type":"refresh_token"
+        }
+    )
+
+    return r.json()["access_token"]
+
+
+# ------------------------------------------------
+# YOUTUBE UPLOAD
+# ------------------------------------------------
+
+def upload_youtube(video,title,job_id):
+
+    update_status(job_id,"upload")
+
+    token=get_youtube_token()
+
+    headers={
+        "Authorization":f"Bearer {token}"
+    }
+
+    metadata={
+        "snippet":{
+            "title":title,
+            "description":"Future India 2060",
+            "tags":["india","future","ai"]
+        },
+        "status":{
+            "privacyStatus":"public"
+        }
+    }
+
+    requests.post(
+        "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
+        headers=headers,
+        files={
+            "snippet":(None,json.dumps(metadata),"application/json"),
+            "video":("video.mp4",open(video,"rb"),"video/mp4")
+        }
+    )
+
+
+# ------------------------------------------------
+# PIPELINE
+# ------------------------------------------------
+
+@app.route("/full-pipeline",methods=["POST"])
+def pipeline():
+
+    data=request.json
+
+    job_id=data["job_id"]
+    topic=data["topic"]
 
     try:
 
-        print(f"\nRunning {worker_name}")
+        script=generate_script(topic)
 
-        job = worker_func(job)
+        prompts=generate_prompts(script)
 
-        if not isinstance(job, dict):
-            raise Exception("Worker did not return job dictionary")
+        images=generate_images(prompts,job_id)
 
-        return job
+        audio=generate_voice(script,job_id)
+
+        video=render_video(images,audio,job_id)
+
+        upload_youtube(video,topic,job_id)
+
+        update_status(job_id,"complete")
+
+        return jsonify({"status":"complete"})
 
     except Exception as e:
 
-        print(f"\nERROR in {worker_name}")
-        print(str(e))
-        print(traceback.format_exc())
+        update_status(job_id,"failed")
 
-        job["status"] = f"{worker_name}_failed"
-        job["error"] = str(e)
-
-        return job
+        return jsonify({"error":str(e)})
 
 
-# -----------------------------------
-# RUN FULL PIPELINE
-# -----------------------------------
-
-def run_pipeline(job):
-
-    for worker_name, worker_func in PIPELINE:
-
-        job = run_worker(worker_name, worker_func, job)
-
-        if "failed" in job.get("status", ""):
-
-            print("\nPipeline stopped due to failure")
-
-            return job
-
-    job["status"] = "pipeline_complete"
-
-    return job
+@app.route("/")
+def home():
+    return {"status":"render server running"}
 
 
-# -----------------------------------
-# TEST JOB GENERATOR
-# -----------------------------------
-
-def create_test_job():
-
-    return {
-
-        "topic": None,
-        "hook": None,
-        "script": None,
-
-        "visual_prompts": [],
-        "images": [],
-
-        "voice": None,
-        "subtitles": [],
-
-        "video": None,
-
-        "youtube_views": 0,
-        "youtube_likes": 0,
-        "youtube_comments": 0,
-
-        "instagram_views": 0,
-        "instagram_likes": 0,
-        "instagram_comments": 0
-    }
-
-
-# -----------------------------------
-# MAIN ENTRY
-# -----------------------------------
-
-if __name__ == "__main__":
-
-    print("\nIndia20Sixty Pipeline Starting\n")
-
-    job = create_test_job()
-
-    result = run_pipeline(job)
-
-    print("\nPipeline Finished\n")
-
-    print(result)
-```
+if __name__=="__main__":
+    port=int(os.environ.get("PORT",10000))
+    app.run(host="0.0.0.0",port=port)
