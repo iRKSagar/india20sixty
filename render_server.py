@@ -27,14 +27,13 @@ YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
-# R2 Configuration
 R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
 R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
 R2_BUCKET = os.environ.get("R2_BUCKET")
 
 TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"
-REVIEW_MODE = os.environ.get("REVIEW_MODE", "true").lower() == "true"  # New: review before publish
+REVIEW_MODE = os.environ.get("REVIEW_MODE", "true").lower() == "true"
 
 TMP_DIR = "/tmp/india20sixty"
 
@@ -85,7 +84,7 @@ def log_step(job_id, step, message):
     update_status(job_id, step.lower())
 
 # ==========================================
-# SCRIPT GENERATION (Indianized Hinglish)
+# SCRIPT GENERATION
 # ==========================================
 
 def generate_script(topic):
@@ -93,19 +92,16 @@ def generate_script(topic):
     
     prompt = f"""Create a viral 25-second YouTube Shorts script about: {topic}
 
-LANGUAGE RULES:
-- 70 percent English, 30 percent Hinglish (Hindi phrases)
-- Use Hindi for: emotions, hooks, CTAs, cultural references
-- Use English for: technical terms, data, years
+LANGUAGE: 70 percent English, 30 percent Hinglish (Hindi phrases for emotions/CTAs)
 
 STRUCTURE:
-1. HOOK (3 sec): Hinglish pattern interrupt like "Socho...", "Ek minute...", "Kya aapne socha..."
-2. CONTEXT (5 sec): English setup with Indian context
+1. HOOK (3 sec): Hinglish like "Socho...", "Ek minute..."
+2. CONTEXT (5 sec): English with Indian context
 3. INSIGHT (8 sec): Mixed Hinglish-English
 4. FUTURE (5 sec): English vision
 5. CTA (4 sec): Hinglish like "Aapko kya lagta? Comment karo!"
 
-Return ONLY the script text, no labels, no markdown. 40-50 words total."""
+Return ONLY script text, 40-50 words, no labels."""
 
     try:
         r = requests.post(
@@ -137,7 +133,7 @@ Return ONLY the script text, no labels, no markdown. 40-50 words total."""
         return f"Socho, {topic} reality ban jaye. Ye future door nahi hai. India 2060 mein yeh normal hoga. Aapko kya lagta? Comment karo!"
 
 # ==========================================
-# VISUAL PROMPTS (Indianized)
+# VISUAL PROMPTS
 # ==========================================
 
 SCENE_TEMPLATES = {
@@ -373,18 +369,16 @@ def render_video(images, audio, job_id):
     return video_path
 
 # ==========================================
-# R2 UPLOAD FOR REVIEW
+# R2 UPLOAD
 # ==========================================
 
 def upload_to_r2(video_path, job_id, folder="review"):
-    """Upload video to R2 and return presigned URL"""
     try:
         s3 = get_r2_client()
         key = f"{folder}/{job_id}.mp4"
         
         s3.upload_file(video_path, R2_BUCKET, key)
         
-        # Generate presigned URL (7 days)
         url = s3.generate_presigned_url(
             'get_object',
             Params={'Bucket': R2_BUCKET, 'Key': key},
@@ -465,12 +459,11 @@ def pipeline():
     data = request.json
     job_id = data.get("job_id", str(uuid.uuid4()))
     topic = data.get("topic", "Future India")
-    skip_review = data.get("skip_review", False)  # Allow force publish
+    skip_review = data.get("skip_review", False)
     
     print(f"\n{'='*60}")
     print(f"PIPELINE START: {job_id}")
     print(f"TOPIC: {topic}")
-    print(f"REVIEW_MODE: {REVIEW_MODE}")
     print(f"{'='*60}\n")
     
     try:
@@ -482,11 +475,9 @@ def pipeline():
         audio = generate_voice(script, job_id)
         video = render_video(images, audio, job_id)
         
-        # Upload to R2 for review
         review_url = upload_to_r2(video, job_id, "review")
         print(f"REVIEW URL: {review_url}")
         
-        # Decide: review queue or direct publish
         should_review = REVIEW_MODE and not skip_review and not TEST_MODE
         
         if TEST_MODE:
@@ -498,7 +489,6 @@ def pipeline():
             video_id = "PENDING_REVIEW"
             final_status = "pending_review"
         else:
-            # Direct publish
             title = f"{topic} India2060 shorts"
             video_id = upload_to_youtube(video, title, script, job_id)
             final_status = "complete"
@@ -506,16 +496,20 @@ def pipeline():
         update_status(job_id, final_status, {
             "youtube_id": video_id,
             "script": script,
-            "review_url": review_url,
-            "video_path": video
+            "review_url": review_url
         })
         
         # Cleanup temp files
         for img in images:
-            try: os.remove(img)
-            except: pass
-        try: os.remove(audio)
-            except: pass
+            try:
+                os.remove(img)
+            except Exception as e:
+                print(f"Failed to remove image: {e}")
+        
+        try:
+            os.remove(audio)
+        except Exception as e:
+            print(f"Failed to remove audio: {e}")
         
         print(f"\n✅ PIPELINE COMPLETE: {video_id}\n")
         
@@ -541,7 +535,6 @@ def pipeline():
 
 @app.route("/approve-and-publish", methods=["POST"])
 def approve_and_publish():
-    """Approve pending video and publish to YouTube"""
     data = request.json
     job_id = data.get("job_id")
     
@@ -549,7 +542,6 @@ def approve_and_publish():
         return jsonify({"error": "job_id required"}), 400
     
     try:
-        # Get job from Supabase
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
             headers={
@@ -568,17 +560,14 @@ def approve_and_publish():
         if job["status"] != "pending_review":
             return jsonify({"error": f"Job status is {job['status']}, not pending_review"}), 400
         
-        # Download from R2
         s3 = get_r2_client()
         video_path = f"{TMP_DIR}/{job_id}_approve.mp4"
         
         s3.download_file(R2_BUCKET, f"review/{job_id}.mp4", video_path)
         
-        # Upload to YouTube
         title = f"{job['topic']} India2060 shorts"
         video_id = upload_to_youtube(video_path, title, job.get("script", ""), job_id)
         
-        # Move to published folder in R2
         s3.copy_object(
             Bucket=R2_BUCKET,
             CopySource={'Bucket': R2_BUCKET, 'Key': f"review/{job_id}.mp4"},
@@ -586,15 +575,15 @@ def approve_and_publish():
         )
         s3.delete_object(Bucket=R2_BUCKET, Key=f"review/{job_id}.mp4")
         
-        # Update status
         update_status(job_id, "complete", {
             "youtube_id": video_id,
             "published_at": datetime.utcnow().isoformat()
         })
         
-        # Cleanup
-        try: os.remove(video_path)
-        except: pass
+        try:
+            os.remove(video_path)
+        except Exception as e:
+            print(f"Failed to remove video: {e}")
         
         return jsonify({
             "status": "published",
@@ -607,14 +596,12 @@ def approve_and_publish():
 
 @app.route("/cleanup", methods=["POST"])
 def cleanup():
-    """Cleanup old videos and jobs"""
     data = request.json
-    mode = data.get("mode", "weekly")  # weekly or monthly
+    mode = data.get("mode", "weekly")
     
     try:
         s3 = get_r2_client()
         
-        # Calculate cutoff date
         if mode == "monthly":
             days = 30
         else:
@@ -622,10 +609,8 @@ def cleanup():
         
         cutoff = datetime.utcnow() - timedelta(days=days)
         
-        # List and delete old review videos
         deleted = []
         
-        # Get objects from R2
         response = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix="review/")
         
         if 'Contents' in response:
@@ -634,7 +619,6 @@ def cleanup():
                     s3.delete_object(Bucket=R2_BUCKET, Key=obj['Key'])
                     deleted.append(obj['Key'])
         
-        # Also cleanup old failed jobs from Supabase
         old_jobs = requests.get(
             f"{SUPABASE_URL}/rest/v1/jobs?status=eq.failed&created_at=lt.{cutoff.isoformat()}",
             headers={
