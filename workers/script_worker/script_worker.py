@@ -1,39 +1,41 @@
-import random
+import os
+import requests
 
-def process_job(topic):
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-    hooks = [
+def process_job(job):
 
-        f"Socho agar {topic} reality ban jaye...",
+    topic = job["topic"]
 
-        f"Sach bataun... {topic} India mein possible hai",
+    prompt = f"""
+Write a 25 second YouTube Shorts narration about:
 
-        f"2035 tak {topic} common ho sakta hai",
+{topic}
 
-        f"Kya India {topic} ke liye ready hai?"
+Structure:
+Hook
+Context
+Insight
+Future
+Question
 
-    ]
+Keep sentences short and engaging.
+"""
 
-    hook = random.choice(hooks)
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "gpt-4o-mini",
+            "messages":[{"role":"user","content":prompt}]
+        }
+    )
 
-    script = {
+    script = r.json()["choices"][0]["message"]["content"]
 
-        "topic": topic,
+    job["script"] = script
 
-        "hook": hook,
-
-        "trend":
-        "India mein technology rapidly evolve ho rahi hai.",
-
-        "insight":
-        f"{topic} jaise innovations already research stage mein hain.",
-
-        "future":
-        "2060 tak ye system India ke millions logon ki life change kar sakta hai.",
-
-        "question":
-        "Aapko kya lagta hai — kya India ready hoga?"
-
-    }
-
-    return script
+    return job
