@@ -149,7 +149,6 @@ Write exactly 8 punchy lines. Rules:
 # ==========================================
 
 def extract_captions(script_lines):
-    """Extract 9 short caption phrases — 3 per scene."""
     full_script = ' '.join(script_lines)
     prompt = f"""Extract exactly 9 ultra-short caption phrases from this script for a YouTube Short.
 
@@ -177,27 +176,26 @@ Script: {full_script}"""
         )
         r.raise_for_status()
         raw      = r.json()["choices"][0]["message"]["content"].strip()
-        captions = [re.sub(r'^[\d]+[.)]\s*', '', l.strip()) for l in raw.split('\n') if l.strip()]
-        captions = [c.upper() for c in captions[:9]]
+        captions = [re.sub(r'^[\d]+[.)]\s*', '', l.strip()).upper() for l in raw.split('\n') if l.strip()]
+        captions = captions[:9]
         while len(captions) < 9:
             captions.append(captions[-1] if captions else "INDIA KA FUTURE")
         print(f"CAPTIONS: {captions}")
         return captions
     except Exception as e:
-        print(f"CAPTION FAILED: {e} — using fallback")
+        print(f"CAPTION FAILED: {e}")
         words = full_script.upper().split()
         caps  = []
         step  = max(1, len(words) // 9)
         for i in range(9):
             chunk = words[i * step: i * step + 4]
             caps.append(' '.join(chunk) if chunk else "INDIA KA FUTURE")
-        return caps
+        return caps[:9]
 
 # ==========================================
 # VISUAL SCENES
 # ==========================================
 
-# No "2060" — use atmospheric, timeless future descriptions
 SCENE_TEMPLATES = [
     "futuristic Indian megacity at golden hour, lotus-shaped towers, clean electric air taxis, warm saffron teal palette, cinematic ultra-realistic photography, 8k",
     "Indian scientists and engineers in smart traditional attire, holographic data displays, ancient temple architecture meets gleaming research campus, dramatic cinematic lighting",
@@ -221,20 +219,15 @@ def try_generate_with_model(model_id, prompt, job_id):
         "https://cloud.leonardo.ai/api/rest/v1/generations",
         headers={"Authorization": f"Bearer {LEONARDO_API_KEY}", "Content-Type": "application/json"},
         json={
-            "prompt": prompt,
-            "modelId": model_id,
-            "width": IMG_WIDTH,
-            "height": IMG_HEIGHT,
-            "num_images": 1,
-            "presetStyle": "CINEMATIC"
+            "prompt": prompt, "modelId": model_id,
+            "width": IMG_WIDTH, "height": IMG_HEIGHT,
+            "num_images": 1, "presetStyle": "CINEMATIC"
         },
         timeout=30
     )
     print(f"[{job_id}] Response: {r.status_code}")
     if r.status_code != 200:
-        body = r.text[:300]
-        print(f"[{job_id}] Error: {body}")
-        raise Exception(f"{r.status_code}: {body}")
+        raise Exception(f"{r.status_code}: {r.text[:200]}")
     data = r.json()
     if "sdGenerationJob" not in data:
         raise Exception(f"No sdGenerationJob: {str(data)[:200]}")
@@ -261,7 +254,7 @@ def poll_for_image(generation_id, output_path, job_id):
             if status == "COMPLETE":
                 images = gen.get("generated_images", [])
                 if not images:
-                    raise Exception("COMPLETE but no generated_images")
+                    raise Exception("COMPLETE but no images")
                 img_r = requests.get(images[0]["url"], timeout=30)
                 img_r.raise_for_status()
                 with open(output_path, "wb") as f:
@@ -269,7 +262,7 @@ def poll_for_image(generation_id, output_path, job_id):
                 size = os.path.getsize(output_path)
                 print(f"[{job_id}] Saved: {size // 1024}KB")
                 if size < 5000:
-                    raise Exception(f"Image too small: {size} bytes")
+                    raise Exception(f"Image too small: {size}")
                 return True
         except Exception as e:
             if "FAILED" in str(e) or "COMPLETE" in str(e):
@@ -283,7 +276,6 @@ def generate_image_with_retry(prompt, output_path, job_id):
     for model_id in LEONARDO_MODELS:
         try:
             gen_id = try_generate_with_model(model_id, prompt, job_id)
-            print(f"[{job_id}] Generation ID: {gen_id}")
             return poll_for_image(gen_id, output_path, job_id)
         except Exception as e:
             last_error = e
@@ -316,8 +308,8 @@ def create_placeholder_image(path):
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi",
-            "-i", f"color=c=0x1a1a2e:s={IMG_WIDTH}x{IMG_HEIGHT}:d=1",
-            "-vf", "drawtext=text='India20Sixty':fontsize=80:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
+            "-i", f"color=c=0x1a1a2e:s={OUT_WIDTH}x{OUT_HEIGHT}:d=1",
+            "-vf", f"drawtext=text='India20Sixty':fontsize=80:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
             "-frames:v", "1", path
         ], capture_output=True, timeout=15)
     except Exception as e:
@@ -364,7 +356,7 @@ def generate_voice(script, job_id):
 
     if duration < 24.0:
         pad = 25.0 - duration
-        print(f"[{job_id}] Padding {pad:.1f}s of silence")
+        print(f"[{job_id}] Padding {pad:.1f}s")
         subprocess.run([
             "ffmpeg", "-y", "-i", raw_path,
             "-af", f"apad=pad_dur={pad}", "-t", "25",
@@ -374,54 +366,68 @@ def generate_voice(script, job_id):
     else:
         os.rename(raw_path, audio_path)
 
-    final_dur = get_audio_duration(audio_path)
-    print(f"[{job_id}] Final audio: {final_dur:.1f}s")
+    print(f"[{job_id}] Final audio: {get_audio_duration(audio_path):.1f}s")
     return audio_path
 
 # ==========================================
-# VIDEO RENDERING
+# VIDEO RENDERING — TWO-PASS PER CLIP
+#
+# PASS 1 (fast, ~2s): scale+crop raw image → exact OUT_WIDTH×OUT_HEIGHT PNG
+# PASS 2 (moderate, ~30s): Ken Burns on already-sized image + captions → clip
+#
+# This avoids the timeout caused by scaling 1188×2112 + crop + drawtext
+# all in one heavy filter chain on a free-tier CPU.
 # ==========================================
-#
-# Ken Burns via scale+crop with t-based expressions.
-# This is the most reliable method across all ffmpeg versions.
-# zoompan is NOT used — it outputs a fixed frame count and breaks concat.
-#
-# Each image → individual clip → concat → audio + logo mux.
 
 def escape_dt(text):
-    """Escape text for ffmpeg drawtext."""
     text = text.replace('\\', '\\\\')
-    text = text.replace("'",  "\u2019")   # curly apostrophe — safe in drawtext
-    text = text.replace(':',  '\\:')
-    text = text.replace('%',  '\\%')
+    text = text.replace("'", "\u2019")
+    text = text.replace(':', '\\:')
+    text = text.replace('%', '\\%')
     return text
 
 
-def render_scene_clip(img_path, duration, scene_idx, captions, job_id):
+def preprocess_image(src_path, dst_path, job_id):
     """
-    Render one image to a clip.
-    Ken Burns: scale image 10% larger than output, then crop with
-    slowly drifting x/y using the ffmpeg `t` variable.
-    Captions: 3 phrases, each shown for duration/3 seconds.
+    PASS 1: Scale+crop source image to exact OUT_WIDTH×OUT_HEIGHT.
+    This is a single fast operation — no animation, no text.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", src_path,
+        "-vf", (
+            f"scale={OUT_WIDTH}:{OUT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={OUT_WIDTH}:{OUT_HEIGHT}"
+        ),
+        "-frames:v", "1",
+        dst_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise Exception(f"Preprocess failed: {result.stderr[-200:]}")
+    print(f"[{job_id}] Preprocessed: {os.path.getsize(dst_path) // 1024}KB")
+
+
+def render_scene_clip(preprocessed_img, duration, scene_idx, captions, job_id):
+    """
+    PASS 2: Ken Burns on already-sized image + captions.
+    Image is already OUT_WIDTH×OUT_HEIGHT — Ken Burns = scale to 105%,
+    then crop with slow drift. Much less CPU than scaling from raw.
     """
     clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
     third     = duration / 3.0
 
-    # Scale 10% larger so crop has room to move
-    scale_w = int(OUT_WIDTH  * 1.10)
-    scale_h = int(OUT_HEIGHT * 1.10)
+    # 5% larger than output for Ken Burns headroom
+    kb_w = int(OUT_WIDTH  * 1.05)
+    kb_h = int(OUT_HEIGHT * 1.05)
+    dx   = kb_w - OUT_WIDTH   # 54px horizontal headroom
+    dy   = kb_h - OUT_HEIGHT  # 96px vertical headroom
 
-    # Ken Burns drift direction per scene
+    # Drift direction per scene
     drifts = [
-        # scene 0: drift right+down (zoom in feeling)
-        (f"'min({scale_w-OUT_WIDTH}*t/{duration},{scale_w-OUT_WIDTH})'",
-         f"'min({scale_h-OUT_HEIGHT}*t/{duration},{scale_h-OUT_HEIGHT})'"),
-        # scene 1: drift left+down
-        (f"'{scale_w-OUT_WIDTH}-min({scale_w-OUT_WIDTH}*t/{duration},{scale_w-OUT_WIDTH})'",
-         f"'min({scale_h-OUT_HEIGHT}*t/{duration},{scale_h-OUT_HEIGHT})'"),
-        # scene 2: drift right+up
-        (f"'min({scale_w-OUT_WIDTH}*t/{duration},{scale_w-OUT_WIDTH})'",
-         f"'{scale_h-OUT_HEIGHT}-min({scale_h-OUT_HEIGHT}*t/{duration},{scale_h-OUT_HEIGHT})'"),
+        (f"'min({dx}*t/{duration},{dx})'", f"'min({dy}*t/{duration},{dy})'"),           # right+down
+        (f"'{dx}-min({dx}*t/{duration},{dx})'", f"'min({dy}*t/{duration},{dy})'"),       # left+down
+        (f"'min({dx}*t/{duration},{dx})'", f"'{dy}-min({dy}*t/{duration},{dy})'"),       # right+up
     ]
     x_expr, y_expr = drifts[scene_idx % 3]
 
@@ -430,20 +436,16 @@ def render_scene_clip(img_path, duration, scene_idx, captions, job_id):
     while len(scene_caps) < 3:
         scene_caps.append("")
 
-    cap_y    = int(OUT_HEIGHT * 0.73)   # 73% down — clear of bottom chrome
-    cap_size = 58
+    cap_y    = int(OUT_HEIGHT * 0.73)
+    cap_size = 56
 
-    # Build the full vf chain as a list — join with comma at end
+    # Build vf chain
     vf_parts = [
-        # 1. Scale image to slightly larger than output
-        f"scale={scale_w}:{scale_h}:force_original_aspect_ratio=increase",
-        # 2. Crop to output size with drifting position
+        f"scale={kb_w}:{kb_h}",
         f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
-        # 3. Ensure correct SAR
         "setsar=1",
     ]
 
-    # 4. Caption drawtext filters — one per third of the clip
     for ci, cap in enumerate(scene_caps):
         cap = cap.strip()
         if not cap:
@@ -466,23 +468,23 @@ def render_scene_clip(img_path, duration, scene_idx, captions, job_id):
         "ffmpeg", "-y",
         "-loop", "1",
         "-r", str(FPS),
-        "-i", img_path,
+        "-i", preprocessed_img,
         "-vf", vf,
         "-t", str(duration),
         "-r", str(FPS),
         "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "20",
+        "-preset", "ultrafast",   # ultrafast on free tier — quality still fine for Shorts
+        "-crf", "22",
         "-pix_fmt", "yuv420p",
         clip_path
     ]
 
-    print(f"[{job_id}] Rendering clip {scene_idx} ({duration:.1f}s, caps: {scene_caps})...")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    print(f"[{job_id}] Rendering clip {scene_idx} ({duration:.1f}s)...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
     if result.returncode != 0:
-        print(f"[{job_id}] Clip {scene_idx} error:\n{result.stderr[-800:]}")
-        raise Exception(f"Clip {scene_idx} failed: {result.stderr[-200:]}")
+        print(f"[{job_id}] Clip {scene_idx} stderr:\n{result.stderr[-600:]}")
+        raise Exception(f"Clip {scene_idx} failed: {result.stderr[-150:]}")
 
     size = os.path.getsize(clip_path)
     print(f"[{job_id}] Clip {scene_idx} done: {size // 1024}KB")
@@ -490,8 +492,6 @@ def render_scene_clip(img_path, duration, scene_idx, captions, job_id):
 
 
 def concat_clips_with_audio(clip_paths, audio_path, output_path, job_id):
-    """Concat all scene clips, mux audio, overlay logo if present."""
-
     list_path   = f"{TMP_DIR}/{job_id}_clips.txt"
     concat_path = f"{TMP_DIR}/{job_id}_concat.mp4"
 
@@ -509,14 +509,12 @@ def concat_clips_with_audio(clip_paths, audio_path, output_path, job_id):
     ], capture_output=True, text=True, timeout=60)
 
     if result.returncode != 0:
-        print(f"Concat error:\n{result.stderr[-500:]}")
         raise Exception(f"Concat failed: {result.stderr[-150:]}")
 
-    concat_size = os.path.getsize(concat_path)
-    print(f"[{job_id}] Concat done: {concat_size // 1024}KB")
+    print(f"[{job_id}] Concat: {os.path.getsize(concat_path) // 1024}KB")
 
     has_logo = os.path.exists(LOGO_PATH) and os.path.getsize(LOGO_PATH) > 100
-    print(f"[{job_id}] Logo present: {has_logo}")
+    print(f"[{job_id}] Logo: {has_logo}")
 
     if has_logo:
         cmd = [
@@ -527,8 +525,7 @@ def concat_clips_with_audio(clip_paths, audio_path, output_path, job_id):
             "-filter_complex",
             "[1:v]scale=130:-1,format=rgba,colorchannelmixer=aa=0.6[logo];"
             "[0:v][logo]overlay=x=20:y=20:format=auto[vout]",
-            "-map", "[vout]",
-            "-map", "2:a",
+            "-map", "[vout]", "-map", "2:a",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             "-shortest", "-movflags", "+faststart",
@@ -537,8 +534,7 @@ def concat_clips_with_audio(clip_paths, audio_path, output_path, job_id):
     else:
         cmd = [
             "ffmpeg", "-y",
-            "-i", concat_path,
-            "-i", audio_path,
+            "-i", concat_path, "-i", audio_path,
             "-map", "0:v", "-map", "1:a",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
@@ -548,7 +544,6 @@ def concat_clips_with_audio(clip_paths, audio_path, output_path, job_id):
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
-        print(f"Mux error:\n{result.stderr[-800:]}")
         raise Exception(f"Mux failed: {result.stderr[-200:]}")
 
     for cp in clip_paths:
@@ -563,17 +558,26 @@ def concat_clips_with_audio(clip_paths, audio_path, output_path, job_id):
 def render_video(images, audio, captions, job_id):
     log_step(job_id, "RENDER", "Rendering video...")
 
-    audio_dur      = get_audio_duration(audio)
-    total_dur      = max(audio_dur, 25.0)
-    scene_dur      = total_dur / len(images)
-    video_path     = f"{TMP_DIR}/{job_id}.mp4"
+    audio_dur  = get_audio_duration(audio)
+    total_dur  = max(audio_dur, 25.0)
+    scene_dur  = total_dur / len(images)
+    video_path = f"{TMP_DIR}/{job_id}.mp4"
 
     print(f"[{job_id}] Audio: {audio_dur:.1f}s | Total: {total_dur:.1f}s | {len(images)} scenes x {scene_dur:.1f}s")
 
     clip_paths = []
     for i, img in enumerate(images):
-        clip = render_scene_clip(img, scene_dur, i, captions, job_id)
+        # PASS 1: pre-scale image to output size
+        pre_path = f"{TMP_DIR}/{job_id}_pre{i}.png"
+        preprocess_image(img, pre_path, job_id)
+
+        # PASS 2: Ken Burns + captions → clip
+        clip = render_scene_clip(pre_path, scene_dur, i, captions, job_id)
         clip_paths.append(clip)
+
+        # Clean up preprocessed image
+        try: os.remove(pre_path)
+        except Exception: pass
 
     concat_clips_with_audio(clip_paths, audio, video_path, job_id)
 
@@ -617,7 +621,7 @@ India20Sixty - Exploring India's near future.
         "snippet": {
             "title":       title[:100],
             "description": description[:5000],
-            "tags":        ["Future India", "India innovation", "AI", "Technology", "Shorts", "India future"],
+            "tags":        ["Future India", "India innovation", "AI", "Technology", "Shorts"],
             "categoryId":  "28"
         },
         "status": {
@@ -636,7 +640,6 @@ India20Sixty - Exploring India's near future.
             },
             timeout=300
         )
-
     r.raise_for_status()
     video_id = r.json()["id"]
     print(f"[{job_id}] YouTube: https://youtube.com/watch?v={video_id}")
