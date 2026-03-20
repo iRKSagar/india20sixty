@@ -50,7 +50,6 @@ def update_status(job_id, status, data=None):
         }
         if data:
             payload.update(data)
-
         requests.patch(
             f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
             headers={
@@ -93,7 +92,6 @@ def log_to_db(job_id, message):
 
 def generate_script(topic):
     print("SCRIPT START")
-
     prompt = f"""Create viral 25-second YouTube Shorts script: {topic}
 
 70% English, 30% Hinglish. Short sentences. Hook in first 3 seconds. End with question.
@@ -116,15 +114,12 @@ Return ONLY script text, no labels, 40-50 words."""
             timeout=30
         )
         r.raise_for_status()
-
         text   = r.json()["choices"][0]["message"]["content"].strip()
         text   = text.replace('"', '').replace("'", "")
         lines  = [line.strip() for line in text.split('\n') if line.strip()]
         script = ' '.join(lines)
-
         print(f"SCRIPT DONE: {script[:80]}...")
         return script
-
     except Exception as e:
         print(f"SCRIPT FAILED: {e}")
         return f"Socho, {topic} reality ban jaye. India 2060 mein yeh normal. Comment karo!"
@@ -163,7 +158,7 @@ def generate_image_with_retry(prompt, output_path, job_id, max_retries=3):
                 },
                 json={
                     "prompt":      prompt,
-                    "modelId":     "6bef9f1b-29cb-40c7-b9df-32b51c1f67d3",
+                    "modelId":     "b24e16ff-06e3-43eb-8d33-4416c2d75876",
                     "width":       1080,
                     "height":      1920,
                     "num_images":  1,
@@ -180,43 +175,54 @@ def generate_image_with_retry(prompt, output_path, job_id, max_retries=3):
 
             r.raise_for_status()
             data = r.json()
+            print(f"[{job_id}] Leonardo response keys: {list(data.keys())}")
 
             if "sdGenerationJob" not in data:
-                raise Exception(f"Unexpected response: {str(data)[:200]}")
+                raise Exception(f"No sdGenerationJob in response: {str(data)[:300]}")
 
             generation_id = data["sdGenerationJob"]["generationId"]
             print(f"[{job_id}] Generation ID: {generation_id}")
 
             for poll in range(60):
-                time.sleep(2)
-                if poll % 10 == 0:
-                    print(f"[{job_id}] Polling {poll * 2}s...")
+                time.sleep(3)
+                if poll % 5 == 0:
+                    print(f"[{job_id}] Polling {poll * 3}s...")
 
                 poll_r = requests.get(
                     f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
                     headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
-                    timeout=10
+                    timeout=15
                 )
                 poll_r.raise_for_status()
                 result = poll_r.json()
 
-                if "generations_by_pk" in result:
-                    images = result["generations_by_pk"].get("generated_images", [])
-                    if images:
-                        img_url = images[0]["url"]
-                        img_r   = requests.get(img_url, timeout=30)
-                        img_r.raise_for_status()
-                        with open(output_path, "wb") as f:
-                            f.write(img_r.content)
-                        print(f"[{job_id}] Image saved")
-                        return True
+                gen    = result.get("generations_by_pk", {})
+                status = gen.get("status", "")
+                print(f"[{job_id}] Poll {poll}: status={status}")
 
-            raise Exception("Generation timeout after 120s")
+                if status == "FAILED":
+                    raise Exception(f"Leonardo generation FAILED: {str(gen)[:200]}")
+
+                images = gen.get("generated_images", [])
+                if images and len(images) > 0:
+                    img_url = images[0]["url"]
+                    print(f"[{job_id}] Image URL: {img_url[:80]}")
+                    img_r = requests.get(img_url, timeout=30)
+                    img_r.raise_for_status()
+                    with open(output_path, "wb") as f:
+                        f.write(img_r.content)
+                    size = os.path.getsize(output_path)
+                    print(f"[{job_id}] Image saved: {size // 1024}KB")
+                    if size < 1000:
+                        raise Exception("Image file suspiciously small")
+                    return True
+
+            raise Exception("Generation timeout — no images after 180s")
 
         except Exception as e:
-            print(f"[{job_id}] Attempt {attempt + 1} failed: {str(e)[:100]}")
+            print(f"[{job_id}] Attempt {attempt + 1} failed: {str(e)[:200]}")
             if attempt < max_retries - 1:
-                time.sleep(10)
+                time.sleep(15)
             else:
                 raise
 
@@ -225,14 +231,11 @@ def generate_image_with_retry(prompt, output_path, job_id, max_retries=3):
 
 def generate_all_images(scenes, job_id):
     image_paths = []
-
     for i, scene in enumerate(scenes):
         log_step(job_id, "IMAGES", f"Scene {i + 1}/{len(scenes)}")
         path = f"{TMP_DIR}/{job_id}_{i}.png"
-
         if i > 0:
             time.sleep(10)
-
         try:
             generate_image_with_retry(scene["prompt"], path, job_id)
             image_paths.append(path)
@@ -243,7 +246,6 @@ def generate_all_images(scenes, job_id):
             else:
                 create_placeholder_image(path)
             image_paths.append(path)
-
     return image_paths
 
 
@@ -266,7 +268,6 @@ def create_placeholder_image(path):
 
 def generate_voice(script, job_id):
     log_step(job_id, "VOICE", "Generating audio...")
-
     r = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
         headers={
@@ -284,11 +285,9 @@ def generate_voice(script, job_id):
         timeout=60
     )
     r.raise_for_status()
-
     audio_path = f"{TMP_DIR}/{job_id}.mp3"
     with open(audio_path, "wb") as f:
         f.write(r.content)
-
     return audio_path
 
 # ==========================================
@@ -310,7 +309,6 @@ def get_audio_duration(audio_path):
 
 def render_video(images, audio, job_id):
     log_step(job_id, "RENDER", "Rendering video...")
-
     video_path     = f"{TMP_DIR}/{job_id}.mp4"
     audio_duration = get_audio_duration(audio)
     scene_duration = audio_duration / len(images)
@@ -332,7 +330,6 @@ def render_video(images, audio, job_id):
 
     concat_inputs = "".join([f"[v{i}]" for i in range(len(images))])
     filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0[video];")
-
     audio_index = len(images)
 
     cmd = [
@@ -385,7 +382,6 @@ def get_youtube_token():
 
 def upload_to_youtube(video_path, title, script, job_id):
     log_step(job_id, "UPLOAD", "Uploading to YouTube...")
-
     token = get_youtube_token()
 
     description = f"""{script}
@@ -431,14 +427,15 @@ Follow for daily glimpses into India's future!"""
 
 @app.route("/full-pipeline", methods=["POST"])
 def pipeline():
-    data        = request.json or {}
-    job_id      = data.get("job_id") or str(uuid.uuid4())
-    topic       = data.get("topic", "Future India")
+    data    = request.json or {}
+    job_id  = data.get("job_id") or str(uuid.uuid4())
+    topic   = data.get("topic", "Future India")
 
     print(f"\n{'='*60}")
     print(f"PIPELINE START: {job_id}")
     print(f"TOPIC: {topic}")
     print(f"TIME:  {datetime.utcnow().isoformat()}")
+    print(f"TEST_MODE: {TEST_MODE}")
     print(f"{'='*60}\n")
 
     try:
