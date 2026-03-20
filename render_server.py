@@ -28,15 +28,17 @@ YOUTUBE_CLIENT_ID     = os.environ.get("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
-R2_ENDPOINT   = os.environ.get("R2_ENDPOINT")
-R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY")
-R2_SECRET_KEY = os.environ.get("R2_SECRET_KEY")
-R2_BUCKET     = os.environ.get("R2_BUCKET")
-
 TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"
 TMP_DIR   = "/tmp/india20sixty"
 
 Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
+
+# Leonardo model priority list — tried in order until one works
+LEONARDO_MODELS = [
+    "aa77f04e-3eec-4034-9c07-d0f619684628",  # Leonardo Kino XL (universal)
+    "1e60896f-3c26-4296-8ecc-53e2afecc132",  # Leonardo Diffusion XL
+    "2067ae52-33fd-4a82-bb92-c0c5bab78a4c",  # AlbedoBase XL
+]
 
 # ==========================================
 # STATUS UPDATES
@@ -44,10 +46,7 @@ Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
 
 def update_status(job_id, status, data=None):
     try:
-        payload = {
-            "status":     status,
-            "updated_at": datetime.utcnow().isoformat()
-        }
+        payload = {"status": status, "updated_at": datetime.utcnow().isoformat()}
         if data:
             payload.update(data)
         requests.patch(
@@ -122,16 +121,17 @@ Return ONLY script text, no labels, 40-50 words."""
         return script
     except Exception as e:
         print(f"SCRIPT FAILED: {e}")
-        return f"Socho, {topic} reality ban jaye. India 2060 mein yeh normal. Comment karo!"
+        # Non-fatal — use fallback script so images+voice still run
+        return f"Socho, {topic} reality ban jaye toh? India 2060 mein yeh possible hai. Kya aap ready hain? Comment karo!"
 
 # ==========================================
 # VISUAL SCENES
 # ==========================================
 
 SCENE_TEMPLATES = [
-    "futuristic Indian city skyline 2060, lotus-shaped buildings, flying vehicles, saffron teal colors, cinematic lighting, ultra realistic, 8k",
-    "advanced AI technology India, engineers in smart clothing, holographic displays, temple architecture blend, dramatic lighting, cinematic",
-    "proud Indian future 2060, diverse people, advanced infrastructure, sunset colors, patriotic, cinematic wide shot, ultra realistic, 8k"
+    "futuristic Indian city skyline 2060, lotus-shaped skyscrapers, flying vehicles, saffron and teal color palette, dramatic golden hour lighting, ultra realistic cinematic 8k",
+    "Indian engineers in smart traditional clothing using holographic AI interfaces, modern temple architecture fused with glass buildings, dramatic studio lighting, cinematic",
+    "diverse proud Indians celebrating technological achievement 2060, advanced infrastructure, Indian flag, sunset patriotic colors, emotional wide shot, ultra realistic cinematic 8k"
 ]
 
 def generate_visual_scenes(topic):
@@ -145,88 +145,112 @@ def generate_visual_scenes(topic):
 # LEONARDO IMAGES
 # ==========================================
 
-def generate_image_with_retry(prompt, output_path, job_id, max_retries=3):
-    for attempt in range(max_retries):
+def try_generate_with_model(model_id, prompt, job_id):
+    """Try generating with a specific model. Returns generation_id or raises."""
+    print(f"[{job_id}] Trying model: {model_id}")
+
+    r = requests.post(
+        "https://cloud.leonardo.ai/api/rest/v1/generations",
+        headers={
+            "Authorization": f"Bearer {LEONARDO_API_KEY}",
+            "Content-Type":  "application/json"
+        },
+        json={
+            "prompt":      prompt,
+            "modelId":     model_id,
+            "width":       1080,
+            "height":      1920,
+            "num_images":  1,
+            "presetStyle": "CINEMATIC"
+        },
+        timeout=30
+    )
+
+    print(f"[{job_id}] Model {model_id} response: {r.status_code}")
+
+    if r.status_code == 400:
+        body = r.text[:300]
+        print(f"[{job_id}] 400 body: {body}")
+        raise Exception(f"400 Bad Request: {body}")
+
+    if r.status_code == 429:
+        raise Exception("429 Rate limited")
+
+    r.raise_for_status()
+    data = r.json()
+
+    if "sdGenerationJob" not in data:
+        raise Exception(f"No sdGenerationJob: {str(data)[:200]}")
+
+    return data["sdGenerationJob"]["generationId"]
+
+
+def poll_for_image(generation_id, output_path, job_id):
+    """Poll until image is ready, download it. Returns True on success."""
+    for poll in range(80):
+        time.sleep(3)
+        if poll % 5 == 0:
+            print(f"[{job_id}] Polling {poll * 3}s... gen={generation_id}")
+
         try:
-            print(f"[{job_id}] Leonardo attempt {attempt + 1}/{max_retries}")
-
-            r = requests.post(
-                "https://cloud.leonardo.ai/api/rest/v1/generations",
-                headers={
-                    "Authorization": f"Bearer {LEONARDO_API_KEY}",
-                    "Content-Type":  "application/json"
-                },
-                json={
-                    "prompt":      prompt,
-                    "modelId":     "b24e16ff-06e3-43eb-8d33-4416c2d75876",
-                    "width":       1080,
-                    "height":      1920,
-                    "num_images":  1,
-                    "presetStyle": "CINEMATIC"
-                },
-                timeout=30
+            poll_r = requests.get(
+                f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
+                headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
+                timeout=15
             )
-
-            if r.status_code == 429:
-                wait = 60 * (attempt + 1)
-                print(f"[{job_id}] Rate limited, waiting {wait}s...")
-                time.sleep(wait)
-                continue
-
-            r.raise_for_status()
-            data = r.json()
-            print(f"[{job_id}] Leonardo response keys: {list(data.keys())}")
-
-            if "sdGenerationJob" not in data:
-                raise Exception(f"No sdGenerationJob in response: {str(data)[:300]}")
-
-            generation_id = data["sdGenerationJob"]["generationId"]
-            print(f"[{job_id}] Generation ID: {generation_id}")
-
-            for poll in range(60):
-                time.sleep(3)
-                if poll % 5 == 0:
-                    print(f"[{job_id}] Polling {poll * 3}s...")
-
-                poll_r = requests.get(
-                    f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
-                    headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
-                    timeout=15
-                )
-                poll_r.raise_for_status()
-                result = poll_r.json()
-
-                gen    = result.get("generations_by_pk", {})
-                status = gen.get("status", "")
-                print(f"[{job_id}] Poll {poll}: status={status}")
-
-                if status == "FAILED":
-                    raise Exception(f"Leonardo generation FAILED: {str(gen)[:200]}")
-
-                images = gen.get("generated_images", [])
-                if images and len(images) > 0:
-                    img_url = images[0]["url"]
-                    print(f"[{job_id}] Image URL: {img_url[:80]}")
-                    img_r = requests.get(img_url, timeout=30)
-                    img_r.raise_for_status()
-                    with open(output_path, "wb") as f:
-                        f.write(img_r.content)
-                    size = os.path.getsize(output_path)
-                    print(f"[{job_id}] Image saved: {size // 1024}KB")
-                    if size < 1000:
-                        raise Exception("Image file suspiciously small")
-                    return True
-
-            raise Exception("Generation timeout — no images after 180s")
-
+            poll_r.raise_for_status()
+            result = poll_r.json()
         except Exception as e:
-            print(f"[{job_id}] Attempt {attempt + 1} failed: {str(e)[:200]}")
-            if attempt < max_retries - 1:
-                time.sleep(15)
-            else:
-                raise
+            print(f"[{job_id}] Poll request failed: {e}")
+            continue
 
-    return False
+        gen    = result.get("generations_by_pk", {})
+        status = gen.get("status", "UNKNOWN")
+        print(f"[{job_id}] Poll {poll}: status={status}")
+
+        if status == "FAILED":
+            raise Exception(f"Leonardo generation FAILED: {str(gen)[:200]}")
+
+        if status == "COMPLETE":
+            images = gen.get("generated_images", [])
+            if not images:
+                raise Exception("COMPLETE but no generated_images in response")
+
+            img_url = images[0]["url"]
+            print(f"[{job_id}] Downloading: {img_url[:80]}")
+            img_r = requests.get(img_url, timeout=30)
+            img_r.raise_for_status()
+
+            with open(output_path, "wb") as f:
+                f.write(img_r.content)
+
+            size = os.path.getsize(output_path)
+            print(f"[{job_id}] Saved: {size // 1024}KB")
+
+            if size < 5000:
+                raise Exception(f"Image too small: {size} bytes")
+
+            return True
+
+    raise Exception("Timeout: no image after 240s of polling")
+
+
+def generate_image_with_retry(prompt, output_path, job_id):
+    """Try each model in LEONARDO_MODELS until one succeeds."""
+    last_error = None
+
+    for model_id in LEONARDO_MODELS:
+        try:
+            generation_id = try_generate_with_model(model_id, prompt, job_id)
+            print(f"[{job_id}] Generation started: {generation_id}")
+            return poll_for_image(generation_id, output_path, job_id)
+        except Exception as e:
+            last_error = e
+            print(f"[{job_id}] Model {model_id} failed: {str(e)[:150]}")
+            time.sleep(5)
+            continue
+
+    raise Exception(f"All Leonardo models failed. Last error: {last_error}")
 
 
 def generate_all_images(scenes, job_id):
@@ -235,12 +259,12 @@ def generate_all_images(scenes, job_id):
         log_step(job_id, "IMAGES", f"Scene {i + 1}/{len(scenes)}")
         path = f"{TMP_DIR}/{job_id}_{i}.png"
         if i > 0:
-            time.sleep(10)
+            time.sleep(8)
         try:
             generate_image_with_retry(scene["prompt"], path, job_id)
             image_paths.append(path)
         except Exception as e:
-            print(f"[{job_id}] Image {i + 1} failed: {e}")
+            print(f"[{job_id}] Image {i + 1} failed, using fallback: {e}")
             if image_paths:
                 shutil.copy(image_paths[-1], path)
             else:
@@ -252,12 +276,12 @@ def generate_all_images(scenes, job_id):
 def create_placeholder_image(path):
     try:
         subprocess.run([
-            "ffmpeg", "-y",
-            "-f", "lavfi",
-            "-i", "color=c=blue:s=1080x1920:d=1",
-            "-vf", "drawtext=text='India20Sixty':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", "color=c=0x1a1a2e:s=1080x1920:d=1",
+            "-vf", "drawtext=text='India20Sixty':fontsize=80:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
             "-frames:v", "1", path
-        ], capture_output=True, timeout=10)
+        ], capture_output=True, timeout=15)
+        print(f"Placeholder created: {path}")
     except Exception as e:
         print(f"Placeholder failed: {e}")
         Path(path).touch()
@@ -277,10 +301,7 @@ def generate_voice(script, job_id):
         json={
             "text":     script,
             "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability":        0.5,
-                "similarity_boost": 0.75
-            }
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
         },
         timeout=60
     )
@@ -288,6 +309,7 @@ def generate_voice(script, job_id):
     audio_path = f"{TMP_DIR}/{job_id}.mp3"
     with open(audio_path, "wb") as f:
         f.write(r.content)
+    print(f"[{job_id}] Audio saved: {os.path.getsize(audio_path) // 1024}KB")
     return audio_path
 
 # ==========================================
@@ -313,32 +335,33 @@ def render_video(images, audio, job_id):
     audio_duration = get_audio_duration(audio)
     scene_duration = audio_duration / len(images)
 
-    inputs       = []
-    filter_parts = []
+    print(f"[{job_id}] Audio duration: {audio_duration:.1f}s, scene: {scene_duration:.1f}s each")
+
+    inputs, filter_parts = [], []
 
     for i, img in enumerate(images):
         inputs.extend(["-loop", "1", "-t", str(scene_duration), "-i", img])
-        zoom_end = 1.1
-        x_end    = (i % 2) * 15
+        x_end = (i % 2) * 15
         filter_parts.append(
             f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-            f"zoompan=z='min(zoom+0.001,{zoom_end})':"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+            f"zoompan=z='min(zoom+0.001,1.1)':"
             f"x='iw/2-(iw/zoom/2)+{x_end}*on/{int(scene_duration*30)}':"
             f"y='ih/2-(ih/zoom/2)':"
             f"d={int(scene_duration * 30)}:s=1080x1920[v{i}];"
         )
 
     concat_inputs = "".join([f"[v{i}]" for i in range(len(images))])
-    filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0[video];")
+    filter_parts.append(f"{concat_inputs}concat=n={len(images)}:v=1:a=0[video]")
     audio_index = len(images)
 
     cmd = [
         "ffmpeg", "-y",
         *inputs,
         "-i", audio,
-        "-filter_complex", "".join(filter_parts) + f"[{audio_index}:a]anull[audio]",
+        "-filter_complex", ";".join(filter_parts),
         "-map", "[video]",
-        "-map", "[audio]",
+        "-map", f"{audio_index}:a",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -349,16 +372,17 @@ def render_video(images, audio, job_id):
         video_path
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
 
     if result.returncode != 0:
-        print(f"FFMPEG STDERR: {result.stderr[-800:]}")
-        raise Exception(f"ffmpeg failed: {result.stderr[-200:]}")
+        print(f"FFMPEG STDERR:\n{result.stderr[-1000:]}")
+        raise Exception(f"ffmpeg failed (code {result.returncode}): {result.stderr[-200:]}")
 
-    if not os.path.exists(video_path) or os.path.getsize(video_path) < 100_000:
-        raise Exception("Video file missing or too small")
+    size = os.path.getsize(video_path) if os.path.exists(video_path) else 0
+    if size < 100_000:
+        raise Exception(f"Video too small: {size} bytes")
 
-    print(f"[{job_id}] Video rendered: {os.path.getsize(video_path) // 1024}KB")
+    print(f"[{job_id}] Video rendered: {size // 1024}KB")
     return video_path
 
 # ==========================================
@@ -388,9 +412,7 @@ def upload_to_youtube(video_path, title, script, job_id):
 
 India20Sixty - Exploring India's future by 2060
 
-#India2060 #FutureTech #IndiaFuture #Shorts #AI #Technology
-
-Follow for daily glimpses into India's future!"""
+#India2060 #FutureTech #IndiaFuture #Shorts #AI #Technology"""
 
     metadata = {
         "snippet": {
@@ -418,7 +440,7 @@ Follow for daily glimpses into India's future!"""
 
     r.raise_for_status()
     video_id = r.json()["id"]
-    print(f"[{job_id}] Uploaded: https://youtube.com/watch?v={video_id}")
+    print(f"[{job_id}] YouTube: https://youtube.com/watch?v={video_id}")
     return video_id
 
 # ==========================================
@@ -427,9 +449,9 @@ Follow for daily glimpses into India's future!"""
 
 @app.route("/full-pipeline", methods=["POST"])
 def pipeline():
-    data    = request.json or {}
-    job_id  = data.get("job_id") or str(uuid.uuid4())
-    topic   = data.get("topic", "Future India")
+    data   = request.json or {}
+    job_id = data.get("job_id") or str(uuid.uuid4())
+    topic  = data.get("topic", "Future India")
 
     print(f"\n{'='*60}")
     print(f"PIPELINE START: {job_id}")
@@ -457,8 +479,7 @@ def pipeline():
 
         if TEST_MODE:
             print(f"[{job_id}] TEST MODE — skipping YouTube upload")
-            video_id     = "TEST_MODE"
-            final_status = "test_complete"
+            video_id, final_status = "TEST_MODE", "test_complete"
         else:
             title        = f"{topic} | India20Sixty #Shorts"
             video_id     = upload_to_youtube(video, title, script, job_id)
@@ -490,7 +511,6 @@ def pipeline():
             "script_package": {"text": script, "generated_at": datetime.utcnow().isoformat()}
         })
 
-        # Cleanup
         for img in images:
             try: os.remove(img)
             except Exception: pass
@@ -517,14 +537,13 @@ def health():
     return jsonify({
         "status":           "healthy",
         "test_mode":        TEST_MODE,
-        "images_per_video": 3
+        "images_per_video": 3,
+        "leonardo_models":  LEONARDO_MODELS
     })
 
 @app.route("/")
 def home():
     return jsonify({"status": "india20sixty render pipeline running"})
-
-# ==========================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
