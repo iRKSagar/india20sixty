@@ -3,17 +3,19 @@ import json
 import requests
 from typing import List, Dict
 
+
 class TopicCouncil:
     """
-    AI Council that evaluates topics through multiple lenses:
-    1. Virality Quotient (will it spread?)
-    2. Platform Compliance (YouTube/Instagram safe?)
-    3. Channel Philosophy (fits India20Sixty?)
-    4. Visual Potential (can we illustrate it?)
+    AI Council with performance feedback loop.
+    Analytics from YouTube train the council to approve
+    topics that match patterns of high-performing videos.
     """
-    
+
     def __init__(self):
-        self.openai_key = os.environ.get("OPENAI_API_KEY")
+        self.openai_key  = os.environ.get("OPENAI_API_KEY")
+        self.supabase_url = os.environ.get("SUPABASE_URL")
+        self.supabase_key = os.environ.get("SUPABASE_ANON_KEY")
+
         self.channel_philosophy = """
 INDIA20SIXTY CHANNEL PHILOSOPHY:
 - Optimistic but realistic vision of India's future (2030-2060)
@@ -24,70 +26,124 @@ INDIA20SIXTY CHANNEL PHILOSOPHY:
 - Never political, never religious controversy
 - Celebrates Indian innovation while acknowledging challenges
 """
-    
+
+    # --------------------------------------------------
+    # PERFORMANCE CONTEXT — reads from Supabase
+    # --------------------------------------------------
+
+    def get_performance_context(self) -> dict:
+        """Fetch council_context from system_state table."""
+        if not self.supabase_url or not self.supabase_key:
+            return {}
+
+        try:
+            r = requests.get(
+                f"{self.supabase_url}/rest/v1/system_state?id=eq.main&select=council_context",
+                headers={
+                    "apikey": self.supabase_key,
+                    "Authorization": f"Bearer {self.supabase_key}"
+                },
+                timeout=5
+            )
+            rows = r.json()
+            if rows and rows[0].get("council_context"):
+                return json.loads(rows[0]["council_context"])
+        except Exception as e:
+            print(f"Performance context fetch failed: {e}")
+
+        return {}
+
+    def build_performance_prompt(self, context: dict) -> str:
+        """Convert analytics context into a prompt section."""
+        if not context or not context.get("total_videos"):
+            return ""
+
+        avg   = context.get("avg_score", 0)
+        total = context.get("total_videos", 0)
+        tops  = context.get("top_performers", [])
+        flops = context.get("worst_performers", [])
+
+        lines = [
+            "\n── CHANNEL PERFORMANCE DATA (use this to calibrate your scores) ──",
+            f"Total videos published: {total}",
+            f"Average virality score: {avg:,}  (views×1 + likes×50 + comments×30)",
+        ]
+
+        if tops:
+            lines.append("\nTOP PERFORMING videos — identify what made these work:")
+            for t in tops:
+                lines.append(f"  • \"{t.get('topic','?')}\"  →  score {t.get('analytics_score',0):,}  (council approved at {t.get('council_score',0)})")
+
+        if flops:
+            lines.append("\nWORST PERFORMING videos — avoid these patterns:")
+            for t in flops:
+                lines.append(f"  • \"{t.get('topic','?')}\"  →  score {t.get('analytics_score',0):,}  (council approved at {t.get('council_score',0)})")
+
+        lines += [
+            "\nUse this data to:",
+            "1. Boost virality score for topics matching patterns of top performers",
+            "2. Penalise topics matching patterns of worst performers",
+            "3. Calibrate your council_score so approved topics are LIKELY to beat the average",
+            "── END PERFORMANCE DATA ──\n"
+        ]
+
+        return "\n".join(lines)
+
+    # --------------------------------------------------
+    # TOPIC EVALUATION
+    # --------------------------------------------------
+
     def judge_topic(self, topic: Dict) -> Dict:
-        """Single topic evaluation by the Council"""
-        
-        prompt = f"""You are the INDIA20SIXTY TOPIC COUNCIL. Evaluate this topic:
+        """Single topic evaluation by the Council."""
+
+        perf_context = self.get_performance_context()
+        perf_prompt  = self.build_performance_prompt(perf_context)
+
+        prompt = f"""You are the INDIA20SIXTY TOPIC COUNCIL. Evaluate this topic for a 25-second YouTube Short.
 
 TOPIC: "{topic['topic']}"
 SOURCE: {topic['source']}
 
 CHANNEL PHILOSOPHY:
 {self.channel_philosophy}
-
-Evaluate on these 5 dimensions (score 0-100, explain briefly):
+{perf_prompt}
+Evaluate on these 5 dimensions (score 0-100):
 
 1. VIRALITY QUOTIENT
-   - Curiosity gap strength
-   - Shareability (would someone send this to friends?)
-   - Comment potential (would people argue/agree?)
-   - Score: __/100
-   - Reason: ___
+   - Curiosity gap, shareability, comment potential
+   - Score: __/100  Reason: ___
 
 2. YOUTUBE SHORTS FIT
-   - 3-second hook potential
-   - Retention prediction (will they watch to end?)
-   - Algorithm-friendly (trending keywords?)
-   - Score: __/100
-   - Reason: ___
+   - 3-second hook potential, retention, algorithm keywords
+   - Score: __/100  Reason: ___
 
 3. INSTAGRAM REELS FIT
-   - Visual stopping power
-   - Sound-on vs sound-off appeal
-   - Share to story potential
-   - Score: __/100
-   - Reason: ___
+   - Visual stopping power, sound-off appeal
+   - Score: __/100  Reason: ___
 
 4. PLATFORM SAFETY
-   - YouTube Community Guidelines risk (0=safe, 100=dangerous)
-   - Instagram policy compliance
-   - Brand safety for future sponsors
-   - Score: __/100 (higher = safer)
-   - Flags: ___
+   - YouTube + Instagram compliance (100 = perfectly safe)
+   - Score: __/100  Flags: ___
 
 5. VISUAL PRODUCTION EASE
-   - Can Leonardo AI generate compelling images?
-   - Ken Burns motion potential
-   - Cinematic quality achievable
-   - Score: __/100
-   - Reason: ___
+   - Can Leonardo AI generate compelling images for this?
+   - Score: __/100  Reason: ___
 
-OVERALL COUNCIL SCORE: Average of above (0-100)
-RECOMMENDATION: APPROVE / REJECT / REVISE
-SUGGESTED_REVISION: (if REVISE, how to improve)
+OVERALL COUNCIL SCORE: weighted average
+RECOMMENDATION: APPROVE (>=70) / REJECT (<70) / REVISE
 
 Return ONLY valid JSON:
 {{
-  "virality": {{"score": 85, "reason": "..."}},
-  "youtube_fit": {{"score": 90, "reason": "..."}},
+  "virality":      {{"score": 85, "reason": "..."}},
+  "youtube_fit":   {{"score": 90, "reason": "..."}},
   "instagram_fit": {{"score": 75, "reason": "..."}},
-  "safety": {{"score": 95, "flags": "none"}},
-  "visual_ease": {{"score": 80, "reason": "..."}},
+  "safety":        {{"score": 95, "flags": "none"}},
+  "visual_ease":   {{"score": 80, "reason": "..."}},
   "council_score": 85,
   "recommendation": "APPROVE",
   "revision_suggestion": null,
-  "improved_title": "better version if applicable"
+  "improved_title": "better version if applicable",
+  "performance_prediction": "expected to score above/below channel average and why"
 }}"""
 
         try:
@@ -97,92 +153,123 @@ Return ONLY valid JSON:
                 json={
                     "model": "gpt-4o-mini",
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3  # Lower for consistent scoring
+                    "temperature": 0.3
                 },
                 timeout=30
             )
-            
+
             content = r.json()["choices"][0]["message"]["content"]
-            
-            # Extract JSON
             start = content.find('{')
-            end = content.rfind('}') + 1
+            end   = content.rfind('}') + 1
             evaluation = json.loads(content[start:end])
-            
-            # Merge with original topic
+
             return {
                 **topic,
                 "council_evaluation": evaluation,
-                "council_score": evaluation.get("council_score", 0),
+                "council_score":  evaluation.get("council_score", 0),
                 "council_status": evaluation.get("recommendation", "REJECT"),
-                "final_topic": evaluation.get("improved_title", topic["topic"])
+                "final_topic":    evaluation.get("improved_title", topic["topic"]),
+                "performance_prediction": evaluation.get("performance_prediction", "")
             }
-            
+
         except Exception as e:
             print(f"Council error for '{topic['topic']}': {e}")
             return {
                 **topic,
                 "council_evaluation": {"error": str(e)},
-                "council_score": 0,
+                "council_score":  0,
                 "council_status": "REJECT"
             }
-    
+
+    # --------------------------------------------------
+    # COUNCIL SESSION
+    # --------------------------------------------------
+
     def council_session(self, topics: List[Dict], min_score=70) -> List[Dict]:
-        """Run full council session on all topics"""
-        
-        print(f"\n🏛️ COUNCIL SESSION: Evaluating {len(topics)} topics...")
+        """Run full council session — logs performance context being used."""
+
+        ctx = self.get_performance_context()
+        if ctx.get("total_videos"):
+            print(f"\n  Using performance data: {ctx['total_videos']} videos, avg score {ctx.get('avg_score', 0):,}")
+        else:
+            print("\n  No performance data yet — using baseline evaluation")
+
+        print(f"\nCOUNCIL SESSION: Evaluating {len(topics)} topics...")
         print("=" * 60)
-        
+
         evaluated = []
         for i, topic in enumerate(topics, 1):
             print(f"\n  [{i}/{len(topics)}] Judging: {topic['topic'][:50]}...")
             result = self.judge_topic(topic)
-            score = result["council_score"]
+            score  = result["council_score"]
             status = result["council_status"]
-            
+            pred   = result.get("performance_prediction", "")
+
             emoji = "✅" if status == "APPROVE" else "⚠️" if status == "REVISE" else "❌"
             print(f"      {emoji} Score: {score}/100 | Verdict: {status}")
-            
+            if pred:
+                print(f"         Prediction: {pred[:80]}")
+
             evaluated.append(result)
-        
-        # Sort by score
+
         evaluated.sort(key=lambda x: x["council_score"], reverse=True)
-        
-        # Filter approved only
         approved = [t for t in evaluated if t["council_status"] == "APPROVE" and t["council_score"] >= min_score]
-        
-        print(f"\n" + "=" * 60)
-        print(f"COUNCIL RESULTS:")
-        print(f"  Total evaluated: {len(evaluated)}")
-        print(f"  Approved (>{min_score}): {len(approved)}")
-        print(f"  Top topic: {approved[0]['final_topic'] if approved else 'None'}")
-        
+
+        print(f"\n{'=' * 60}")
+        print(f"COUNCIL RESULTS: {len(approved)}/{len(evaluated)} approved")
+        if approved:
+            print(f"Top topic: {approved[0]['final_topic']}")
+
         return approved
-    
-    def batch_council(self, topics: List[Dict]) -> List[Dict]:
-        """Optimized batch evaluation (cheaper API calls)"""
-        
-        # For cost efficiency, batch 5 topics at once
-        batches = [topics[i:i+5] for i in range(0, len(topics), 5)]
-        all_approved = []
-        
-        for batch in batches:
-            batch_approved = self.council_session(batch)
-            all_approved.extend(batch_approved)
-        
-        # Re-sort all approved
-        all_approved.sort(key=lambda x: x["council_score"], reverse=True)
-        return all_approved[:10]  # Top 10 only
+
+
+# --------------------------------------------------
+# FLASK APP
+# --------------------------------------------------
+
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+council = TopicCouncil()
+
+
+@app.route("/full-pipeline", methods=["POST"])
+def full_pipeline():
+    data  = request.json or {}
+    topic = data.get("topic", "Future of AI in India")
+    source = data.get("source", "api")
+
+    print(f"\nCOUNCIL REQUEST: '{topic}' from {source}")
+
+    result = council.judge_topic({"topic": topic, "source": source})
+
+    status = "approved" if result["council_status"] == "APPROVE" else "rejected"
+
+    return jsonify({
+        "status":     status,
+        "topic":      result["final_topic"],
+        "evaluation": result["council_evaluation"],
+        "script":     result.get("script_package"),
+        "source":     source
+    })
+
+
+@app.route("/health")
+def health():
+    ctx = council.get_performance_context()
+    return jsonify({
+        "status":         "topic-council-worker running",
+        "has_perf_data":  bool(ctx.get("total_videos")),
+        "total_videos":   ctx.get("total_videos", 0),
+        "avg_score":      ctx.get("avg_score", 0)
+    })
+
+
+@app.route("/")
+def home():
+    return jsonify({"status": "topic-council-worker running"})
 
 
 if __name__ == "__main__":
-    # Test
-    test_topics = [
-        {"topic": "AI replacing doctors in India", "source": "google"},
-        {"topic": "Modi government space policy", "source": "reddit"},
-        {"topic": "Future of Indian cricket with AI", "source": "youtube_gap"}
-    ]
-    
-    council = TopicCouncil()
-    approved = council.council_session(test_topics)
-    print(json.dumps(approved, indent=2))
+    port = int(os.environ.get("PORT", 10001))
+    app.run(host="0.0.0.0", port=port)
