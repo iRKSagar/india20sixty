@@ -27,22 +27,76 @@ SUPABASE_URL   = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY   = os.environ.get("SUPABASE_ANON_KEY")
 
 CHANNEL_BRIEF = """
-INDIA20SIXTY — Channel identity:
-- India's near future, grounded in real events happening NOW
-- Not predictions — real projects, funded startups, government programs
-- Tone: excited young Indian narrator, not news anchor
-- Every video has ONE real fact anchor (stat, source, rupees, timeline)
-- Topics should make viewer feel: "I didn't know this was already happening"
-- Timeframe: "next 5-10 years" not "by 2060"
-- No politics, no religion, no controversy
-- Categories: Space/ISRO, AI/Tech, Healthcare, Infrastructure, Climate/Energy, Education
+INDIA20SIXTY — India's future through technology and innovation.
+
+IDENTITY: Every video covers something real happening in India right now —
+a funded startup, a government program, a scientific breakthrough, a new gadget,
+a policy that changes how Indians will live in the next 5-10 years.
+
+ALLOWED TOPICS — must fit one of these:
+- AI, machine learning, robotics, automation
+- Space tech, ISRO missions, satellites, defence tech
+- Healthcare innovation, medical AI, biotech, pharma
+- EVs, renewable energy, solar, clean tech, batteries
+- Gadgets, consumer electronics, chips, semiconductors
+- Smart cities, infrastructure, 5G, connectivity
+- Agritech, food technology, precision farming
+- Edtech, skill development, digital literacy
+- Startups, deep tech, R&D, IIT/IIM innovations
+- Fintech, UPI, digital payments, blockchain applications
+- Manufacturing tech, Industry 4.0, Make in India
+
+HARD RULES:
+- Every topic must have ONE real fact anchor — a number, a funding amount, a timeline, a stat
+- No sports, no entertainment, no politics, no religion
+- No vague "India is growing" topics — must be specific and real
+- Timeframe: next 5-10 years — never "by 2060"
 """
 
 # ==========================================
 # REAL NEWS SOURCES
 # ==========================================
 
-def fetch_google_news(query, max_items=8):
+WHITELIST_KEYWORDS = [
+    # AI & Machine Learning
+    "ai", "artificial intelligence", "machine learning", "deep learning",
+    "neural", "llm", "generative", "chatbot", "automation", "robot",
+    # Space & Defence Tech
+    "isro", "space", "satellite", "rocket", "chandrayaan", "gaganyaan",
+    "drdo", "defence technology", "missile", "aerospace",
+    # Healthcare & Biotech
+    "health", "medical", "hospital", "doctor", "cancer", "diagnosis",
+    "biotech", "pharma", "drug", "vaccine", "genomics", "telemedicine",
+    # Energy & Climate Tech
+    "solar", "renewable", "energy", "wind power", "green", "ev", "electric vehicle",
+    "battery", "hydrogen", "climate", "emission", "clean energy",
+    # Infrastructure & Smart Cities
+    "smart city", "infrastructure", "metro", "highway", "bullet train",
+    "hyperloop", "5g", "6g", "broadband", "internet", "connectivity",
+    # Gadgets & Consumer Tech
+    "gadget", "device", "smartphone", "chip", "semiconductor", "processor",
+    "wearable", "drone", "iot", "sensor", "display", "camera tech",
+    # Agriculture & Food Tech
+    "agri", "farm", "crop", "irrigation", "food tech", "precision farming",
+    "vertical farm", "hydroponics", "seed", "fertilizer tech",
+    # Education & Skill Tech
+    "edtech", "education technology", "skill", "learning", "coding",
+    "online education", "upskilling", "digital literacy",
+    # Startup & Innovation Ecosystem
+    "startup", "unicorn", "funding", "venture", "innovation", "incubator",
+    "deep tech", "r&d", "research", "iit", "iim", "patent",
+    # Manufacturing & Industry
+    "manufacturing", "factory", "3d print", "semiconductor fab",
+    "make in india", "industry 4.0", "supply chain tech",
+    # Fintech
+    "fintech", "upi", "digital payment", "blockchain", "crypto tech",
+    "neobank", "insurtech", "digital rupee",
+]
+
+def is_allowed_topic(topic_text, headline_text=""):
+    """Return True only if topic matches our whitelist — future/tech/innovation India."""
+    combined = (topic_text + " " + headline_text).lower()
+    return any(kw in combined for kw in WHITELIST_KEYWORDS)
     """Google News RSS — free, no API key, real headlines."""
     try:
         encoded = requests.utils.quote(query)
@@ -105,16 +159,18 @@ def collect_all_headlines():
     """Pull headlines from all sources and deduplicate."""
     print("SCOUT: Collecting real headlines...")
 
-    # Core India tech/future queries
+    # Tech and innovation focused queries only
     queries = [
-        "India technology innovation 2025",
-        "India AI artificial intelligence startup",
-        "ISRO India space mission",
-        "India healthcare digital health",
-        "India renewable energy solar",
-        "India infrastructure smart city",
-        "India education technology",
-        "India startup funding 2025",
+        "India AI artificial intelligence startup 2025",
+        "ISRO India space technology mission",
+        "India electric vehicle EV technology",
+        "India renewable energy solar startup",
+        "India healthcare medical AI technology",
+        "India semiconductor chip manufacturing",
+        "India fintech UPI digital payment innovation",
+        "India drone robotics automation startup",
+        "India 5G smart city infrastructure",
+        "India deep tech startup funding 2025",
     ]
 
     all_headlines = []
@@ -511,9 +567,15 @@ def run_replenishment(target=12):
 
     print(f"\nCOUNCIL: Evaluating {len(raw_topics)} real-news topics...")
 
-    # Phase 3: Council evaluation
+    # Phase 3: Whitelist filter + Council evaluation
     approved = []
     for i, t in enumerate(raw_topics):
+        topic_str = t.get("topic", "")
+
+        # Whitelist check — must be about tech/innovation/future India
+        if not is_allowed_topic(topic_str, t.get("source_headline", "")):
+            print(f"  [{i+1}] NOT RELEVANT: {topic_str[:55]}")
+            continue
         topic_str = t.get("topic", "")
         print(f"  [{i+1}/{len(raw_topics)}] {topic_str[:55]}...")
         result = council_evaluate(t, perf_context)

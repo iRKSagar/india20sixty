@@ -381,37 +381,31 @@ No specific headline found. Use general knowledge about this topic.
 Only make claims you are confident are accurate.
 Avoid specific numbers you are not sure about."""
 
-        prompt = f"""You are writing a voiceover for India20Sixty — Indian YouTube Shorts about India's real near future.
+        prompt = f"""Write a YouTube Shorts voiceover for India20Sixty — India's near future channel.
 
 Topic: {topic}
 {fact_section}
 
-MANDATORY LANGUAGE RULE — READ CAREFULLY:
-You MUST write in Hinglish. This is non-negotiable.
-At least 35% of all words must be Hindi or Urdu words.
-If your output is mostly English sentences — you have FAILED this task.
+STRICT LENGTH RULE: Maximum 55 words total. Count every word. Stop at 55.
+This must fit in exactly 25 seconds when spoken at normal pace.
 
-Natural code-switching — NOT translated Hindi. The way a smart Delhi/Mumbai 25-year-old actually talks:
-Use these Hindi/Urdu words naturally: dekho, yaar, soch lo, matlab, iska matlab, lekin, woh bhi,
-abhi, pehle, phir, toh, kyunki, jaldi, bohot, sirf, bilkul, arre, kya hua, ho raha hai,
-ban raha hai, aa raha hai, kar rahe hain, aapke liye, poore desh mein, gaon mein, sheher mein,
-ab tak, kitna, kuch, koi, sab, haan, nahi, zaroor, seedha, sach mein
+LANGUAGE: Mostly English. Use 2-3 Hindi/Urdu words naturally for emphasis only.
+Good Hindi words to sprinkle: yaar, dekho, soch lo, iska matlab, lekin, bas, toh, wahi, abhi
+Do NOT write full Hindi sentences. 1-2 Hindi words per sentence maximum.
 
-EXAMPLE — study this and match this energy:
-"Dekho — AIIMS Delhi mein ek AI ne sirf 90 seconds mein cancer pakad liya... 95% accuracy ke saath, yaar. Sarkar ne already ₹3,000 crore approve kar diye hain — 1.5 lakh gawon tak pohunchane ke liye. Iska matlab aapke gaon mein bhi, jaldi hi... koi waiting list nahi, koi shahar nahi jaana. Lekin ek sawal hai — kya infrastructure ready hai? Technology toh aa gayi, lekin baaki cheezein? Comment mein batao."
-
-NARRATION STRUCTURE — 8 flowing sentences:
-1. Shocking hook with real fact — Hinglish from word one
+STRUCTURE — 6 short punchy sentences:
+1. Hook — shocking real fact, stop the scroll (use fact anchor if available)
 2. What is actually happening right now
-3. Scale — numbers, money, reach
-4. What this means for regular Indians — vivid and specific
-5. The challenge or twist — honest, not all rosy
-6. Near future — "5 saal mein", "by 2030", "already testing kar rahe hain"
-7. Emotional moment — pride or urgency in Hindi
-8. Specific debate question — not generic
+3. The scale — numbers, money, reach
+4. What this means for regular Indians
+5. The challenge or twist — honest
+6. Sharp question that demands a comment
 
-Rules: use "..." for pauses, no "2060", no invented stats, 8 sentences flowing NOT a list.
-Write for: {topic}"""
+EXAMPLE (55 words, natural Hinglish):
+"Dekho — AIIMS just deployed an AI that detects cancer in 90 seconds, 95% accuracy. Government has approved ₹3,000 crore to scale this to 1.5 lakh villages. Yaar, that means no waiting lists, no city hospitals for a basic diagnosis. But here's the real question — is the rural internet ready for this? Comment below."
+
+Now write for: {topic}
+Count your words. Stop at 55."""
 
         try:
             r = requests.post(
@@ -726,70 +720,90 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 
     def render_scene_clip(img_path, duration, scene_idx, captions):
         """
-        Per-clip effect stack:
-        1. zoompan  — slow zoom in from center (simple, reliable)
-        2. eq       — contrast/brightness/saturation per scene
-        3. unsharp  — cinematic sharpness
-        4. hue      — subtle color tint (warm/cool/golden) per scene
-        5. noise    — film grain overlay (dynamic texture)
-        6. drawtext — timed captions
+        Two-pass render:
+        Pass 1: PNG → scaled JPEG at 110% (fast, low memory)
+        Pass 2: JPEG → H264 clip with:
+                 - panning motion via overlay (no zoompan expressions)
+                 - eq color grade
+                 - hue tint
+                 - unsharp
+                 - noise grain
+                 - watermark
+                 - captions
         """
         clip_path  = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
+        pre_path   = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
         third      = duration / 3.0
         grade      = SCENE_GRADES[scene_idx % 3]
         n_frames   = int(duration * FPS)
         cap_y      = int(OUT_HEIGHT * 0.73)
         cap_size   = 58
+        wm         = escape_dt("@India20Sixty")
 
-        # Zoom speed varies per scene — hook is fastest (most energy)
-        zoom_speeds = [0.0018, 0.0012, 0.0008]
-        zoom_speed  = zoom_speeds[scene_idx % 3]
-
-        # Hue tint per scene — no quotes, safe values
-        # scene 0: warm  (hue shift +8, saturation boost)
-        # scene 1: cool  (hue shift -12)
-        # scene 2: golden (hue shift +4, strong saturation)
+        # Hue tint per scene — quote-free, safe on all ffmpeg builds
         hue_filters = [
-            "hue=h=8:s=1.2",
-            "hue=h=-12:s=1.05",
-            "hue=h=4:s=1.35",
+            "hue=h=8:s=1.2",    # warm
+            "hue=h=-10:s=1.05", # cool
+            "hue=h=5:s=1.3",    # golden
         ]
 
-        # Film grain — noise filter
-        # alls=1 = apply to all channels, c0s=18 = luma grain strength
-        # allf=t = temporal (changes each frame = animated grain)
-        grain = "noise=c0s=14:c0f=t+u"
+        print(f"  Clip {scene_idx}: [{grade['label']}]")
 
-        print(f"  Clip {scene_idx}: zoompan[{zoom_speed}] | {grade['label']} | grain")
+        # PASS 1: PNG → JPEG at 115% scale (gives us pan headroom)
+        pan_w = int(OUT_WIDTH  * 1.15)
+        pan_h = int(OUT_HEIGHT * 1.15)
+        dx    = pan_w - OUT_WIDTH   # 162px horizontal travel
+        dy    = pan_h - OUT_HEIGHT  # 288px vertical travel
 
-        # Step 1: zoompan — zoom in from center, simple expression
-        # z starts at 1.0, increases by zoom_speed per frame, capped at 1.5
-        # x/y keeps subject centered throughout zoom
-        zoompan = (
-            f"zoompan="
-            f"z='min(zoom+{zoom_speed},1.5)':"
-            f"x='iw/2-(iw/zoom/2)':"
-            f"y='ih/2-(ih/zoom/2)':"
-            f"d={n_frames}:"
-            f"s={OUT_WIDTH}x{OUT_HEIGHT}:"
-            f"fps={FPS}"
-        )
+        run_ffmpeg([
+            "ffmpeg", "-y", "-i", img_path,
+            "-vf", f"scale={pan_w}:{pan_h}:force_original_aspect_ratio=increase:flags=lanczos,crop={pan_w}:{pan_h}",
+            "-frames:v", "1", "-q:v", "3", "-f", "image2", "-vcodec", "mjpeg",
+            pre_path
+        ], f"preprocess-{scene_idx}", timeout=20)
+
+        pre_size = os.path.getsize(pre_path)
+        print(f"  Pre JPEG: {pre_size // 1024}KB ({pan_w}x{pan_h})")
+
+        # PASS 2: JPEG → clip with pan motion via crop x/y
+        # Pan direction varies per scene — creates visible motion without expressions
+        # Use overlay approach: input is larger than output, we select a window
+        # that moves linearly using -vf crop=OUT_W:OUT_H:x_start+step*n:y
+        # Since we can't use 'n' in crop safely, we use the TWO-INPUT overlay trick:
+        # Pad to pan dimensions, then overlay moves — but simplest is:
+        # Generate a video where we use -vf "crop=w:h:x:y" with a fixed offset
+        # per scene. Motion comes from DIFFERENT offsets (not animated) per video section
+        # The REAL motion approach that works: use -ss on input to create different
+        # crop windows for beginning vs end, then crossfade.
+
+        # SIMPLEST WORKING MOTION: use scale slightly bigger, then crop
+        # with framerate-based expression using 'n' (frame number)
+        # crop filter supports 'n' as a variable — this is different from zoompan
+        pan_directions = [
+            # Scene 0: pan right  (x increases, y fixed center)
+            (f"{dx}*n/{n_frames}", f"{dy//2}"),
+            # Scene 1: pan left   (x decreases from dx to 0)
+            (f"{dx}-{dx}*n/{n_frames}", f"{dy//3}"),
+            # Scene 2: pan up     (y decreases, x fixed center)
+            (f"{dx//2}", f"{dy}-{dy}*n/{n_frames}"),
+        ]
+        x_expr, y_expr = pan_directions[scene_idx % 3]
 
         vf_parts = [
-            # Scale to output first (zoompan works best on already-sized input)
-            f"scale={OUT_WIDTH}:{OUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos",
-            f"crop={OUT_WIDTH}:{OUT_HEIGHT}",
-            # Zoompan motion
-            zoompan,
+            # Crop moves — creates panning motion
+            f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
             # Color grade
             grade["eq"],
-            # Hue/saturation tint
+            # Hue tint
             hue_filters[scene_idx % 3],
             # Sharpness
             grade["sharp"],
-            # Film grain (dynamic per-frame texture)
-            grain,
+            # Film grain — animated per frame
+            "noise=c0s=12:c0f=t+u",
             "setsar=1",
+            # Watermark burned into every clip
+            f"drawtext=text='{wm}':fontsize=44:fontcolor=white@0.9"
+            f":borderw=4:bordercolor=black@0.95:x=28:y=h-88",
         ]
 
         # Captions
@@ -812,12 +826,12 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             )
 
         vf_str = ",".join(vf_parts)
-        print(f"  vf: {vf_str[:140]}...")
+        print(f"  vf: {vf_str[:160]}...")
 
         run_ffmpeg([
             "ffmpeg", "-y",
             "-loop", "1", "-r", str(FPS),
-            "-i", img_path,
+            "-i", pre_path,
             "-vf", vf_str,
             "-t", str(duration),
             "-r", str(FPS),
@@ -825,6 +839,13 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             "-pix_fmt", "yuv420p",
             clip_path
         ], f"clip-{scene_idx}", timeout=300)
+
+        # Clean up pre-processed JPEG immediately
+        try: os.remove(pre_path)
+        except Exception: pass
+        # Clean up source PNG
+        try: os.remove(img_path)
+        except Exception: pass
 
         size = os.path.getsize(clip_path)
         print(f"  Clip {scene_idx}: {size // 1024}KB")
@@ -891,13 +912,11 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 
         print(f"  Audio: {audio_dur:.1f}s | {len(images)} scenes x {scene_dur:.1f}s")
 
-        # Render clips
+        # Render clips — each clip deletes its own source image after processing
         clip_paths = []
         for i, img in enumerate(images):
             clip = render_scene_clip(img, scene_dur, i, captions)
             clip_paths.append(clip)
-            try: os.remove(img)
-            except Exception: pass
 
         # xfade transitions
         transitioned = apply_xfade(clip_paths, scene_dur)
@@ -905,44 +924,31 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             try: os.remove(cp)
             except Exception: pass
 
-        # Final mux: watermark + fade out + loudnorm
+        # Final mux: audio + fade out only
+        # Watermark already burned into each clip above
+        # No filter_complex (was silently failing with loudnorm)
         fade_out_st = total_dur - 0.5
-        wm          = escape_dt("@India20Sixty")
-
-        # Watermark: bottom-left, large font, thick black border
-        # NO box= parameter (not in all ffmpeg builds — fails silently)
-        watermark_vf = (
-            f"drawtext=text='{wm}'"
-            f":fontsize=46"
-            f":fontcolor=white@0.92"
-            f":borderw=4:bordercolor=black@0.9"
-            f":x=28:y=h-90"
-        )
 
         try:
             run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", transitioned, "-i", audio,
-                "-filter_complex",
-                f"[0:v]fade=t=out:st={fade_out_st:.2f}:d=0.5,"
-                f"{watermark_vf}[vout];"
-                f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]",
-                "-map", "[vout]", "-map", "[aout]",
+                "-vf", f"fade=t=out:st={fade_out_st:.2f}:d=0.5",
+                "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
                 "-shortest", "-movflags", "+faststart", video_path
             ], "final-mux", timeout=120)
         except Exception as e:
-            print(f"  loudnorm failed ({e}), retrying simple")
+            print(f"  fade failed ({e}), retrying plain mux")
             run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", transitioned, "-i", audio,
-                "-vf", f"fade=t=out:st={fade_out_st:.2f}:d=0.5,{watermark_vf}",
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
                 "-shortest", "-movflags", "+faststart", video_path
-            ], "final-mux-simple", timeout=120)
+            ], "final-mux-plain", timeout=120)
 
         try: os.remove(transitioned)
         except Exception: pass
@@ -953,7 +959,70 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
         print(f"  Final video: {size // 1024}KB")
         return video_path
 
-    # ── YOUTUBE ───────────────────────────────────────────────────
+    # ── TITLE GENERATION ─────────────────────────────────────────
+
+    def generate_title(topic, script, fact_package=None):
+        """Generate a unique, clickable YouTube title for each video."""
+
+        key_fact = ""
+        if fact_package and fact_package.get("found"):
+            key_fact = fact_package.get("key_fact", "")
+
+        # Title hook patterns — randomly picked for variety
+        hook_patterns = [
+            "Question hook: start with 'Why' or 'How' or 'What'",
+            "Shock stat hook: lead with the most surprising number",
+            "Contrast hook: 'India vs' or 'Before vs After'",
+            "Timeline hook: '5 Years From Now' or 'By 2030'",
+            "Revelation hook: 'Nobody Talks About This' or 'Hidden Truth'",
+        ]
+        pattern = random.choice(hook_patterns)
+
+        prompt = f"""Write a YouTube Shorts title for this video.
+
+Topic: {topic}
+Key fact: {key_fact}
+First line of script: {script[:120]}
+
+Title hook pattern to use: {pattern}
+
+Rules:
+- Under 60 characters
+- Include 1 relevant emoji at the start or end
+- Clickable and curiosity-driven
+- Must feel DIFFERENT from generic "India Future Tech" titles
+- No hashtags in the title
+- Should make someone stop scrolling
+
+Return ONLY the title text, nothing else."""
+
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.9, "max_tokens": 60},
+                timeout=15
+            )
+            r.raise_for_status()
+            title = r.json()["choices"][0]["message"]["content"].strip().strip('"')
+            # Ensure under 100 chars (YouTube limit)
+            if len(title) > 95:
+                title = title[:92] + "..."
+            print(f"  Title: {title}")
+            return title
+        except Exception as e:
+            print(f"  Title generation failed: {e}")
+            # Fallback with variety
+            fallbacks = [
+                f"🚀 {topic[:50]} — India's Next Big Leap",
+                f"⚡ This Is Already Happening In India | {topic[:35]}",
+                f"🇮🇳 {topic[:55]} #Shorts",
+                f"🔬 India Just Did This — {topic[:45]}",
+            ]
+            return random.choice(fallbacks)
 
     def upload_to_youtube(video_path, title, script, fact_package=None):
         update_status("upload")
@@ -1044,10 +1113,10 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             print(f"\nTEST MODE — skipping upload")
             video_id, final_status = "TEST_MODE", "test_complete"
         else:
-            title        = f"{topic} | India20Sixty #Shorts"
+            title        = generate_title(topic, script, fact_package)
             video_id     = upload_to_youtube(video, title, script, fact_package)
             final_status = "complete"
-            log_to_db(f"Uploaded: {video_id}")
+            log_to_db(f"Uploaded: {video_id} | Title: {title}")
 
         try:
             requests.post(
