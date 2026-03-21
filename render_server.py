@@ -1,861 +1,729 @@
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
+from flask import Flask, request, jsonify
+import requests
+import os
+import subprocess
+import json
+import time
+import shutil
+import uuid
+import traceback
+import re
+from pathlib import Path
+from datetime import datetime
 
-    if (request.method === "OPTIONS") {
-      return json(null, 204);
+app = Flask(__name__)
+
+# ==========================================
+# ENVIRONMENT
+# ==========================================
+
+OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY")
+LEONARDO_API_KEY   = os.environ.get("LEONARDO_API_KEY")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+VOICE_ID           = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
+
+SUPABASE_URL      = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+
+YOUTUBE_CLIENT_ID     = os.environ.get("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
+YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+
+TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"
+TMP_DIR   = "/tmp/india20sixty"
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "India20Sixty_logo.png")
+
+Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
+
+IMG_WIDTH  = 864
+IMG_HEIGHT = 1536
+OUT_WIDTH  = 1080
+OUT_HEIGHT = 1920
+FPS        = 25
+
+# Half-res for preprocessing — ~200KB JPEG vs ~5MB PNG
+# Clip renderer scales it back up. Saves ~90% RAM per image.
+PRE_WIDTH  = 540
+PRE_HEIGHT = 960
+
+LEONARDO_MODELS = [
+    "aa77f04e-3eec-4034-9c07-d0f619684628",
+    "1e60896f-3c26-4296-8ecc-53e2afecc132",
+    "6bef9f1b-29cb-40c7-b9df-32b51c1f67d3",
+]
+
+# ==========================================
+# STATUS + LOGGING
+# ==========================================
+
+def update_status(job_id, status, data=None):
+    try:
+        payload = {"status": status, "updated_at": datetime.utcnow().isoformat()}
+        if data:
+            payload.update(data)
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            json=payload, timeout=10
+        )
+    except Exception as e:
+        print(f"STATUS UPDATE FAILED: {e}")
+
+
+def log_step(job_id, step, message):
+    print(f"[{job_id}] {step}: {message}")
+    update_status(job_id, step.lower())
+    log_to_db(job_id, f"{step}: {message}")
+
+
+def log_to_db(job_id, message):
+    try:
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/render_logs",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={"job_id": job_id, "message": str(message)[:500]},
+            timeout=5
+        )
+    except Exception:
+        pass
+
+# ==========================================
+# SCRIPT GENERATION
+# ==========================================
+
+def generate_script(topic):
+    print("SCRIPT START")
+    prompt = f"""You are a viral YouTube Shorts scriptwriter for India20Sixty — a channel about India's near future.
+
+Topic: {topic}
+
+Write exactly 8 punchy lines. Rules:
+- Line 1: Shocking hook (6-10 words) — make people stop scrolling
+- Lines 2-3: Bold surprising predictions about the near future
+- Lines 4-6: Vivid specific details that paint the picture
+- Line 7: Emotional payoff — pride, wonder, excitement
+- Line 8: Engaging question that demands a comment
+- Mix 70% English + 30% Hinglish naturally
+- Do NOT say "2060" — use "near future", "by 2035", "soon", "within a decade"
+- No numbering, no labels, no bullets
+- One sentence per line, max 12 words each"""
+
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.85, "max_tokens": 400
+            },
+            timeout=30
+        )
+        r.raise_for_status()
+        raw   = r.json()["choices"][0]["message"]["content"].strip()
+        lines = [re.sub(r'^[\d]+[.)]\s*', '', l.strip()) for l in raw.split('\n') if l.strip()]
+        script = ' '.join(lines)
+        print(f"SCRIPT DONE ({len(lines)} lines): {script[:120]}...")
+        return script, lines
+    except Exception as e:
+        print(f"SCRIPT FAILED: {e}")
+        fallback = [
+            f"Yeh soch lo — {topic} reality ban raha hai.",
+            "India ka future ab sirf sapna nahi.",
+            "Hamare engineers iss par kaam kar rahe hain.",
+            "Ek dasak mein sab kuch badal jayega.",
+            "Technology aur tradition ka perfect blend.",
+            "Duniya dekh rahi hai, hum lead kar rahe hain.",
+            "Yeh sirf shuruaat hai — best abhi aana baaki hai.",
+            "Kya aap is future ka hissa banana chahte hain?"
+        ]
+        return ' '.join(fallback), fallback
+
+# ==========================================
+# CAPTION EXTRACTION
+# ==========================================
+
+def extract_captions(script_lines):
+    full_script = ' '.join(script_lines)
+    prompt = f"""Extract exactly 9 ultra-short caption phrases from this script for a YouTube Short.
+
+Rules:
+- 3-5 words each
+- ALL CAPS
+- Punchy and bold
+- In script order
+- No punctuation except ! or ?
+- Output exactly 9 lines, one phrase per line, nothing else
+
+Script: {full_script}"""
+
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3, "max_tokens": 200
+            },
+            timeout=20
+        )
+        r.raise_for_status()
+        raw      = r.json()["choices"][0]["message"]["content"].strip()
+        captions = [re.sub(r'^[\d]+[.)]\s*', '', l.strip()).upper() for l in raw.split('\n') if l.strip()]
+        captions = captions[:9]
+        while len(captions) < 9:
+            captions.append(captions[-1] if captions else "INDIA KA FUTURE")
+        print(f"CAPTIONS: {captions}")
+        return captions
+    except Exception as e:
+        print(f"CAPTION FAILED: {e}")
+        words = full_script.upper().split()
+        caps, step = [], max(1, len(words) // 9)
+        for i in range(9):
+            chunk = words[i * step: i * step + 4]
+            caps.append(' '.join(chunk) if chunk else "INDIA KA FUTURE")
+        return caps[:9]
+
+# ==========================================
+# VISUAL SCENES
+# ==========================================
+
+SCENE_TEMPLATES = [
+    "futuristic Indian megacity at golden hour, lotus-shaped towers, clean electric air taxis, warm saffron teal palette, cinematic ultra-realistic photography",
+    "Indian scientists and engineers in smart traditional attire, holographic data displays, ancient temple architecture meets gleaming research campus, dramatic cinematic lighting",
+    "aerial view of transformed green India, solar farms and vertical gardens, thriving diverse communities, Indian tricolor, hopeful sunrise, epic cinematic wide shot"
+]
+
+def generate_visual_scenes(topic):
+    return [
+        {"stage": "hook",    "prompt": SCENE_TEMPLATES[0], "duration": 9},
+        {"stage": "insight", "prompt": SCENE_TEMPLATES[1], "duration": 9},
+        {"stage": "ending",  "prompt": SCENE_TEMPLATES[2], "duration": 9}
+    ]
+
+# ==========================================
+# LEONARDO IMAGES
+# ==========================================
+
+def try_generate_with_model(model_id, prompt, job_id):
+    print(f"[{job_id}] Trying model: {model_id}")
+    r = requests.post(
+        "https://cloud.leonardo.ai/api/rest/v1/generations",
+        headers={"Authorization": f"Bearer {LEONARDO_API_KEY}", "Content-Type": "application/json"},
+        json={
+            "prompt": prompt, "modelId": model_id,
+            "width": IMG_WIDTH, "height": IMG_HEIGHT,
+            "num_images": 1, "presetStyle": "CINEMATIC"
+        },
+        timeout=30
+    )
+    print(f"[{job_id}] Response: {r.status_code}")
+    if r.status_code != 200:
+        raise Exception(f"{r.status_code}: {r.text[:200]}")
+    data = r.json()
+    if "sdGenerationJob" not in data:
+        raise Exception(f"No sdGenerationJob: {str(data)[:200]}")
+    return data["sdGenerationJob"]["generationId"]
+
+
+def poll_for_image(generation_id, output_path, job_id):
+    for poll in range(80):
+        time.sleep(3)
+        if poll % 5 == 0:
+            print(f"[{job_id}] Polling {poll * 3}s...")
+        try:
+            r = requests.get(
+                f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
+                headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
+                timeout=15
+            )
+            r.raise_for_status()
+            gen    = r.json().get("generations_by_pk", {})
+            status = gen.get("status", "UNKNOWN")
+            print(f"[{job_id}] Poll {poll}: status={status}")
+            if status == "FAILED":
+                raise Exception(f"Leonardo FAILED: {str(gen)[:200]}")
+            if status == "COMPLETE":
+                images = gen.get("generated_images", [])
+                if not images:
+                    raise Exception("COMPLETE but no images")
+                img_r = requests.get(images[0]["url"], timeout=30)
+                img_r.raise_for_status()
+                with open(output_path, "wb") as f:
+                    f.write(img_r.content)
+                size = os.path.getsize(output_path)
+                print(f"[{job_id}] Saved: {size // 1024}KB")
+                if size < 5000:
+                    raise Exception(f"Image too small: {size}")
+                return True
+        except Exception as e:
+            if "FAILED" in str(e) or "COMPLETE" in str(e):
+                raise
+            print(f"[{job_id}] Poll error: {e}")
+    raise Exception("Timeout: no image after 240s")
+
+
+def generate_image_with_retry(prompt, output_path, job_id):
+    last_error = None
+    for model_id in LEONARDO_MODELS:
+        try:
+            gen_id = try_generate_with_model(model_id, prompt, job_id)
+            return poll_for_image(gen_id, output_path, job_id)
+        except Exception as e:
+            last_error = e
+            print(f"[{job_id}] Model failed: {str(e)[:150]}")
+            time.sleep(5)
+    raise Exception(f"All models failed. Last: {last_error}")
+
+
+def generate_all_images(scenes, job_id):
+    image_paths = []
+    for i, scene in enumerate(scenes):
+        log_step(job_id, "IMAGES", f"Scene {i + 1}/{len(scenes)}")
+        path = f"{TMP_DIR}/{job_id}_{i}.png"
+        if i > 0:
+            time.sleep(8)
+        try:
+            generate_image_with_retry(scene["prompt"], path, job_id)
+            image_paths.append(path)
+        except Exception as e:
+            print(f"[{job_id}] Image {i + 1} failed, fallback: {e}")
+            if image_paths:
+                shutil.copy(image_paths[-1], path)
+            else:
+                create_placeholder_image(path)
+            image_paths.append(path)
+    return image_paths
+
+
+def create_placeholder_image(path):
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", f"color=c=0x1a1a2e:s={IMG_WIDTH}x{IMG_HEIGHT}:d=1",
+            "-vf", "drawtext=text='India20Sixty':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
+            "-frames:v", "1", path
+        ], capture_output=True, timeout=15)
+    except Exception as e:
+        print(f"Placeholder failed: {e}")
+        Path(path).touch()
+
+# ==========================================
+# VOICE GENERATION
+# ==========================================
+
+def get_audio_duration(path):
+    try:
+        r = subprocess.run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", path
+        ], capture_output=True, text=True, timeout=10)
+        return float(r.stdout.strip())
+    except Exception:
+        return 27.0
+
+
+def generate_voice(script, job_id):
+    log_step(job_id, "VOICE", "Generating audio...")
+    r = requests.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
+        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+        json={
+            "text": script,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
+        },
+        timeout=60
+    )
+    r.raise_for_status()
+
+    raw_path   = f"{TMP_DIR}/{job_id}_raw.mp3"
+    audio_path = f"{TMP_DIR}/{job_id}.mp3"
+    with open(raw_path, "wb") as f:
+        f.write(r.content)
+
+    duration = get_audio_duration(raw_path)
+    print(f"[{job_id}] Raw audio: {duration:.1f}s")
+
+    if duration < 24.0:
+        pad = 25.0 - duration
+        print(f"[{job_id}] Padding {pad:.1f}s")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", raw_path,
+            "-af", f"apad=pad_dur={pad}", "-t", "25",
+            audio_path
+        ], capture_output=True, timeout=20)
+        os.remove(raw_path)
+    else:
+        os.rename(raw_path, audio_path)
+
+    print(f"[{job_id}] Final audio: {get_audio_duration(audio_path):.1f}s")
+    return audio_path
+
+# ==========================================
+# VIDEO RENDERING
+# ==========================================
+
+def escape_dt(text):
+    text = text.replace('\\', '\\\\')
+    text = text.replace("'", "\u2019")
+    text = text.replace(':', '\\:')
+    text = text.replace('%', '\\%')
+    return text
+
+
+def preprocess_image(src_path, dst_path, job_id):
+    """
+    PNG → half-res JPEG with explicit mjpeg codec.
+    PRE_WIDTH x PRE_HEIGHT = 540x960 → ~150-250KB
+    (vs 4-5MB PNG — saves ~95% RAM per image)
+    Leonardo images are 9:16 (864x1536) → output is 9:16 (540x960), no crop needed.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", src_path,
+        "-vf", f"scale={PRE_WIDTH}:{PRE_HEIGHT}",
+        "-frames:v", "1",
+        "-f", "image2",
+        "-vcodec", "mjpeg",
+        "-q:v", "5",          # JPEG quality 2=best, 31=worst — 5 is high quality
+        dst_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    if result.returncode != 0:
+        raise Exception(f"Preprocess failed: {result.stderr[-200:]}")
+    size = os.path.getsize(dst_path)
+    print(f"[{job_id}] Preprocessed JPEG: {size // 1024}KB ({PRE_WIDTH}x{PRE_HEIGHT})")
+    return size
+
+
+def render_scene_clip(preprocessed_jpg, duration, scene_idx, captions, job_id):
+    """
+    Half-res JPEG → full-res H.264 clip with Ken Burns + captions.
+    Scale: PRE_WIDTH x PRE_HEIGHT → OUT_WIDTH*1.05 x OUT_HEIGHT*1.05 then crop.
+    """
+    clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
+    third     = duration / 3.0
+
+    # Scale up from half-res with 5% Ken Burns headroom
+    kb_w = int(OUT_WIDTH  * 1.05)
+    kb_h = int(OUT_HEIGHT * 1.05)
+    dx   = kb_w - OUT_WIDTH   # 54px
+    dy   = kb_h - OUT_HEIGHT  # 96px
+
+    drifts = [
+        (f"'min({dx}*t/{duration},{dx})'",     f"'min({dy}*t/{duration},{dy})'"),
+        (f"'{dx}-min({dx}*t/{duration},{dx})'", f"'min({dy}*t/{duration},{dy})'"),
+        (f"'min({dx}*t/{duration},{dx})'",     f"'{dy}-min({dy}*t/{duration},{dy})'"),
+    ]
+    x_expr, y_expr = drifts[scene_idx % 3]
+
+    scene_caps = captions[scene_idx * 3: scene_idx * 3 + 3]
+    while len(scene_caps) < 3:
+        scene_caps.append("")
+
+    cap_y    = int(OUT_HEIGHT * 0.73)
+    cap_size = 56
+
+    # Scale from PRE_WIDTH x PRE_HEIGHT → kb_w x kb_h → crop to OUT_WIDTH x OUT_HEIGHT
+    vf_parts = [
+        f"scale={kb_w}:{kb_h}:flags=lanczos",
+        f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
+        "setsar=1",
+    ]
+
+    for ci, cap in enumerate(scene_caps):
+        cap = cap.strip()
+        if not cap:
+            continue
+        t_start = f"{ci * third:.3f}"
+        t_end   = f"{(ci + 1) * third:.3f}"
+        escaped = escape_dt(cap)
+        vf_parts.append(
+            f"drawtext=text='{escaped}'"
+            f":fontsize={cap_size}:fontcolor=white"
+            f":borderw=5:bordercolor=black@0.9"
+            f":x=(w-text_w)/2:y={cap_y}"
+            f":enable='between(t,{t_start},{t_end})'"
+        )
+
+    vf = ",".join(vf_parts)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1",
+        "-r", str(FPS),
+        "-i", preprocessed_jpg,
+        "-vf", vf,
+        "-t", str(duration),
+        "-r", str(FPS),
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "22",
+        "-pix_fmt", "yuv420p",
+        clip_path
+    ]
+
+    print(f"[{job_id}] Rendering clip {scene_idx} ({duration:.1f}s, caps: {scene_caps})...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=360)
+
+    if result.returncode != 0:
+        print(f"[{job_id}] Clip {scene_idx} error:\n{result.stderr[-600:]}")
+        raise Exception(f"Clip {scene_idx} failed: {result.stderr[-150:]}")
+
+    size = os.path.getsize(clip_path)
+    print(f"[{job_id}] Clip {scene_idx}: {size // 1024}KB")
+    return clip_path
+
+
+def render_video(images, audio, captions, job_id):
+    log_step(job_id, "RENDER", "Rendering video...")
+
+    audio_dur  = get_audio_duration(audio)
+    total_dur  = max(audio_dur, 25.0)
+    scene_dur  = total_dur / len(images)
+    video_path = f"{TMP_DIR}/{job_id}.mp4"
+
+    print(f"[{job_id}] Audio: {audio_dur:.1f}s | Total: {total_dur:.1f}s | {len(images)} scenes x {scene_dur:.1f}s")
+
+    clip_paths = []
+    for i, img in enumerate(images):
+        # PASS 1: PNG → small JPEG (explicit mjpeg codec, half resolution)
+        pre_jpg = f"{TMP_DIR}/{job_id}_pre{i}.jpg"
+        preprocess_image(img, pre_jpg, job_id)
+
+        # Delete source PNG immediately — free ~800KB-1MB
+        try: os.remove(img)
+        except Exception: pass
+
+        # PASS 2: JPEG → H.264 clip with scale-up + Ken Burns + captions
+        clip = render_scene_clip(pre_jpg, scene_dur, i, captions, job_id)
+        clip_paths.append(clip)
+
+        # Delete JPEG immediately — free ~200KB before next iteration
+        try: os.remove(pre_jpg)
+        except Exception: pass
+
+    # Concat all clips
+    list_path   = f"{TMP_DIR}/{job_id}_clips.txt"
+    concat_path = f"{TMP_DIR}/{job_id}_concat.mp4"
+
+    with open(list_path, "w") as f:
+        for cp in clip_paths:
+            f.write(f"file '{cp}'\n")
+
+    print(f"[{job_id}] Concatenating {len(clip_paths)} clips...")
+    result = subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", list_path, "-c", "copy", concat_path
+    ], capture_output=True, text=True, timeout=60)
+
+    if result.returncode != 0:
+        raise Exception(f"Concat failed: {result.stderr[-150:]}")
+
+    for cp in clip_paths:
+        try: os.remove(cp)
+        except Exception: pass
+    try: os.remove(list_path)
+    except Exception: pass
+
+    has_logo = os.path.exists(LOGO_PATH) and os.path.getsize(LOGO_PATH) > 100
+    print(f"[{job_id}] Concat: {os.path.getsize(concat_path) // 1024}KB | Logo: {has_logo}")
+
+    if has_logo:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", concat_path, "-i", LOGO_PATH, "-i", audio,
+            "-filter_complex",
+            "[1:v]scale=130:-1,format=rgba,colorchannelmixer=aa=0.6[logo];"
+            "[0:v][logo]overlay=x=20:y=20:format=auto[vout]",
+            "-map", "[vout]", "-map", "2:a",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-shortest", "-movflags", "+faststart",
+            video_path
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", concat_path, "-i", audio,
+            "-map", "0:v", "-map", "1:a",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-shortest", "-movflags", "+faststart",
+            video_path
+        ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    try: os.remove(concat_path)
+    except Exception: pass
+
+    if result.returncode != 0:
+        raise Exception(f"Mux failed: {result.stderr[-200:]}")
+
+    size = os.path.getsize(video_path) if os.path.exists(video_path) else 0
+    if size < 100_000:
+        raise Exception(f"Final video too small: {size} bytes")
+
+    print(f"[{job_id}] Final video: {size // 1024}KB")
+    return video_path
+
+# ==========================================
+# YOUTUBE UPLOAD
+# ==========================================
+
+def get_youtube_token():
+    r = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": YOUTUBE_CLIENT_ID, "client_secret": YOUTUBE_CLIENT_SECRET,
+            "refresh_token": YOUTUBE_REFRESH_TOKEN, "grant_type": "refresh_token"
+        },
+        timeout=10
+    )
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def upload_to_youtube(video_path, title, script, job_id):
+    log_step(job_id, "UPLOAD", "Uploading to YouTube...")
+    token = get_youtube_token()
+
+    description = f"""{script}
+
+India20Sixty - Exploring India's near future.
+
+#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"""
+
+    metadata = {
+        "snippet": {
+            "title": title[:100], "description": description[:5000],
+            "tags": ["Future India", "India innovation", "AI", "Technology", "Shorts"],
+            "categoryId": "28"
+        },
+        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
     }
 
-    if (url.pathname === "/" || url.pathname === "/dashboard") {
-      return new Response(DASHBOARD_HTML, {
-        headers: { "content-type": "text/html;charset=UTF-8", "cache-control": "no-store" }
-      });
-    }
+    with open(video_path, "rb") as vf:
+        r = requests.post(
+            "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "snippet": (None, json.dumps(metadata), "application/json"),
+                "video": ("video.mp4", vf, "video/mp4")
+            },
+            timeout=300
+        )
+    r.raise_for_status()
+    video_id = r.json()["id"]
+    print(f"[{job_id}] YouTube: https://youtube.com/watch?v={video_id}")
+    return video_id
 
-    if (url.pathname === "/run" && request.method === "POST") {
-      try {
-        const topicData = await pickTopic(env);
-        const job = await createJob(topicData, env);
-        ctx.waitUntil(triggerRender(job, env));
-        return json({ status: "job_created", job_id: job.id, topic: topicData.topic, council_score: topicData.council_score, source: topicData.source });
-      } catch (e) {
-        return json({ error: e.message }, 500);
-      }
-    }
+# ==========================================
+# MAIN PIPELINE
+# ==========================================
 
-    if (url.pathname === "/jobs") {
-      try {
-        const jobs = await supabaseGet(env, "jobs?order=created_at.desc&limit=50");
-        return json(jobs);
-      } catch (e) {
-        return json({ error: e.message }, 500);
-      }
-    }
+@app.route("/full-pipeline", methods=["POST"])
+def pipeline():
+    data   = request.json or {}
+    job_id = data.get("job_id") or str(uuid.uuid4())
+    topic  = data.get("topic", "Future India")
 
-    if (url.pathname === "/topics") {
-      try {
-        const topics = await supabaseGet(env, "topics?used=eq.false&order=council_score.desc&limit=50");
-        return json(topics);
-      } catch (e) {
-        return json({ error: e.message }, 500);
-      }
-    }
+    print(f"\n{'='*60}\nPIPELINE START: {job_id}\nTOPIC: {topic}")
+    print(f"TIME: {datetime.utcnow().isoformat()} | TEST: {TEST_MODE} | LOGO: {os.path.exists(LOGO_PATH)}\n{'='*60}\n")
 
-    if (url.pathname === "/analytics") {
-      try {
-        const rows = await supabaseGet(env, "analytics?order=score.desc&limit=20");
-        return json(rows);
-      } catch (e) {
-        return json({ error: e.message }, 500);
-      }
-    }
+    try:
+        update_status(job_id, "processing", {"topic": topic})
+        log_to_db(job_id, "Pipeline started")
 
-    if (url.pathname === "/generate-topic" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const result = await callTopicCouncil(env, body.topic || "Future of AI in India", "manual");
-        return json(result);
-      } catch (e) {
-        return json({ error: e.message }, 500);
-      }
-    }
+        script, script_lines = generate_script(topic)
+        log_to_db(job_id, f"Script ({len(script_lines)} lines): {script[:80]}")
 
-    // Debug: test Render connectivity
-    if (url.pathname === "/test-render") {
-      const renderBase = (env.RENDER_PIPELINE_URL || "NOT_SET").replace(/\/full-pipeline\/?$/, "");
-      const healthUrl  = renderBase + "/health";
-      try {
-        const r    = await fetch(healthUrl, { signal: AbortSignal.timeout(15000) });
-        const text = await r.text();
-        return json({ render_pipeline_url: renderBase, health_url_called: healthUrl, status: r.status, response: text.slice(0, 300), ok: r.ok });
-      } catch (e) {
-        return json({ render_pipeline_url: renderBase, health_url_called: healthUrl, error: e.message, ok: false });
-      }
-    }
+        captions = extract_captions(script_lines)
+        log_to_db(job_id, f"Captions: {captions[:3]}")
 
-    // Debug: show env binding keys
-    if (url.pathname === "/debug-env") {
-      return json({
-        RENDER_PIPELINE_URL:  env.RENDER_PIPELINE_URL  || "NOT_SET",
-        WORKER_URL:           env.WORKER_URL            || "NOT_SET",
-        TOPIC_COUNCIL_URL:    env.TOPIC_COUNCIL_URL     || "NOT_SET",
-        SUPABASE_URL:         env.SUPABASE_URL          ? env.SUPABASE_URL.slice(0, 40) + "..." : "NOT_SET",
-        SUPABASE_ANON_KEY:    env.SUPABASE_ANON_KEY     ? "SET" : "NOT_SET",
-        YOUTUBE_CLIENT_ID:    env.YOUTUBE_CLIENT_ID     ? "SET" : "NOT_SET",
-        YOUTUBE_REFRESH_TOKEN: env.YOUTUBE_REFRESH_TOKEN ? "SET" : "NOT_SET",
-      });
-    }
+        scenes = generate_visual_scenes(topic)
+        images = generate_all_images(scenes, job_id)
+        log_to_db(job_id, f"Images: {len(images)}")
 
-    // Webhook from Render — updates job status after pipeline finishes
-    if (url.pathname === "/webhook" && request.method === "POST") {
-      try {
-        const data = await request.json();
-        const { job_id, status, youtube_id, error, script } = data;
-        if (!job_id) return json({ error: "Missing job_id" }, 400);
-        const updateData = { status: status || "unknown", updated_at: new Date().toISOString() };
-        if (youtube_id) updateData.youtube_id = youtube_id;
-        if (error)      updateData.error = error;
-        if (script)     updateData.script_package = { text: script };
-        await supabasePatch(env, `jobs?id=eq.${job_id}`, updateData);
-        if ((status === "complete") && youtube_id && youtube_id !== "TEST_MODE") {
-          ctx.waitUntil(createAnalyticsRecord(job_id, youtube_id, env));
-        }
-        console.log(`Webhook: job ${job_id} -> ${status}`);
-        return json({ received: true, job_id, status });
-      } catch (e) {
-        return json({ error: e.message }, 500);
-      }
-    }
+        audio = generate_voice(script, job_id)
+        log_to_db(job_id, "Voice done")
 
-    // Manual analytics sync
-    if (url.pathname === "/sync-analytics" && request.method === "POST") {
-      ctx.waitUntil(syncYouTubeAnalytics(env));
-      return json({ status: "sync_started" });
-    }
+        video = render_video(images, audio, captions, job_id)
+        log_to_db(job_id, "Video rendered")
 
-    // Manual replenish trigger
-    if (url.pathname === "/replenish" && request.method === "POST") {
-      ctx.waitUntil(triggerReplenish(env));
-      return json({ status: "replenish_triggered" });
-    }
+        if TEST_MODE:
+            print(f"[{job_id}] TEST MODE")
+            video_id, final_status = "TEST_MODE", "test_complete"
+        else:
+            title        = f"{topic} | India20Sixty #Shorts"
+            video_id     = upload_to_youtube(video, title, script, job_id)
+            final_status = "complete"
+            log_to_db(job_id, f"Uploaded: {video_id}")
 
-    return json({ error: "route_not_found" }, 404);
-  },
+        try:
+            requests.post(
+                f"{SUPABASE_URL}/rest/v1/videos",
+                headers={
+                    "apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                    "Content-Type": "application/json", "Prefer": "return=minimal"
+                },
+                json={
+                    "job_id": job_id, "topic": topic,
+                    "youtube_url": f"https://youtube.com/watch?v={video_id}" if video_id != "TEST_MODE" else None
+                },
+                timeout=10
+            )
+        except Exception as e:
+            print(f"[{job_id}] videos insert (non-fatal): {e}")
 
-  // ==========================================
-  // CRON SCHEDULER
-  // ==========================================
+        update_status(job_id, final_status, {
+            "youtube_id": video_id,
+            "script_package": {"text": script, "lines": script_lines, "captions": captions,
+                               "generated_at": datetime.utcnow().isoformat()}
+        })
 
-  async scheduled(event, env, ctx) {
-    const cron = event.cron;
-    console.log("Cron fired:", cron);
+        for f in [audio, video]:
+            try: os.remove(f)
+            except Exception: pass
 
-    // Every minute: queue processor + keep Render warm
-    if (cron === "* * * * *") {
-      await processQueue(env, ctx);
-      const renderBase = (env.RENDER_PIPELINE_URL || "").replace(/\/full-pipeline\/?$/, "");
-      if (renderBase) fetch(renderBase + "/health").catch(() => {});
-    }
+        print(f"\nPIPELINE COMPLETE: {video_id}\n")
+        return jsonify({"status": final_status, "job_id": job_id, "youtube_id": video_id,
+                        "script": script, "captions": captions})
 
-    // 3x daily video creation: 6 AM, 12 PM, 6 PM IST = 0:30, 6:30, 12:30 UTC
-    if (cron === "30 0,6,12 * * *") {
-      try {
-        const topicData = await pickTopic(env);
-        const job = await createJob(topicData, env);
-        ctx.waitUntil(triggerRender(job, env));
-        console.log("Scheduled job created:", job.id, job.topic);
-      } catch (e) {
-        console.error("Scheduled job creation failed:", e.message);
-      }
-    }
+    except Exception as e:
+        msg = str(e)
+        print(f"\nPIPELINE FAILED: {msg}\n{traceback.format_exc()}")
+        log_to_db(job_id, f"FAILED: {msg[:400]}")
+        update_status(job_id, "failed", {"error": msg[:400]})
+        return jsonify({"status": "failed", "job_id": job_id, "error": msg}), 500
 
-    // Daily at 2 AM IST (20:30 UTC): analytics sync + queue replenishment check
-    if (cron === "30 20 * * *") {
-      // 1. Sync YouTube analytics
-      ctx.waitUntil(syncYouTubeAnalytics(env));
 
-      // 2. Check queue depth — replenish if below threshold
-      try {
-        const available = await supabaseGet(env,
-          "topics?used=eq.false&council_score=gte.70&select=id"
-        );
-        console.log(`Queue depth: ${available.length}`);
-
-        if (available.length < 5) {
-          console.log("Queue low — triggering topic replenishment");
-          ctx.waitUntil(triggerReplenish(env, 12));
-        }
-      } catch (e) {
-        console.error("Queue check failed:", e.message);
-      }
-    }
-  }
-};
-
-// ==========================================
-// TOPIC SELECTION
-// ==========================================
-
-async function pickTopic(env) {
-  const topics = await supabaseGet(env,
-    "topics?used=eq.false&council_score=gte.70&order=council_score.desc&limit=1"
-  );
-
-  if (topics.length > 0) {
-    const t = topics[0];
-    await supabasePatch(env, `topics?id=eq.${t.id}`, {
-      used: true,
-      used_at: new Date().toISOString()
-    });
-    return { topic: t.topic, script_package: t.script_package, council_score: t.council_score, source: "db_approved" };
-  }
-
-  console.log("No approved topics — generating via Council...");
-  return await generateViaCouncil(env);
-}
-
-async function generateViaCouncil(env) {
-  const pool = [
-    "AI doctors diagnosing cancer in Indian villages",
-    "ISRO building space station by 2035",
-    "Hyperloop connecting Mumbai to Delhi",
-    "Vertical farms feeding Indian cities",
-    "Quantum computers solving Bangalore traffic",
-    "Floating cities for rising sea levels in Kerala",
-    "AI teachers in every village school",
-    "Solar power satellites beaming energy to India",
-    "3D printed organs ending transplant waiting lists"
-  ];
-  const topic = pool[Math.floor(Math.random() * pool.length)];
-  try {
-    const result = await callTopicCouncil(env, topic, "auto_generated");
-    if (result.status === "approved") {
-      return {
-        topic:          result.evaluation?.improved_title || topic,
-        script_package: result.script || null,
-        council_score:  result.evaluation?.council_score || 75,
-        source:         "council_generated"
-      };
-    }
-  } catch (e) {
-    console.error("Council call failed:", e.message);
-  }
-  return { topic: "AI hospitals transforming rural India", script_package: null, council_score: 0, source: "fallback" };
-}
-
-async function callTopicCouncil(env, topic, source) {
-  if (!env.TOPIC_COUNCIL_URL) throw new Error("TOPIC_COUNCIL_URL not set");
-  const r = await fetch(env.TOPIC_COUNCIL_URL + "/full-pipeline", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ topic, source })
-  });
-  if (!r.ok) throw new Error("Topic Council returned " + r.status);
-  return await r.json();
-}
-
-// ==========================================
-// QUEUE REPLENISHMENT
-// ==========================================
-
-async function triggerReplenish(env, target = 12) {
-  if (!env.TOPIC_COUNCIL_URL) {
-    console.error("TOPIC_COUNCIL_URL not set — cannot replenish");
-    return;
-  }
-  try {
-    console.log(`Triggering replenishment — target: ${target} topics`);
-    const r = await fetch(env.TOPIC_COUNCIL_URL + "/replenish", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ target })
-    });
-    const text = await r.text();
-    console.log("Replenish response:", r.status, text.slice(0, 200));
-  } catch (e) {
-    console.error("Replenish failed:", e.message);
-  }
-}
-
-// ==========================================
-// JOB MANAGEMENT
-// ==========================================
-
-async function createJob(topicData, env) {
-  const job = {
-    topic:          topicData.topic,
-    cluster:        "AI_Future",
-    status:         "pending",
-    script_package: topicData.script_package || null,
-    council_score:  topicData.council_score || 0,
-    retries:        0,
-    created_at:     new Date().toISOString(),
-    updated_at:     new Date().toISOString()
-  };
-  return await supabaseInsert(env, "jobs", job);
-}
-
-async function processQueue(env, ctx) {
-  const fifteenMinAgo = new Date(Date.now() - 15 * 60000).toISOString();
-  try {
-    // Reset stuck jobs (< 3 retries)
-    const stuck = await supabaseGet(env,
-      `jobs?status=eq.processing&updated_at=lt.${fifteenMinAgo}&retries=lt.3`
-    );
-    for (const job of stuck) {
-      await supabasePatch(env, `jobs?id=eq.${job.id}`, {
-        status: "pending", retries: (job.retries || 0) + 1, updated_at: new Date().toISOString()
-      });
-    }
-
-    // Mark permanently dead jobs (>= 3 retries) as failed
-    const dead = await supabaseGet(env,
-      `jobs?status=eq.processing&updated_at=lt.${fifteenMinAgo}&retries=gte.3`
-    );
-    for (const job of dead) {
-      await supabasePatch(env, `jobs?id=eq.${job.id}`, {
-        status: "failed", error: "max_retries_exceeded", updated_at: new Date().toISOString()
-      });
-    }
-
-    // Pick up one pending job
-    const pending = await supabaseGet(env, "jobs?status=eq.pending&order=created_at.asc&limit=1");
-    if (!pending.length) return;
-
-    const job = pending[0];
-    await supabasePatch(env, `jobs?id=eq.${job.id}`, {
-      status: "processing", started_at: new Date().toISOString(), updated_at: new Date().toISOString()
-    });
-    ctx.waitUntil(triggerRender(job, env));
-  } catch (e) {
-    console.error("Queue error:", e.message);
-  }
-}
-
-async function triggerRender(job, env) {
-  if (!env.RENDER_PIPELINE_URL) {
-    console.error("RENDER_PIPELINE_URL not set");
-    await supabasePatch(env, `jobs?id=eq.${job.id}`, {
-      status: "failed", error: "RENDER_PIPELINE_URL not configured", updated_at: new Date().toISOString()
-    });
-    return;
-  }
-
-  const base      = env.RENDER_PIPELINE_URL.trim().replace(/\/$/, "").replace(/\/full-pipeline$/, "");
-  const renderUrl = base + "/full-pipeline";
-
-  console.log("Triggering render:", renderUrl, "| Job:", job.id, job.topic);
-
-  try {
-    const r = await fetch(renderUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        job_id:      job.id,
-        topic:       job.topic,
-        script_package: job.script_package,
-        webhook_url: (env.WORKER_URL || "").trim().replace(/\/$/, "") + "/webhook"
-      }),
-      signal: AbortSignal.timeout(60000)
-    });
-    const text = await r.text();
-    console.log("Render response:", r.status, text.slice(0, 200));
-    if (!r.ok) throw new Error(`Render returned ${r.status}: ${text.slice(0, 100)}`);
-  } catch (e) {
-    console.error("Render trigger failed:", e.message);
-    await supabasePatch(env, `jobs?id=eq.${job.id}`, {
-      status: "failed", error: e.message, updated_at: new Date().toISOString()
-    });
-  }
-}
-
-// ==========================================
-// YOUTUBE ANALYTICS SYNC
-// ==========================================
-
-async function getYouTubeToken(env) {
-  const r = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id:     env.YOUTUBE_CLIENT_ID,
-      client_secret: env.YOUTUBE_CLIENT_SECRET,
-      refresh_token: env.YOUTUBE_REFRESH_TOKEN,
-      grant_type:    "refresh_token"
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "healthy", "test_mode": TEST_MODE,
+        "images_per_video": 3,
+        "pre_dimensions": f"{PRE_WIDTH}x{PRE_HEIGHT}",
+        "out_dimensions": f"{OUT_WIDTH}x{OUT_HEIGHT}",
+        "logo_present": os.path.exists(LOGO_PATH)
     })
-  });
-  if (!r.ok) throw new Error("YouTube token refresh failed: " + r.status);
-  return (await r.json()).access_token;
-}
 
-async function createAnalyticsRecord(job_id, youtube_id, env) {
-  try {
-    await supabaseInsert(env, "analytics", {
-      video_id: job_id, youtube_views: 0, youtube_likes: 0,
-      comment_count: 0, score: 0, created_at: new Date().toISOString()
-    });
-  } catch (e) {
-    console.error("Analytics placeholder failed:", e.message);
-  }
-}
+@app.route("/")
+def home():
+    return jsonify({"status": "india20sixty render pipeline running"})
 
-async function syncYouTubeAnalytics(env) {
-  if (!env.YOUTUBE_CLIENT_ID || !env.YOUTUBE_CLIENT_SECRET || !env.YOUTUBE_REFRESH_TOKEN) {
-    console.log("YouTube credentials not set — skipping analytics sync");
-    return;
-  }
-  console.log("Starting YouTube analytics sync...");
-  try {
-    const jobs = await supabaseGet(env,
-      "jobs?status=eq.complete&youtube_id=not.is.null&order=created_at.desc&limit=50"
-    );
-    const realJobs = jobs.filter(j => j.youtube_id && j.youtube_id !== "TEST_MODE");
-    if (!realJobs.length) { console.log("No YouTube videos to sync"); return; }
-
-    const token   = await getYouTubeToken(env);
-    const batches = [];
-    for (let i = 0; i < realJobs.length; i += 50) batches.push(realJobs.slice(i, i + 50));
-
-    for (const batch of batches) {
-      const ids = batch.map(j => j.youtube_id).join(",");
-      const r   = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids}&access_token=${token}`
-      );
-      if (!r.ok) { console.error("YouTube API error:", r.status); continue; }
-
-      const items = (await r.json()).items || [];
-      for (const item of items) {
-        const stats    = item.statistics || {};
-        const views    = parseInt(stats.viewCount    || 0);
-        const likes    = parseInt(stats.likeCount    || 0);
-        const comments = parseInt(stats.commentCount || 0);
-        const score    = views + likes * 50 + comments * 30;
-        const job      = batch.find(j => j.youtube_id === item.id);
-        if (!job) continue;
-
-        const existing = await supabaseGet(env, `analytics?video_id=eq.${job.id}`);
-        if (existing.length > 0) {
-          await supabasePatch(env, `analytics?video_id=eq.${job.id}`, {
-            youtube_views: views, youtube_likes: likes,
-            comment_count: comments, score, updated_at: new Date().toISOString()
-          });
-        } else {
-          await supabaseInsert(env, "analytics", {
-            video_id: job.id, youtube_views: views, youtube_likes: likes,
-            comment_count: comments, score, created_at: new Date().toISOString()
-          });
-        }
-        console.log(`Synced: ${item.id} | views:${views} likes:${likes} score:${score}`);
-      }
-    }
-
-    await updateCouncilContext(env);
-    console.log("Analytics sync complete");
-  } catch (e) {
-    console.error("Analytics sync failed:", e.message);
-  }
-}
-
-async function updateCouncilContext(env) {
-  try {
-    const topRaw   = await supabaseGet(env, "analytics?order=score.desc&limit=5&select=score,video_id");
-    const flopRaw  = await supabaseGet(env, "analytics?order=score.asc&youtube_views=gte.100&limit=5&select=score,video_id");
-    const allScores = await supabaseGet(env, "analytics?select=score&youtube_views=gte.50");
-    const avgScore  = allScores.length
-      ? Math.round(allScores.reduce((s, r) => s + (r.score || 0), 0) / allScores.length)
-      : 0;
-
-    const topIds  = topRaw.map(r => r.video_id).filter(Boolean);
-    const flopIds = flopRaw.map(r => r.video_id).filter(Boolean);
-    let topTopics = [], flopTopics = [];
-
-    if (topIds.length) {
-      const topJobs = await supabaseGet(env, `jobs?id=in.(${topIds.join(",")})&select=id,topic,council_score`);
-      topTopics = topJobs.map(j => ({
-        topic: j.topic, council_score: j.council_score,
-        analytics_score: (topRaw.find(r => r.video_id === j.id) || {}).score || 0
-      }));
-    }
-    if (flopIds.length) {
-      const flopJobs = await supabaseGet(env, `jobs?id=in.(${flopIds.join(",")})&select=id,topic,council_score`);
-      flopTopics = flopJobs.map(j => ({
-        topic: j.topic, council_score: j.council_score,
-        analytics_score: (flopRaw.find(r => r.video_id === j.id) || {}).score || 0
-      }));
-    }
-
-    await supabasePatch(env, "system_state?id=eq.main", {
-      council_context: JSON.stringify({
-        avg_score: avgScore, total_videos: allScores.length,
-        top_performers: topTopics, worst_performers: flopTopics,
-        updated_at: new Date().toISOString()
-      }),
-      updated_at: new Date().toISOString()
-    });
-    console.log("Council context updated. Avg score:", avgScore);
-  } catch (e) {
-    console.error("Council context update failed:", e.message);
-  }
-}
-
-// ==========================================
-// SUPABASE HELPERS
-// ==========================================
-
-function supabaseHeaders(env) {
-  return {
-    apikey:          env.SUPABASE_ANON_KEY,
-    Authorization:   "Bearer " + (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY),
-    "Content-Type":  "application/json"
-  };
-}
-
-async function supabaseGet(env, endpoint) {
-  const r = await fetch(env.SUPABASE_URL + "/rest/v1/" + endpoint, { headers: supabaseHeaders(env) });
-  if (!r.ok) throw new Error("Supabase GET error: " + r.status + " " + endpoint);
-  return r.json();
-}
-
-async function supabaseInsert(env, table, data) {
-  const r = await fetch(env.SUPABASE_URL + "/rest/v1/" + table, {
-    method:  "POST",
-    headers: { ...supabaseHeaders(env), Prefer: "return=representation" },
-    body:    JSON.stringify(data)
-  });
-  if (!r.ok) { const b = await r.text(); throw new Error("Supabase INSERT error: " + r.status + " " + b.slice(0, 200)); }
-  return (await r.json())[0];
-}
-
-async function supabasePatch(env, endpoint, data) {
-  const r = await fetch(env.SUPABASE_URL + "/rest/v1/" + endpoint, {
-    method:  "PATCH",
-    headers: { ...supabaseHeaders(env), Prefer: "return=minimal" },
-    body:    JSON.stringify(data)
-  });
-  return r.ok;
-}
-
-// ==========================================
-// UTILS
-// ==========================================
-
-function json(data, status) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status: status || 200,
-    headers: {
-      "content-type":                "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "*",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS,PATCH"
-    }
-  });
-}
-
-// ==========================================
-// DASHBOARD
-// ==========================================
-
-const DASHBOARD_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>India20Sixty - Mission Control</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
-<style>
-:root{--bg:#080c14;--surface:#0d1320;--surface2:#111827;--border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);--text:#e8eaf0;--muted:#5a6278;--accent:#00e5ff;--accent2:#ff6b35;--green:#00e676;--yellow:#ffd740;--red:#ff5252;--purple:#b388ff;--font:'Syne',sans-serif;--mono:'DM Mono',monospace}
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;overflow-x:hidden}
-body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear-gradient(rgba(0,229,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none}
-.wrap{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:24px 20px 60px}
-.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;padding-bottom:18px;border-bottom:1px solid var(--border)}
-.logo-name{font-size:1.4rem;font-weight:800;letter-spacing:-0.02em}.logo-name span{color:var(--accent)}
-.logo-sub{font-family:var(--mono);font-size:.62rem;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
-.header-right{display:flex;align-items:center;gap:10px}
-.live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
-.live-label{font-family:var(--mono);font-size:.68rem;color:var(--green);letter-spacing:.1em}
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:22px}
-.stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;position:relative;overflow:hidden;transition:border-color .2s}
-.stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:10px 10px 0 0}
-.stat-all::before{background:var(--accent)}.stat-run::before{background:var(--yellow)}.stat-ok::before{background:var(--green)}.stat-fail::before{background:var(--red)}.stat-topic::before{background:var(--purple)}
-.stat:hover{border-color:var(--border2)}
-.stat-value{font-size:1.8rem;font-weight:800;letter-spacing:-0.03em;line-height:1;margin-bottom:3px}
-.stat-all .stat-value{color:var(--accent)}.stat-run .stat-value{color:var(--yellow)}.stat-ok .stat-value{color:var(--green)}.stat-fail .stat-value{color:var(--red)}.stat-topic .stat-value{color:var(--purple)}
-.stat-label{font-family:var(--mono);font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
-.actions{display:flex;gap:10px;margin-bottom:22px;flex-wrap:wrap}
-.btn{display:flex;align-items:center;gap:7px;padding:10px 20px;border-radius:8px;border:none;font-family:var(--font);font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
-.btn-primary{background:var(--accent);color:#000}.btn-primary:hover{background:#33eaff;transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,229,255,.25)}
-.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}.btn-secondary:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
-.btn-warn{background:rgba(255,107,53,.12);color:var(--accent2);border:1px solid rgba(255,107,53,.25)}.btn-warn:hover{background:rgba(255,107,53,.2);transform:translateY(-1px)}
-.btn-purple{background:rgba(179,136,255,.12);color:var(--purple);border:1px solid rgba(179,136,255,.25)}.btn-purple:hover{background:rgba(179,136,255,.2);transform:translateY(-1px)}
-.btn:disabled{opacity:.4;cursor:not-allowed;transform:none!important}
-.main-grid{display:grid;grid-template-columns:1fr 300px;gap:18px;align-items:start}
-.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:18px}
-.panel-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.panel-title{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
-.refresh-time{font-family:var(--mono);font-size:.63rem;color:var(--muted)}
-.tabs{display:flex;gap:3px;padding:10px 14px;border-bottom:1px solid var(--border)}
-.tab{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:1px solid transparent;background:transparent;font-family:var(--font);font-size:.78rem;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s}
-.tab:hover{color:var(--text);background:var(--surface2)}.tab.active{color:var(--text);background:var(--surface2);border-color:var(--border2)}
-.tab-count{font-family:var(--mono);font-size:.63rem;padding:1px 6px;border-radius:20px;font-weight:500}
-.tab[data-tab=all] .tab-count{background:rgba(0,229,255,.12);color:var(--accent)}
-.tab[data-tab=running] .tab-count{background:rgba(255,215,64,.12);color:var(--yellow)}
-.tab[data-tab=complete] .tab-count{background:rgba(0,230,118,.12);color:var(--green)}
-.tab[data-tab=failed] .tab-count{background:rgba(255,82,82,.12);color:var(--red)}
-.job-item{display:grid;grid-template-columns:1fr 110px 150px 68px;gap:12px;padding:13px 18px;border-bottom:1px solid var(--border);align-items:center;transition:background .15s}
-.job-item:hover{background:rgba(255,255,255,.02)}.job-item:last-child{border-bottom:none}
-.job-topic{font-size:.85rem;font-weight:600;color:var(--text);line-height:1.35;margin-bottom:4px}
-.job-meta{font-family:var(--mono);font-size:.65rem;color:var(--muted);display:flex;gap:7px;flex-wrap:wrap;align-items:center}
-.job-err{color:#ff6b6b;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:5px;font-family:var(--mono);font-size:.67rem;font-weight:500;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-.badge-dot{width:5px;height:5px;border-radius:50%;background:currentColor}
-.b-pending{background:rgba(255,215,64,.1);color:var(--yellow);border:1px solid rgba(255,215,64,.2)}
-.b-processing,.b-upload{background:rgba(0,229,255,.1);color:var(--accent);border:1px solid rgba(0,229,255,.2)}
-.b-images,.b-voice{background:rgba(179,136,255,.1);color:var(--purple);border:1px solid rgba(179,136,255,.2)}
-.b-render{background:rgba(255,107,53,.1);color:var(--accent2);border:1px solid rgba(255,107,53,.2)}
-.b-complete,.b-test_complete{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.2)}
-.b-failed{background:rgba(255,82,82,.1);color:var(--red);border:1px solid rgba(255,82,82,.2)}
-.b-pending .badge-dot,.b-processing .badge-dot{animation:pulse 1.4s infinite}
-.prog-wrap{display:flex;flex-direction:column;gap:4px}
-.prog-bar{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
-.prog-fill{height:100%;border-radius:2px;transition:width .6s ease}
-.prog-pct{font-family:var(--mono);font-size:.62rem;color:var(--muted)}
-.yt-link{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:.67rem}
-.yt-link:hover{color:#fff}
-.retry-pip{font-family:var(--mono);font-size:.62rem;color:var(--accent2);background:rgba(255,107,53,.1);border:1px solid rgba(255,107,53,.2);padding:1px 5px;border-radius:3px}
-.time-cell{font-family:var(--mono);font-size:.68rem;color:var(--muted);text-align:right}
-.empty{padding:40px 18px;text-align:center;color:var(--muted);font-family:var(--mono);font-size:.76rem;line-height:1.8}
-.empty-icon{font-size:1.8rem;margin-bottom:10px;opacity:.35;display:block}
-.topic-item{padding:13px 16px;border-bottom:1px solid var(--border);transition:background .15s}
-.topic-item:hover{background:rgba(255,255,255,.02)}.topic-item:last-child{border-bottom:none}
-.topic-text{font-size:.8rem;font-weight:600;color:var(--text);line-height:1.4;margin-bottom:5px}
-.topic-footer{display:flex;align-items:center;justify-content:space-between}
-.score-pill{font-family:var(--mono);font-size:.65rem;font-weight:500;padding:2px 7px;border-radius:4px}
-.sc-hi{background:rgba(0,230,118,.12);color:var(--green)}.sc-med{background:rgba(255,215,64,.12);color:var(--yellow)}.sc-lo{background:rgba(255,82,82,.12);color:var(--red)}
-.source-tag{font-family:var(--mono);font-size:.62rem;color:var(--muted)}
-.analytics-row{display:grid;grid-template-columns:1fr 70px 70px 80px;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border);align-items:center}
-.analytics-row:last-child{border-bottom:none}
-.analytics-topic{font-weight:600;font-size:.78rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.analytics-num{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-align:right}
-.analytics-score{font-family:var(--mono);font-size:.72rem;color:var(--yellow);text-align:right;font-weight:600}
-.debug-box{background:rgba(0,0,0,.4);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;font-family:var(--mono);font-size:.72rem;color:var(--muted);line-height:1.8;margin:0 0 18px}
-.debug-box .ok{color:var(--green)}.debug-box .err{color:var(--red)}.debug-box .key{color:var(--accent)}
-::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-@media(max-width:900px){.stats{grid-template-columns:repeat(3,1fr)}.main-grid{grid-template-columns:1fr}.job-item{grid-template-columns:1fr auto}.job-item>.prog-wrap,.job-item>.time-cell{display:none}}
-@media(max-width:600px){.stats{grid-template-columns:repeat(2,1fr)}.actions{flex-direction:column}}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header class="header">
-    <div>
-      <div class="logo-name">&#127470;&#127475; India<span>20Sixty</span></div>
-      <div class="logo-sub">Mission Control</div>
-    </div>
-    <div class="header-right">
-      <div class="live-dot"></div>
-      <span class="live-label">Live</span>
-    </div>
-  </header>
-
-  <div class="stats">
-    <div class="stat stat-all"><div class="stat-value" id="s-total">-</div><div class="stat-label">Total Jobs</div></div>
-    <div class="stat stat-run"><div class="stat-value" id="s-running">-</div><div class="stat-label">Running</div></div>
-    <div class="stat stat-ok"><div class="stat-value" id="s-complete">-</div><div class="stat-label">Complete</div></div>
-    <div class="stat stat-fail"><div class="stat-value" id="s-failed">-</div><div class="stat-label">Failed</div></div>
-    <div class="stat stat-topic"><div class="stat-value" id="s-topics">-</div><div class="stat-label">Topics Ready</div></div>
-  </div>
-
-  <div class="actions">
-    <button class="btn btn-primary"   id="btn-create"   onclick="createJob()">&#9654; Create Video</button>
-    <button class="btn btn-secondary" id="btn-topic"    onclick="generateTopic()">&#10022; Generate Topic</button>
-    <button class="btn btn-purple"    id="btn-replenish" onclick="replenishQueue()">&#8635; Replenish Queue</button>
-    <button class="btn btn-warn"      id="btn-test"     onclick="testRender()">&#9741; Test Render</button>
-    <button class="btn btn-secondary"                   onclick="syncAnalytics()">&#8635; Sync Analytics</button>
-  </div>
-
-  <div id="debug-area"></div>
-
-  <div class="main-grid">
-    <div>
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title">Jobs</span>
-          <span class="refresh-time" id="last-refresh"></span>
-        </div>
-        <div class="tabs">
-          <button class="tab active" data-tab="all"      onclick="switchTab('all')">All <span class="tab-count" id="tc-all">0</span></button>
-          <button class="tab"        data-tab="running"  onclick="switchTab('running')">Running <span class="tab-count" id="tc-running">0</span></button>
-          <button class="tab"        data-tab="complete" onclick="switchTab('complete')">Complete <span class="tab-count" id="tc-complete">0</span></button>
-          <button class="tab"        data-tab="failed"   onclick="switchTab('failed')">Failed <span class="tab-count" id="tc-failed">0</span></button>
-        </div>
-        <div id="job-list"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">Analytics — Top Performers</span></div>
-        <div id="analytics-list"></div>
-      </div>
-    </div>
-    <div>
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">Council Queue</span></div>
-        <div id="topics-list"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-const PROG={pending:8,processing:35,images:55,voice:68,render:82,upload:93,complete:100,test_complete:100,failed:0};
-const PCOL={pending:'#ffd740',processing:'#00e5ff',images:'#b388ff',voice:'#b388ff',render:'#ff6b35',upload:'#00e5ff',complete:'#00e676',test_complete:'#00e676',failed:'#ff5252'};
-const BLBL={pending:'Pending',processing:'Processing',images:'Images',voice:'Voice',render:'Rendering',upload:'Uploading',complete:'Complete',test_complete:'Complete',failed:'Failed'};
-let activeTab='all', allJobs=[];
-
-function ago(iso){const s=Math.floor((Date.now()-new Date(iso))/1000);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';}
-function fmt(n){if(n>=1000000)return (n/1000000).toFixed(1)+'M';if(n>=1000)return (n/1000).toFixed(1)+'K';return String(n);}
-function scClass(s){return s>=80?'sc-hi':s>=60?'sc-med':'sc-lo';}
-function badge(status){const s=status||'unknown';const dot=['pending','processing'].includes(s)?'<span class="badge-dot"></span>':'';return '<span class="badge b-'+s+'">'+dot+(BLBL[s]||s)+'</span>';}
-
-function switchTab(tab){
-  activeTab=tab;
-  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
-  renderJobs();
-}
-
-function filterJobs(jobs,tab){
-  if(tab==='running') return jobs.filter(j=>['pending','processing','images','voice','render','upload'].includes(j.status));
-  if(tab==='complete') return jobs.filter(j=>j.status==='complete'||j.status==='test_complete');
-  if(tab==='failed') return jobs.filter(j=>j.status==='failed');
-  return jobs;
-}
-
-function renderJobs(){
-  const el=document.getElementById('job-list');
-  const jobs=filterJobs(allJobs,activeTab);
-  if(!jobs.length){
-    const ico={all:'&#128354;',running:'&#9203;',complete:'&#9989;',failed:'&#127881;'}[activeTab]||'';
-    const msg={all:'No jobs yet.',running:'No active jobs.',complete:'No completed jobs yet.',failed:'No failures!'}[activeTab]||'';
-    el.innerHTML='<div class="empty"><span class="empty-icon">'+ico+'</span>'+msg+'</div>';return;
-  }
-  el.innerHTML=jobs.map(j=>{
-    const prog=PROG[j.status]||0, col=PCOL[j.status]||'#5a6278';
-    const yt=j.youtube_id&&j.youtube_id!=='TEST_MODE'
-      ?'<a class="yt-link" href="https://youtube.com/watch?v='+j.youtube_id+'" target="_blank">&#9654; Watch</a>'
-      :(j.youtube_id==='TEST_MODE'?'<span style="color:var(--muted);font-size:.65rem;font-family:var(--mono)">test</span>':'');
-    const err=j.error?'<span class="job-err" title="'+j.error+'">'+j.error.slice(0,45)+(j.error.length>45?'...':'')+'</span>':'';
-    const retry=j.retries>0?'<span class="retry-pip">x'+j.retries+'</span>':'';
-    return '<div class="job-item"><div><div class="job-topic">'+(j.topic||'Untitled')+'</div>'+
-      '<div class="job-meta"><span>'+(j.council_score?'Score '+j.council_score:'Fallback')+'</span>'+err+retry+(yt?'<span>'+yt+'</span>':'')+'</div></div>'+
-      '<div>'+badge(j.status)+'</div>'+
-      '<div class="prog-wrap"><div class="prog-bar"><div class="prog-fill" style="width:'+prog+'%;background:'+col+'"></div></div>'+
-      '<div class="prog-pct">'+prog+'%</div></div>'+
-      '<div class="time-cell">'+(j.updated_at?ago(j.updated_at)+' ago':'–')+'</div></div>';
-  }).join('');
-}
-
-async function loadJobs(){
-  try{
-    const r=await fetch('/jobs'); allJobs=await r.json();
-    const run=allJobs.filter(j=>['pending','processing','images','voice','render','upload'].includes(j.status));
-    const ok=allJobs.filter(j=>j.status==='complete'||j.status==='test_complete');
-    const fail=allJobs.filter(j=>j.status==='failed');
-    document.getElementById('s-total').textContent=allJobs.length;
-    document.getElementById('s-running').textContent=run.length;
-    document.getElementById('s-complete').textContent=ok.length;
-    document.getElementById('s-failed').textContent=fail.length;
-    document.getElementById('tc-all').textContent=allJobs.length;
-    document.getElementById('tc-running').textContent=run.length;
-    document.getElementById('tc-complete').textContent=ok.length;
-    document.getElementById('tc-failed').textContent=fail.length;
-    document.getElementById('last-refresh').textContent='Updated '+new Date().toLocaleTimeString();
-    renderJobs();
-  }catch(e){console.error('loadJobs:',e);}
-}
-
-async function loadTopics(){
-  try{
-    const r=await fetch('/topics'); const topics=await r.json();
-    const ready=topics.filter(t=>!t.used&&t.council_score>=70);
-    document.getElementById('s-topics').textContent=ready.length;
-    const el=document.getElementById('topics-list');
-    if(!ready.length){el.innerHTML='<div class="empty"><span class="empty-icon">&#128354;</span>No approved topics.<br>Click Replenish Queue.</div>';return;}
-    el.innerHTML=ready.slice(0,8).map(t=>
-      '<div class="topic-item"><div class="topic-text">'+t.topic+'</div>'+
-      '<div class="topic-footer"><span class="score-pill '+scClass(t.council_score)+'">'+t.council_score+'/100</span>'+
-      '<span class="source-tag">'+(t.source||'unknown')+'</span></div></div>'
-    ).join('');
-  }catch(e){console.error('loadTopics:',e);}
-}
-
-async function loadAnalytics(){
-  try{
-    const r=await fetch('/analytics'); const rows=await r.json();
-    const el=document.getElementById('analytics-list');
-    if(!rows.length||rows.every(r=>!r.youtube_views)){
-      el.innerHTML='<div class="empty"><span class="empty-icon">&#128202;</span>No analytics yet.<br>Syncs daily after videos are live.</div>';return;
-    }
-    const sorted=rows.filter(r=>r.youtube_views>0).sort((a,b)=>b.score-a.score).slice(0,8);
-    el.innerHTML='<div class="analytics-row" style="opacity:.4;font-size:.65rem;font-family:var(--mono)"><div>TOPIC</div><div style="text-align:right">VIEWS</div><div style="text-align:right">LIKES</div><div style="text-align:right">SCORE</div></div>'+
-    sorted.map(r=>{
-      const job=allJobs.find(j=>j.id===r.video_id)||{};
-      return '<div class="analytics-row"><div class="analytics-topic">'+(job.topic||r.video_id||'–')+'</div>'+
-        '<div class="analytics-num">'+fmt(r.youtube_views||0)+'</div>'+
-        '<div class="analytics-num">'+fmt(r.youtube_likes||0)+'</div>'+
-        '<div class="analytics-score">'+fmt(r.score||0)+'</div></div>';
-    }).join('');
-  }catch(e){console.error('loadAnalytics:',e);}
-}
-
-function showDebug(html){
-  const el=document.getElementById('debug-area');
-  el.innerHTML='<div class="debug-box">'+html+'</div>';
-}
-
-async function testRender(){
-  const btn=document.getElementById('btn-test');
-  btn.disabled=true;btn.innerHTML='&#9741; Testing...';
-  try{
-    const r=await fetch('/test-render'); const d=await r.json();
-    const col=d.ok?'var(--green)':'var(--red)';
-    showDebug(
-      '<span class="key">URL called:</span> '+d.health_url_called+'<br>'+
-      '<span class="key">HTTP status:</span> <span style="color:'+col+'">'+d.status+'</span><br>'+
-      '<span class="key">Response:</span> '+(d.response||d.error||'–')+'<br>'+
-      '<span class="key">RENDER_PIPELINE_URL:</span> '+d.render_pipeline_url
-    );
-  }catch(e){showDebug('<span class="err">Test failed: '+e.message+'</span>');}
-  finally{btn.disabled=false;btn.innerHTML='&#9741; Test Render';}
-}
-
-async function replenishQueue(){
-  const btn=document.getElementById('btn-replenish');
-  btn.disabled=true;btn.innerHTML='&#8635; Replenishing...';
-  try{
-    const r=await fetch('/replenish',{method:'POST'});
-    const d=await r.json();
-    showDebug('<span class="key">Replenish triggered.</span> Check topic-council-worker logs for progress.<br>Status: '+JSON.stringify(d));
-    setTimeout(()=>{loadTopics();},3000);
-  }catch(e){showDebug('<span class="err">Replenish failed: '+e.message+'</span>');}
-  finally{btn.disabled=false;btn.innerHTML='&#8635; Replenish Queue';}
-}
-
-async function syncAnalytics(){
-  try{await fetch('/sync-analytics',{method:'POST'});showDebug('<span class="ok">Analytics sync started. Refresh in 30s.</span>');}
-  catch(e){showDebug('<span class="err">Sync failed: '+e.message+'</span>');}
-}
-
-async function createJob(){
-  const btn=document.getElementById('btn-create');
-  btn.disabled=true;btn.innerHTML='&#9711; Creating...';
-  try{
-    const r=await fetch('/run',{method:'POST'}); const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    switchTab('running');loadJobs();loadTopics();
-  }catch(e){alert('Error: '+e.message);}
-  finally{btn.disabled=false;btn.innerHTML='&#9654; Create Video';}
-}
-
-async function generateTopic(){
-  const btn=document.getElementById('btn-topic');
-  btn.disabled=true;btn.innerHTML='&#9711; Generating...';
-  try{
-    const topic=prompt('Topic idea (blank = auto-generate):','');
-    if(topic===null)return;
-    const r=await fetch('/generate-topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:topic||'Future of AI in India'})});
-    const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    showDebug(d.status==='approved'
-      ?'<span class="ok">Council approved! Score: '+(d.evaluation?.council_score||'?')+'/100</span>'
-      :'<span class="err">Rejected by Council. Try a different angle.</span>');
-    loadTopics();
-  }catch(e){alert('Error: '+e.message);}
-  finally{btn.disabled=false;btn.innerHTML='&#10022; Generate Topic';}
-}
-
-loadJobs();loadTopics();loadAnalytics();
-setInterval(()=>{loadJobs();loadTopics();loadAnalytics();},6000);
-</script>
-</body>
-</html>`;
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, threaded=True)
