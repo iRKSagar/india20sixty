@@ -9,6 +9,7 @@ import traceback
 import re
 import requests
 import random
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime
 
@@ -20,17 +21,8 @@ app = modal.App("india20sixty")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install(
-        "ffmpeg",
-        "fonts-liberation",
-        "fonts-dejavu-core",
-        "fonts-noto",
-    )
-    .pip_install(
-        "requests",
-        "flask",
-        "fastapi[standard]",
-    )
+    .apt_install("ffmpeg", "fonts-liberation", "fonts-dejavu-core", "fonts-noto")
+    .pip_install("requests", "flask", "fastapi[standard]")
 )
 
 secrets = [modal.Secret.from_name("india20sixty-secrets")]
@@ -50,46 +42,35 @@ LEONARDO_MODELS = [
 ]
 
 # ==========================================
-# SAFE FFMPEG EFFECT LIBRARY
-# All effects tested on debian ffmpeg 5.x+
+# EFFECT LIBRARY
 # ==========================================
 
+# Color grades — eq + unsharp only (proven safe on Modal debian ffmpeg)
 SCENE_GRADES = [
-    {"eq": "eq=contrast=1.18:brightness=0.03:saturation=1.35", "sharp": "unsharp=5:5:0.8:3:3:0.0", "label": "warm"},
-    {"eq": "eq=contrast=1.12:brightness=0.0:saturation=1.1",   "sharp": "unsharp=3:3:1.0:3:3:0.0", "label": "cool"},
-    {"eq": "eq=contrast=1.08:brightness=0.05:saturation=1.45", "sharp": "unsharp=5:5:0.6:3:3:0.0", "label": "golden"},
+    {"eq": "eq=contrast=1.18:brightness=0.03:saturation=1.35",
+     "sharp": "unsharp=5:5:0.8:3:3:0.0", "label": "warm"},
+    {"eq": "eq=contrast=1.12:brightness=0.0:saturation=1.1",
+     "sharp": "unsharp=3:3:1.0:3:3:0.0", "label": "cool"},
+    {"eq": "eq=contrast=1.08:brightness=0.05:saturation=1.45",
+     "sharp": "unsharp=5:5:0.6:3:3:0.0", "label": "golden"},
 ]
 
-# ── KEN BURNS CROP OFFSETS ───────────────────────────────────────
-# Static offsets per scene — image scaled to 110%, then cropped
-# from different corners/positions = visual variety without dynamic expressions
-# 10% headroom: dx=108, dy=192
+# Ken Burns — scale 110%, crop from 3 different positions per scene
+KB_SCALE_W = int(OUT_WIDTH  * 1.10)
+KB_SCALE_H = int(OUT_HEIGHT * 1.10)
+KB_DX      = KB_SCALE_W - OUT_WIDTH
+KB_DY      = KB_SCALE_H - OUT_HEIGHT
 
-KB_SCALE_W = int(OUT_WIDTH  * 1.10)   # 1188
-KB_SCALE_H = int(OUT_HEIGHT * 1.10)   # 2112
-KB_DX      = KB_SCALE_W - OUT_WIDTH   # 108
-KB_DY      = KB_SCALE_H - OUT_HEIGHT  # 192
-
-# (x_offset, y_offset, label) — different framing per scene
 CROP_POSITIONS = [
-    (0,          0,          "top-left"),        # Scene 0: crop from top-left
-    (KB_DX,      KB_DY // 2, "mid-right"),       # Scene 1: crop from mid-right
-    (KB_DX // 2, KB_DY,      "bottom-center"),   # Scene 2: crop from bottom-center
+    (0,          0,          "top-left"),
+    (KB_DX,      KB_DY // 2, "mid-right"),
+    (KB_DX // 2, KB_DY,      "bottom-center"),
 ]
 
-# ── XFADE TRANSITIONS ────────────────────────────────────────────
-# All tested and working in ffmpeg 5.x on debian
-XFADE_TRANSITIONS = [
-    "dissolve",
-    "fade",
-    "wipeleft",
-    "wiperight",
-    "slideleft",
-    "slideright",
-    "fadeblack",
-]
+XFADE_TRANSITIONS = ["dissolve", "fade", "wipeleft", "wiperight",
+                     "slideleft", "slideright", "fadeblack"]
 
-# ── VISUAL STYLES FOR SCENE PROMPT GENERATION ───────────────────
+# Visual variety pools
 VISUAL_STYLES = [
     "cinematic ultra-realistic photography, golden hour, warm saffron palette, 8K",
     "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic",
@@ -112,7 +93,6 @@ SHOT_TYPES = [
      "golden hour wide establishing", "emotional cinematic close-up"],
 ]
 
-# Fallback templates if GPT scene generation fails
 SCENE_TEMPLATES_FALLBACK = [
     "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, saffron teal palette, cinematic ultra-realistic photography",
     "Indian scientists in smart traditional attire, holographic data displays, temple architecture meets research campus, dramatic cinematic lighting",
@@ -140,8 +120,10 @@ def health():
     return {
         "status":   "healthy",
         "platform": "modal",
-        "effects":  ["static_ken_burns", "color_curves", "eq_grade",
-                     "unsharp", "vignette", "fade_in_out", "xfade", "captions"],
+        "version":  "3.0-factual",
+        "effects":  ["scale_lanczos", "kb_crop", "eq", "unsharp",
+                     "xfade", "captions", "watermark", "loudnorm"],
+        "sources":  ["google_news_rss", "pib_rss", "reddit"],
         "out":      f"{OUT_WIDTH}x{OUT_HEIGHT}",
         "memory":   "2GB",
     }
@@ -151,13 +133,7 @@ def health():
 # MAIN PIPELINE
 # ==========================================
 
-@app.function(
-    image=image,
-    secrets=secrets,
-    cpu=2.0,
-    memory=2048,
-    timeout=600,
-)
+@app.function(image=image, secrets=secrets, cpu=2.0, memory=2048, timeout=600)
 def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
 
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
@@ -189,12 +165,10 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
                 payload.update(data)
             requests.patch(
                 f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}",
-                headers={
-                    "apikey": SUPABASE_ANON_KEY,
-                    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal"
-                },
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                         "Content-Type": "application/json",
+                         "Prefer": "return=minimal"},
                 json=payload, timeout=10
             )
         except Exception as e:
@@ -204,11 +178,9 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
         try:
             requests.post(
                 f"{SUPABASE_URL}/rest/v1/render_logs",
-                headers={
-                    "apikey": SUPABASE_ANON_KEY,
-                    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                    "Content-Type": "application/json"
-                },
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                         "Content-Type": "application/json"},
                 json={"job_id": job_id, "message": str(message)[:500]},
                 timeout=5
             )
@@ -217,10 +189,11 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
 
     def get_audio_duration(path):
         try:
-            r = subprocess.run([
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", path
-            ], capture_output=True, text=True, timeout=10)
+            r = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True, timeout=10
+            )
             return float(r.stdout.strip())
         except Exception:
             return 27.0
@@ -228,11 +201,9 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
     def run_ffmpeg(cmd, label, timeout=300):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
-            # Print FULL stderr so Modal logs show exact failing filter
-            print(f"  ffmpeg [{label}] FAILED (full error):")
-            print(result.stderr)
-            err = result.stderr[-400:].strip()
-            raise Exception(f"{label} failed: {err[-200:]}")
+            print(f"  ffmpeg [{label}] FAILED:")
+            print(result.stderr[-600:])
+            raise Exception(f"{label} failed: {result.stderr[-200:]}")
         return result
 
     def escape_dt(text):
@@ -242,23 +213,96 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
         text = text.replace('%', '\\%')
         return text
 
-    # ── SCRIPT ───────────────────────────────────────────────────
+    # ==========================================
+    # REAL SOURCE FETCHING
+    # Pulls actual news headlines before scripting
+    # so every video is anchored to real facts
+    # ==========================================
 
-    def generate_script():
-        print("SCRIPT START")
-        prompt = f"""You are a viral YouTube Shorts scriptwriter for India20Sixty.
+    def fetch_google_news_rss(query):
+        """Fetch real headlines from Google News RSS — no API key needed."""
+        try:
+            encoded = requests.utils.quote(query)
+            url     = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+            r       = requests.get(url, timeout=10,
+                                   headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            root    = ET.fromstring(r.content)
+            items   = root.findall(".//item")[:5]
+            results = []
+            for item in items:
+                title  = item.findtext("title", "").strip()
+                source = item.findtext("source", "").strip()
+                pubdate = item.findtext("pubDate", "").strip()
+                if title:
+                    results.append({
+                        "headline": title,
+                        "source":   source or "Google News",
+                        "date":     pubdate[:16] if pubdate else ""
+                    })
+            print(f"  Google News: {len(results)} headlines")
+            return results
+        except Exception as e:
+            print(f"  Google News failed: {e}")
+            return []
 
-Topic: {topic}
+    def fetch_pib_rss():
+        """Fetch official Indian government press releases from PIB."""
+        try:
+            url = "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3"
+            r   = requests.get(url, timeout=10,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            root  = ET.fromstring(r.content)
+            items = root.findall(".//item")[:5]
+            results = []
+            for item in items:
+                title = item.findtext("title", "").strip()
+                if title:
+                    results.append({
+                        "headline": title,
+                        "source":   "PIB — Press Information Bureau of India",
+                        "date":     item.findtext("pubDate", "")[:16]
+                    })
+            print(f"  PIB: {len(results)} releases")
+            return results
+        except Exception as e:
+            print(f"  PIB failed: {e}")
+            return []
 
-Write exactly 8 punchy lines:
-- Line 1: Shocking hook (6-10 words) — stop the scroll
-- Lines 2-3: Bold near-future predictions
-- Lines 4-6: Vivid specific details
-- Line 7: Emotional payoff — pride, wonder
-- Line 8: Question demanding a comment
-- 70% English + 30% Hinglish
-- Do NOT say "2060" — use "near future", "by 2035", "soon"
-- No numbering, no labels, max 12 words per line"""
+    def extract_fact_anchor(topic, headlines):
+        """
+        Use GPT to extract the most relevant fact + stat
+        from real headlines for use in the script.
+        """
+        if not headlines:
+            return None
+
+        headlines_text = "\n".join(
+            f"- {h['headline']} ({h['source']})"
+            for h in headlines[:8]
+        )
+
+        prompt = f"""You are a fact-checker for an Indian YouTube channel about India's future.
+
+Topic we are covering: "{topic}"
+
+Real headlines from today:
+{headlines_text}
+
+Find the MOST RELEVANT headline to our topic.
+Extract a factual anchor we can use in the script.
+
+Return ONLY valid JSON:
+{{
+  "headline": "exact headline text",
+  "source": "source name",
+  "key_fact": "one specific fact, number, or stat from this headline",
+  "relevance": "why this is relevant to our topic",
+  "found": true
+}}
+
+If NO headline is relevant, return: {{"found": false}}"""
 
         try:
             r = requests.post(
@@ -267,27 +311,136 @@ Write exactly 8 punchy lines:
                          "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
                       "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.85, "max_tokens": 400},
+                      "temperature": 0.2, "max_tokens": 300},
+                timeout=20
+            )
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            start   = content.find('{')
+            end     = content.rfind('}') + 1
+            data    = json.loads(content[start:end])
+            if data.get("found"):
+                print(f"  Fact anchor: {data.get('key_fact', '')[:80]}")
+                return data
+        except Exception as e:
+            print(f"  Fact extraction failed: {e}")
+        return None
+
+    def research_topic(topic):
+        """
+        Pull real sources and extract a fact anchor for the script.
+        Returns fact_package dict or None if nothing relevant found.
+        """
+        print("\n[Research]")
+
+        # Search multiple angles
+        queries   = [topic, f"{topic} India", f"{topic} 2025 India government"]
+        headlines = []
+        for q in queries:
+            headlines += fetch_google_news_rss(q)
+            if len(headlines) >= 8:
+                break
+
+        # Also pull PIB for government announcements
+        pib_items = fetch_pib_rss()
+        headlines += pib_items
+
+        # Deduplicate by headline text
+        seen, unique = set(), []
+        for h in headlines:
+            if h["headline"] not in seen:
+                seen.add(h["headline"])
+                unique.append(h)
+
+        print(f"  Total unique headlines: {len(unique)}")
+
+        if not unique:
+            print("  No headlines found — proceeding without fact anchor")
+            return None
+
+        return extract_fact_anchor(topic, unique)
+
+    # ── SCRIPT ───────────────────────────────────────────────────
+
+    def generate_script(fact_package=None):
+        print("SCRIPT START")
+
+        # Build fact anchor section for prompt
+        if fact_package and fact_package.get("found"):
+            fact_section = f"""
+REAL FACT ANCHOR — you MUST use this in the script:
+Headline: {fact_package['headline']}
+Source: {fact_package['source']}
+Key fact: {fact_package['key_fact']}
+
+Ground your story in this real fact. Do not contradict it.
+Do not invent statistics beyond what this provides."""
+        else:
+            fact_section = """
+No specific headline found. Use general knowledge about this topic.
+Only make claims you are confident are accurate.
+Avoid specific numbers you are not sure about."""
+
+        prompt = f"""You are writing a voiceover for India20Sixty — Indian YouTube Shorts about India's real near future.
+
+Topic: {topic}
+{fact_section}
+
+MANDATORY LANGUAGE RULE — READ CAREFULLY:
+You MUST write in Hinglish. This is non-negotiable.
+At least 35% of all words must be Hindi or Urdu words.
+If your output is mostly English sentences — you have FAILED this task.
+
+Natural code-switching — NOT translated Hindi. The way a smart Delhi/Mumbai 25-year-old actually talks:
+Use these Hindi/Urdu words naturally: dekho, yaar, soch lo, matlab, iska matlab, lekin, woh bhi,
+abhi, pehle, phir, toh, kyunki, jaldi, bohot, sirf, bilkul, arre, kya hua, ho raha hai,
+ban raha hai, aa raha hai, kar rahe hain, aapke liye, poore desh mein, gaon mein, sheher mein,
+ab tak, kitna, kuch, koi, sab, haan, nahi, zaroor, seedha, sach mein
+
+EXAMPLE — study this and match this energy:
+"Dekho — AIIMS Delhi mein ek AI ne sirf 90 seconds mein cancer pakad liya... 95% accuracy ke saath, yaar. Sarkar ne already ₹3,000 crore approve kar diye hain — 1.5 lakh gawon tak pohunchane ke liye. Iska matlab aapke gaon mein bhi, jaldi hi... koi waiting list nahi, koi shahar nahi jaana. Lekin ek sawal hai — kya infrastructure ready hai? Technology toh aa gayi, lekin baaki cheezein? Comment mein batao."
+
+NARRATION STRUCTURE — 8 flowing sentences:
+1. Shocking hook with real fact — Hinglish from word one
+2. What is actually happening right now
+3. Scale — numbers, money, reach
+4. What this means for regular Indians — vivid and specific
+5. The challenge or twist — honest, not all rosy
+6. Near future — "5 saal mein", "by 2030", "already testing kar rahe hain"
+7. Emotional moment — pride or urgency in Hindi
+8. Specific debate question — not generic
+
+Rules: use "..." for pauses, no "2060", no invented stats, 8 sentences flowing NOT a list.
+Write for: {topic}"""
+
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.88, "max_tokens": 450},
                 timeout=30
             )
             r.raise_for_status()
             raw   = r.json()["choices"][0]["message"]["content"].strip()
-            lines = [re.sub(r'^[\d]+[.)]\s*', '', l.strip())
+            lines = [re.sub(r'^[\d]+[.)]\s*|^[-•]\s*', '', l.strip())
                      for l in raw.split('\n') if l.strip()]
             script = ' '.join(lines)
-            print(f"SCRIPT DONE ({len(lines)} lines): {script[:100]}...")
+            print(f"SCRIPT DONE ({len(lines)} lines): {script[:120]}...")
             return script, lines
         except Exception as e:
             print(f"SCRIPT FAILED: {e}")
             fallback = [
-                f"Yeh soch lo — {topic} reality ban raha hai.",
-                "India ka future ab sirf sapna nahi.",
-                "Hamare engineers iss par kaam kar rahe hain.",
-                "Ek dasak mein sab kuch badal jayega.",
-                "Technology aur tradition ka perfect blend.",
-                "Duniya dekh rahi hai, hum lead kar rahe hain.",
-                "Yeh sirf shuruaat hai — best abhi aana baaki hai.",
-                "Kya aap is future ka hissa banana chahte hain?"
+                f"Socho agar kal subah, {topic} India mein reality ban jaye...",
+                "Yeh sirf kisi science fiction ki kahani nahi.",
+                "Desh bhar ke scientists aur engineers iss sapne ko haqeeqat bana rahe hain.",
+                "Already kai projects shuru ho chuke hain — aur results aa rahe hain.",
+                "Jo aaj impossible lagta hai, woh kal normal ho jayega.",
+                "India sirf follow nahi karta — ab India lead karta hai.",
+                "Hamare daadi-nani ne bullock carts dekhe, humne smartphones dekhe.",
+                "Aapko kya lagta hai — kya hum ready hain? Comment karo."
             ]
             return ' '.join(fallback), fallback
 
@@ -327,56 +480,111 @@ Script: {full}"""
                 caps.append(' '.join(chunk) if chunk else "INDIA KA FUTURE")
             return caps[:9]
 
-    # ── DYNAMIC SCENE PROMPTS ─────────────────────────────────────
+    # ── SCENE PROMPTS ─────────────────────────────────────────────
 
-    def generate_scene_prompts():
-        style = random.choice(VISUAL_STYLES)
-        shots = [random.choice(SHOT_TYPES[i]) for i in range(3)]
+    def generate_scene_prompts(fact_package=None):
+        # Scenes 2+3 use randomised styles for variety
+        style_insight = random.choice(VISUAL_STYLES)
+        style_ending  = random.choice([s for s in VISUAL_STYLES if s != style_insight])
+        shot_insight  = random.choice(SHOT_TYPES[1])
+        shot_ending   = random.choice(SHOT_TYPES[2])
 
-        prompt = f"""Create 3 cinematic image prompts for a YouTube Short about: "{topic}"
+        fact_hint = ""
+        if fact_package and fact_package.get("found"):
+            fact_hint = f"\nReal context to incorporate: {fact_package.get('key_fact','')}"
 
-Scene 1 (Hook): Shocking, visually arresting opening image
-Scene 2 (Insight): The core technology/innovation in action
-Scene 3 (Ending): Hopeful, emotional, wide-angle payoff shot
+        # Scene 1 — HOOK IMAGE: always a dedicated showstopper
+        # High contrast, dramatic, instantly communicates the topic
+        # Must make viewer stop scrolling and rewatch
+        hook_prompt_request = f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
 
-Rules:
-- SPECIFIC to "{topic}" — not generic India scenes
-- Include real visual elements related to the topic
-- Include Indian cultural context
-- All use this style: {style}
-- Scene 1 shot type: {shots[0]}
-- Scene 2 shot type: {shots[1]}
-- Scene 3 shot type: {shots[2]}
-- 20-35 words each, no labels
+Topic: "{topic}"{fact_hint}
 
-Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
+This image appears in the FIRST 2 SECONDS. It must:
+- Be visually SHOCKING or deeply CONTRASTING — dark vs light, old vs new, small vs massive
+- Immediately communicate what the topic is WITHOUT text
+- Create a feeling of AWE, URGENCY, or CURIOSITY in 0.5 seconds
+- Be hyper-realistic cinematic photography quality
+- Feature real Indian visual elements (people, places, colors)
+- Use EXTREME contrast — either very dark dramatic lighting OR blinding bright colors
+- Include ONE dominant subject that fills 70% of the frame
+- Think: the kind of image that makes you stop mid-scroll and say "what IS this?"
+
+Style: ultra high contrast cinematic photography, extreme dramatic lighting, 
+8K hyperdetailed, film grain, shot on ARRI Alexa, award-winning photojournalism
+
+Return ONLY the image prompt as a single string — no explanation, no labels."""
+
+        scene2_3_request = f"""Create 2 cinematic image prompts for scenes 2 and 3 of a YouTube Short about: "{topic}"{fact_hint}
+
+Scene 2 (Insight — the technology/change in action):
+- Style: {style_insight}
+- Shot: {shot_insight}
+- Show the real innovation happening, human scale
+
+Scene 3 (Ending — hopeful wide shot):
+- Style: {style_ending}  
+- Shot: {shot_ending}
+- Emotional, wide, hopeful — India leading the future
+
+Rules: SPECIFIC to "{topic}", Indian visual elements, 20-35 words each
+
+Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
+
+        hook_prompt  = None
+        scene_2_3    = None
 
         try:
+            # Generate hook image prompt
             r = requests.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
                          "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.9, "max_tokens": 300},
+                      "messages": [{"role": "user", "content": hook_prompt_request}],
+                      "temperature": 0.95, "max_tokens": 200},
                 timeout=20
             )
             r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"].strip()
-            start   = content.find('[')
-            end     = content.rfind(']') + 1
-            scenes  = json.loads(content[start:end])
-            if len(scenes) >= 3:
-                for i, s in enumerate(scenes[:3]):
-                    print(f"  Scene {i+1}: {s[:80]}...")
-                return scenes[:3]
+            hook_prompt = r.json()["choices"][0]["message"]["content"].strip().strip('"')
+            print(f"  Hook image: {hook_prompt[:100]}...")
         except Exception as e:
-            print(f"Scene prompts failed: {e}, using fallback")
+            print(f"  Hook prompt failed: {e}")
+            hook_prompt = (
+                f"Extreme cinematic contrast — ancient Indian village on left half, "
+                f"futuristic {topic} technology on right half, split-frame composition, "
+                f"dramatic ARRI lighting, hyperdetailed 8K, film grain, award-winning photography"
+            )
+
+        try:
+            # Generate scenes 2+3
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user", "content": scene2_3_request}],
+                      "temperature": 0.9, "max_tokens": 250},
+                timeout=20
+            )
+            r.raise_for_status()
+            content  = r.json()["choices"][0]["message"]["content"].strip()
+            start    = content.find('[')
+            end      = content.rfind(']') + 1
+            scene_2_3 = json.loads(content[start:end])
+            print(f"  Scene 2: {scene_2_3[0][:80]}...")
+            print(f"  Scene 3: {scene_2_3[1][:80]}...")
+        except Exception as e:
+            print(f"  Scene 2+3 prompts failed: {e}")
+            scene_2_3 = [
+                f"{topic} technology in action, Indian engineers, {style_insight}",
+                f"Future of {topic} in India — {SCENE_TEMPLATES_FALLBACK[2]}"
+            ]
 
         return [
-            f"{topic} in India near future — {SCENE_TEMPLATES_FALLBACK[0]}",
-            f"{topic} technology innovation — {SCENE_TEMPLATES_FALLBACK[1]}",
-            f"Future of {topic} India — {SCENE_TEMPLATES_FALLBACK[2]}",
+            hook_prompt,
+            scene_2_3[0] if scene_2_3 else SCENE_TEMPLATES_FALLBACK[1],
+            scene_2_3[1] if scene_2_3 and len(scene_2_3) > 1 else SCENE_TEMPLATES_FALLBACK[2],
         ]
 
     # ── IMAGES ───────────────────────────────────────────────────
@@ -385,7 +593,7 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
         for poll in range(80):
             time.sleep(3)
             if poll % 5 == 0:
-                print(f"  Polling {poll * 3}s...")
+                print(f"  Polling {poll*3}s...")
             try:
                 r = requests.get(
                     f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
@@ -396,7 +604,7 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
                 gen    = r.json().get("generations_by_pk", {})
                 status = gen.get("status", "UNKNOWN")
                 if status == "FAILED":
-                    raise Exception(f"Leonardo FAILED")
+                    raise Exception("Leonardo FAILED")
                 if status == "COMPLETE":
                     images = gen.get("generated_images", [])
                     if not images:
@@ -431,7 +639,7 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
                     raise Exception(f"{r.status_code}: {r.text[:200]}")
                 data = r.json()
                 if "sdGenerationJob" not in data:
-                    raise Exception(f"No sdGenerationJob")
+                    raise Exception("No sdGenerationJob")
                 gen_id = data["sdGenerationJob"]["generationId"]
                 print(f"  Gen ID: {gen_id}")
                 return poll_for_image(gen_id, output_path)
@@ -441,11 +649,10 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
                 time.sleep(5)
         raise Exception(f"All models failed: {last_error}")
 
-    def generate_all_images():
+    def generate_all_images(fact_package=None):
         print("\n[Generating scene prompts]")
-        scene_prompts = generate_scene_prompts()
+        scene_prompts = generate_scene_prompts(fact_package)
         image_paths   = []
-
         for i, scene_prompt in enumerate(scene_prompts):
             update_status("images")
             print(f"\n[Image {i+1}/3]")
@@ -456,7 +663,7 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
                 generate_image(scene_prompt, path)
                 image_paths.append(path)
             except Exception as e:
-                print(f"Image {i+1} failed, using fallback: {e}")
+                print(f"Image {i+1} failed: {e}")
                 if image_paths:
                     shutil.copy(image_paths[-1], path)
                 else:
@@ -473,12 +680,24 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
     def generate_voice(script):
         update_status("voice")
         print("\n[Voice]")
+
+        # Convert "..." to ElevenLabs break tag for natural pauses
+        speech_text = script.replace("...", "<break time='0.4s'/>")
+
         r = requests.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
             headers={"xi-api-key": ELEVENLABS_API_KEY,
                      "Content-Type": "application/json"},
-            json={"text": script, "model_id": "eleven_multilingual_v2",
-                  "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}},
+            json={
+                "text": speech_text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability":         0.35,  # Lower = more expressive
+                    "similarity_boost":  0.85,  # Stays true to voice character
+                    "style":             0.45,  # Emotional range
+                    "use_speaker_boost": True   # Clarity and presence
+                }
+            },
             timeout=60
         )
         r.raise_for_status()
@@ -494,7 +713,7 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
         if duration < 24.0:
             run_ffmpeg([
                 "ffmpeg", "-y", "-i", raw_path,
-                "-af", f"apad=pad_dur={25.0 - duration}", "-t", "25", audio_path
+                "-af", f"apad=pad_dur={25.0-duration}", "-t", "25", audio_path
             ], "voice-pad", timeout=20)
             os.remove(raw_path)
         else:
@@ -503,48 +722,77 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
         print(f"  Final: {get_audio_duration(audio_path):.1f}s")
         return audio_path
 
-    # ==========================================
-    # VIDEO RENDER
-    #
-    # SAFE EFFECT STACK (all verified on debian ffmpeg 5.x):
-    #
-    # Per clip:
-    #   1. scale to 110% with lanczos (quality upscale)
-    #   2. crop from static offset (Ken Burns framing variety)
-    #   3. eq filter (contrast/brightness/saturation)
-    #   4. curves filter (color tone per scene)
-    #   5. unsharp (cinematic sharpness)
-    #   6. vignette (cinematic edges)
-    #   7. fade=in (0.4s fade in per clip)
-    #   8. drawtext captions (3 per clip, timed with between())
-    #
-    # Between clips:
-    #   9. xfade (dissolve/fade/wipe — randomised)
-    #
-    # Final mux:
-    #  10. fade=out on last 0.5s of video
-    #  11. audio: loudnorm (broadcast loudness normalisation)
-    # ==========================================
+    # ── RENDER ────────────────────────────────────────────────────
 
     def render_scene_clip(img_path, duration, scene_idx, captions):
-        clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
-        third     = duration / 3.0
-        grade     = SCENE_GRADES[scene_idx % 3]
-        x_off, y_off, pos_label = CROP_POSITIONS[scene_idx % 3]
-        cap_y     = int(OUT_HEIGHT * 0.73)
-        cap_size  = 58
+        """
+        Per-clip effect stack:
+        1. zoompan  — slow zoom in from center (simple, reliable)
+        2. eq       — contrast/brightness/saturation per scene
+        3. unsharp  — cinematic sharpness
+        4. hue      — subtle color tint (warm/cool/golden) per scene
+        5. noise    — film grain overlay (dynamic texture)
+        6. drawtext — timed captions
+        """
+        clip_path  = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
+        third      = duration / 3.0
+        grade      = SCENE_GRADES[scene_idx % 3]
+        n_frames   = int(duration * FPS)
+        cap_y      = int(OUT_HEIGHT * 0.73)
+        cap_size   = 58
 
-        print(f"  Clip {scene_idx}: [{pos_label}] [{grade['label']}]")
+        # Zoom speed varies per scene — hook is fastest (most energy)
+        zoom_speeds = [0.0018, 0.0012, 0.0008]
+        zoom_speed  = zoom_speeds[scene_idx % 3]
 
-        # ABSOLUTE MINIMUM — identical to what rendered successfully on Render
-        # Adding effects back one at a time AFTER this works
+        # Hue tint per scene — no quotes, safe values
+        # scene 0: warm  (hue shift +8, saturation boost)
+        # scene 1: cool  (hue shift -12)
+        # scene 2: golden (hue shift +4, strong saturation)
+        hue_filters = [
+            "hue=h=8:s=1.2",
+            "hue=h=-12:s=1.05",
+            "hue=h=4:s=1.35",
+        ]
+
+        # Film grain — noise filter
+        # alls=1 = apply to all channels, c0s=18 = luma grain strength
+        # allf=t = temporal (changes each frame = animated grain)
+        grain = "noise=c0s=14:c0f=t+u"
+
+        print(f"  Clip {scene_idx}: zoompan[{zoom_speed}] | {grade['label']} | grain")
+
+        # Step 1: zoompan — zoom in from center, simple expression
+        # z starts at 1.0, increases by zoom_speed per frame, capped at 1.5
+        # x/y keeps subject centered throughout zoom
+        zoompan = (
+            f"zoompan="
+            f"z='min(zoom+{zoom_speed},1.5)':"
+            f"x='iw/2-(iw/zoom/2)':"
+            f"y='ih/2-(ih/zoom/2)':"
+            f"d={n_frames}:"
+            f"s={OUT_WIDTH}x{OUT_HEIGHT}:"
+            f"fps={FPS}"
+        )
+
         vf_parts = [
-            f"scale={OUT_WIDTH}:{OUT_HEIGHT}:force_original_aspect_ratio=increase",
+            # Scale to output first (zoompan works best on already-sized input)
+            f"scale={OUT_WIDTH}:{OUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos",
             f"crop={OUT_WIDTH}:{OUT_HEIGHT}",
+            # Zoompan motion
+            zoompan,
+            # Color grade
+            grade["eq"],
+            # Hue/saturation tint
+            hue_filters[scene_idx % 3],
+            # Sharpness
+            grade["sharp"],
+            # Film grain (dynamic per-frame texture)
+            grain,
             "setsar=1",
         ]
 
-        # 9. Captions — 3 per clip, one per third, timed with between()
+        # Captions
         scene_caps = captions[scene_idx * 3: scene_idx * 3 + 3]
         while len(scene_caps) < 3:
             scene_caps.append("")
@@ -564,43 +812,34 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
             )
 
         vf_str = ",".join(vf_parts)
-        print(f"  vf chain: {vf_str}")
+        print(f"  vf: {vf_str[:140]}...")
 
-        cmd = [
+        run_ffmpeg([
             "ffmpeg", "-y",
             "-loop", "1", "-r", str(FPS),
             "-i", img_path,
             "-vf", vf_str,
             "-t", str(duration),
             "-r", str(FPS),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "20",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-pix_fmt", "yuv420p",
             clip_path
-        ]
+        ], f"clip-{scene_idx}", timeout=300)
 
-        run_ffmpeg(cmd, f"clip-{scene_idx}", timeout=300)
         size = os.path.getsize(clip_path)
         print(f"  Clip {scene_idx}: {size // 1024}KB")
         return clip_path
 
     def apply_xfade(clip_paths, scene_dur):
-        """Chain xfade transitions between clips with random transition type."""
         if len(clip_paths) == 1:
             return clip_paths[0]
-
-        # Pick one transition type for this video
-        transition = random.choice(XFADE_TRANSITIONS)
-        print(f"\n  xfade transition: {transition}")
-
+        transition  = random.choice(XFADE_TRANSITIONS)
         output_path = f"{TMP_DIR}/{job_id}_xfaded.mp4"
         n           = len(clip_paths)
         inputs      = []
         for cp in clip_paths:
             inputs += ["-i", cp]
 
-        # Build chained xfade filter_complex
         fc_parts = []
         offset   = scene_dur - XFADE_DUR
         fc_parts.append(
@@ -608,60 +847,51 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
             f":duration={XFADE_DUR}:offset={offset:.3f}[xf0]"
         )
         for i in range(2, n):
-            offset   += scene_dur - XFADE_DUR
-            prev_lbl  = f"[xf{i-2}]" if i > 2 else "[xf0]"
+            offset  += scene_dur - XFADE_DUR
+            prev     = f"[xf{i-2}]" if i > 2 else "[xf0]"
             fc_parts.append(
-                f"{prev_lbl}[{i}:v]xfade=transition={transition}"
+                f"{prev}[{i}:v]xfade=transition={transition}"
                 f":duration={XFADE_DUR}:offset={offset:.3f}[xf{i-1}]"
             )
 
-        last_label = f"[xf{n-2}]"
-
-        cmd = [
-            "ffmpeg", "-y", *inputs,
-            "-filter_complex", ";".join(fc_parts),
-            "-map", last_label,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "21",
-            "-pix_fmt", "yuv420p",
-            output_path
-        ]
-
+        print(f"\n  xfade: {transition}")
         try:
-            run_ffmpeg(cmd, "xfade", timeout=120)
-            size = os.path.getsize(output_path)
-            print(f"  xfaded: {size // 1024}KB")
+            run_ffmpeg([
+                "ffmpeg", "-y", *inputs,
+                "-filter_complex", ";".join(fc_parts),
+                "-map", f"[xf{n-2}]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+                "-pix_fmt", "yuv420p", output_path
+            ], "xfade", timeout=120)
+            print(f"  xfaded: {os.path.getsize(output_path)//1024}KB")
             return output_path
         except Exception as e:
-            print(f"  xfade failed ({e}), falling back to concat")
-            return simple_concat(clip_paths)
-
-    def simple_concat(clip_paths):
-        list_path   = f"{TMP_DIR}/{job_id}_list.txt"
-        concat_path = f"{TMP_DIR}/{job_id}_concat.mp4"
-        with open(list_path, "w") as f:
-            for cp in clip_paths:
-                f.write(f"file '{cp}'\n")
-        run_ffmpeg([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", list_path, "-c", "copy", concat_path
-        ], "concat", timeout=60)
-        try: os.remove(list_path)
-        except Exception: pass
-        return concat_path
+            print(f"  xfade failed ({e}), using concat")
+            list_path   = f"{TMP_DIR}/{job_id}_list.txt"
+            concat_path = f"{TMP_DIR}/{job_id}_concat.mp4"
+            with open(list_path, "w") as f:
+                for cp in clip_paths:
+                    f.write(f"file '{cp}'\n")
+            run_ffmpeg([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", list_path, "-c", "copy", concat_path
+            ], "concat", timeout=60)
+            try: os.remove(list_path)
+            except Exception: pass
+            return concat_path
 
     def render_video(images, audio, captions):
         update_status("render")
         print("\n[Render]")
 
-        audio_dur = get_audio_duration(audio)
-        total_dur = max(audio_dur, 25.0)
-        scene_dur = total_dur / len(images)
+        audio_dur  = get_audio_duration(audio)
+        total_dur  = max(audio_dur, 25.0)
+        scene_dur  = total_dur / len(images)
         video_path = f"{TMP_DIR}/{job_id}.mp4"
 
         print(f"  Audio: {audio_dur:.1f}s | {len(images)} scenes x {scene_dur:.1f}s")
-        print(f"  Effects: crop-grade-curves-unsharp-vignette-fade + xfade + captions")
 
-        # Render individual scene clips
+        # Render clips
         clip_paths = []
         for i, img in enumerate(images):
             clip = render_scene_clip(img, scene_dur, i, captions)
@@ -669,48 +899,50 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
             try: os.remove(img)
             except Exception: pass
 
-        # Apply xfade transitions
+        # xfade transitions
         transitioned = apply_xfade(clip_paths, scene_dur)
-
         for cp in clip_paths:
             try: os.remove(cp)
             except Exception: pass
 
-        # Final mux: add audio + fade out last 0.5s + loudnorm
-        # fade=out on video, loudnorm on audio for broadcast quality
+        # Final mux: watermark + fade out + loudnorm
         fade_out_st = total_dur - 0.5
+        wm          = escape_dt("@India20Sixty")
 
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", transitioned,
-            "-i", audio,
-            "-filter_complex",
-            f"[0:v]fade=t=out:st={fade_out_st:.2f}:d=0.5[vout];"
-            f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]",
-            "-map", "[vout]",
-            "-map", "[aout]",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
-            "-shortest", "-movflags", "+faststart",
-            video_path
-        ]
+        # Watermark: bottom-left, large font, thick black border
+        # NO box= parameter (not in all ffmpeg builds — fails silently)
+        watermark_vf = (
+            f"drawtext=text='{wm}'"
+            f":fontsize=46"
+            f":fontcolor=white@0.92"
+            f":borderw=4:bordercolor=black@0.9"
+            f":x=28:y=h-90"
+        )
 
         try:
-            run_ffmpeg(cmd, "final-mux", timeout=120)
-        except Exception as e:
-            # loudnorm can fail on very short audio — fallback without it
-            print(f"  loudnorm failed ({e}), retrying without it")
-            cmd_simple = [
+            run_ffmpeg([
                 "ffmpeg", "-y",
-                "-i", transitioned,
-                "-i", audio,
+                "-i", transitioned, "-i", audio,
+                "-filter_complex",
+                f"[0:v]fade=t=out:st={fade_out_st:.2f}:d=0.5,"
+                f"{watermark_vf}[vout];"
+                f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]",
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest", "-movflags", "+faststart", video_path
+            ], "final-mux", timeout=120)
+        except Exception as e:
+            print(f"  loudnorm failed ({e}), retrying simple")
+            run_ffmpeg([
+                "ffmpeg", "-y",
+                "-i", transitioned, "-i", audio,
+                "-vf", f"fade=t=out:st={fade_out_st:.2f}:d=0.5,{watermark_vf}",
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
-                "-shortest", "-movflags", "+faststart",
-                video_path
-            ]
-            run_ffmpeg(cmd_simple, "final-mux-simple", timeout=120)
+                "-shortest", "-movflags", "+faststart", video_path
+            ], "final-mux-simple", timeout=120)
 
         try: os.remove(transitioned)
         except Exception: pass
@@ -723,32 +955,39 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
 
     # ── YOUTUBE ───────────────────────────────────────────────────
 
-    def upload_to_youtube(video_path, title, script):
+    def upload_to_youtube(video_path, title, script, fact_package=None):
         update_status("upload")
         print("\n[Upload]")
         r = requests.post(
             "https://oauth2.googleapis.com/token",
-            data={
-                "client_id":     YOUTUBE_CLIENT_ID,
-                "client_secret": YOUTUBE_CLIENT_SECRET,
-                "refresh_token": YOUTUBE_REFRESH_TOKEN,
-                "grant_type":    "refresh_token"
-            },
+            data={"client_id": YOUTUBE_CLIENT_ID,
+                  "client_secret": YOUTUBE_CLIENT_SECRET,
+                  "refresh_token": YOUTUBE_REFRESH_TOKEN,
+                  "grant_type": "refresh_token"},
             timeout=10
         )
         r.raise_for_status()
         token = r.json()["access_token"]
 
+        # Include source credit in description if we have a fact anchor
+        source_line = ""
+        if fact_package and fact_package.get("found"):
+            source_line = f"\nSource: {fact_package.get('source', '')}\n"
+
+        description = (
+            f"{script}\n\n"
+            f"{source_line}"
+            "India20Sixty - India's near future, explained.\n\n"
+            "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
+        )
+
         metadata = {
             "snippet": {
                 "title":       title[:100],
-                "description": (
-                    f"{script}\n\n"
-                    "India20Sixty - Exploring India's near future.\n\n"
-                    "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
-                ),
-                "tags": ["Future India", "India innovation", "AI", "Technology", "Shorts"],
-                "categoryId": "28"
+                "description": description[:5000],
+                "tags":        ["Future India", "India innovation", "AI",
+                                "Technology", "Shorts", "India2035"],
+                "categoryId":  "28"
             },
             "status": {
                 "privacyStatus":          "public",
@@ -761,10 +1000,8 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
                 "https://www.googleapis.com/upload/youtube/v3/videos"
                 "?uploadType=multipart&part=snippet,status",
                 headers={"Authorization": f"Bearer {token}"},
-                files={
-                    "snippet": (None, json.dumps(metadata), "application/json"),
-                    "video":   ("video.mp4", vf, "video/mp4")
-                },
+                files={"snippet": (None, json.dumps(metadata), "application/json"),
+                       "video":   ("video.mp4", vf, "video/mp4")},
                 timeout=300
             )
         r.raise_for_status()
@@ -776,49 +1013,52 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
 
     try:
         update_status("processing", {"topic": topic})
-        log_to_db("Pipeline started on Modal")
+        log_to_db("Pipeline started v3.0-factual")
 
-        script, script_lines = generate_script()
+        # PHASE 1: Research — pull real sources
+        fact_package = research_topic(topic)
+        log_to_db(f"Research: {'found' if fact_package else 'no anchor'}")
+
+        # PHASE 2: Script — anchored to real facts
+        script, script_lines = generate_script(fact_package)
         log_to_db(f"Script: {script[:80]}")
 
+        # PHASE 3: Captions
         captions = extract_captions(script_lines)
         log_to_db(f"Captions: {captions[:3]}")
 
-        images = generate_all_images()
+        # PHASE 4: Images — topic-specific prompts
+        images = generate_all_images(fact_package)
         log_to_db(f"Images: {len(images)}")
 
+        # PHASE 5: Voice — natural narration settings
         audio = generate_voice(script)
         log_to_db("Voice done")
 
+        # PHASE 6: Render — effects + watermark
         video = render_video(images, audio, captions)
         log_to_db("Video rendered")
 
+        # PHASE 7: Upload
         if TEST_MODE:
             print(f"\nTEST MODE — skipping upload")
             video_id, final_status = "TEST_MODE", "test_complete"
         else:
             title        = f"{topic} | India20Sixty #Shorts"
-            video_id     = upload_to_youtube(video, title, script)
+            video_id     = upload_to_youtube(video, title, script, fact_package)
             final_status = "complete"
             log_to_db(f"Uploaded: {video_id}")
 
         try:
             requests.post(
                 f"{SUPABASE_URL}/rest/v1/videos",
-                headers={
-                    "apikey":          SUPABASE_ANON_KEY,
-                    "Authorization":   f"Bearer {SUPABASE_ANON_KEY}",
-                    "Content-Type":    "application/json",
-                    "Prefer":          "return=minimal"
-                },
-                json={
-                    "job_id":      job_id,
-                    "topic":       topic,
-                    "youtube_url": (
-                        f"https://youtube.com/watch?v={video_id}"
-                        if video_id != "TEST_MODE" else None
-                    )
-                },
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                         "Content-Type": "application/json",
+                         "Prefer": "return=minimal"},
+                json={"job_id": job_id, "topic": topic,
+                      "youtube_url": f"https://youtube.com/watch?v={video_id}"
+                                     if video_id != "TEST_MODE" else None},
                 timeout=10
             )
         except Exception as e:
@@ -830,6 +1070,7 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
                 "text":         script,
                 "lines":        script_lines,
                 "captions":     captions,
+                "fact_anchor":  fact_package,
                 "generated_at": datetime.utcnow().isoformat()
             }
         })
@@ -854,9 +1095,9 @@ Return ONLY a JSON array: ["prompt1", "prompt2", "prompt3"]"""
 
 @app.local_entrypoint()
 def main():
-    print("Running full effects pipeline test...")
+    print("Running v3.0 factual pipeline test...")
     run_pipeline.remote(
-        job_id="test-effects-001",
-        topic="AI doctors transforming rural India",
+        job_id="test-v3-001",
+        topic="ISRO building Indias first space station by 2035",
         webhook_url=""
     )
