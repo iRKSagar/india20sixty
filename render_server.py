@@ -41,11 +41,6 @@ OUT_WIDTH  = 1080
 OUT_HEIGHT = 1920
 FPS        = 25
 
-# Half-res for preprocessing — ~200KB JPEG vs ~5MB PNG
-# Clip renderer scales it back up. Saves ~90% RAM per image.
-PRE_WIDTH  = 540
-PRE_HEIGHT = 960
-
 LEONARDO_MODELS = [
     "aa77f04e-3eec-4034-9c07-d0f619684628",
     "1e60896f-3c26-4296-8ecc-53e2afecc132",
@@ -154,16 +149,9 @@ Write exactly 8 punchy lines. Rules:
 
 def extract_captions(script_lines):
     full_script = ' '.join(script_lines)
-    prompt = f"""Extract exactly 9 ultra-short caption phrases from this script for a YouTube Short.
-
-Rules:
-- 3-5 words each
-- ALL CAPS
-- Punchy and bold
-- In script order
-- No punctuation except ! or ?
-- Output exactly 9 lines, one phrase per line, nothing else
-
+    prompt = f"""Extract exactly 9 ultra-short caption phrases from this script.
+Rules: 3-5 words each, ALL CAPS, punchy, in script order, no punctuation except ! or ?
+Output exactly 9 lines, one phrase per line, nothing else.
 Script: {full_script}"""
 
     try:
@@ -199,9 +187,9 @@ Script: {full_script}"""
 # ==========================================
 
 SCENE_TEMPLATES = [
-    "futuristic Indian megacity at golden hour, lotus-shaped towers, clean electric air taxis, warm saffron teal palette, cinematic ultra-realistic photography",
-    "Indian scientists and engineers in smart traditional attire, holographic data displays, ancient temple architecture meets gleaming research campus, dramatic cinematic lighting",
-    "aerial view of transformed green India, solar farms and vertical gardens, thriving diverse communities, Indian tricolor, hopeful sunrise, epic cinematic wide shot"
+    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, saffron teal palette, cinematic ultra-realistic photography",
+    "Indian scientists in smart traditional attire, holographic data displays, temple architecture meets research campus, dramatic cinematic lighting",
+    "aerial view transformed green India, solar farms vertical gardens, diverse communities, Indian tricolor, hopeful sunrise, epic cinematic wide shot"
 ]
 
 def generate_visual_scenes(topic):
@@ -220,11 +208,7 @@ def try_generate_with_model(model_id, prompt, job_id):
     r = requests.post(
         "https://cloud.leonardo.ai/api/rest/v1/generations",
         headers={"Authorization": f"Bearer {LEONARDO_API_KEY}", "Content-Type": "application/json"},
-        json={
-            "prompt": prompt, "modelId": model_id,
-            "width": IMG_WIDTH, "height": IMG_HEIGHT,
-            "num_images": 1, "presetStyle": "CINEMATIC"
-        },
+        json={"prompt": prompt, "modelId": model_id, "width": IMG_WIDTH, "height": IMG_HEIGHT, "num_images": 1, "presetStyle": "CINEMATIC"},
         timeout=30
     )
     print(f"[{job_id}] Response: {r.status_code}")
@@ -244,11 +228,10 @@ def poll_for_image(generation_id, output_path, job_id):
         try:
             r = requests.get(
                 f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}",
-                headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
-                timeout=15
+                headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"}, timeout=15
             )
             r.raise_for_status()
-            gen    = r.json().get("generations_by_pk", {})
+            gen = r.json().get("generations_by_pk", {})
             status = gen.get("status", "UNKNOWN")
             print(f"[{job_id}] Poll {poll}: status={status}")
             if status == "FAILED":
@@ -325,8 +308,7 @@ def create_placeholder_image(path):
 def get_audio_duration(path):
     try:
         r = subprocess.run([
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", path
         ], capture_output=True, text=True, timeout=10)
         return float(r.stdout.strip())
@@ -339,11 +321,8 @@ def generate_voice(script, job_id):
     r = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
         headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-        json={
-            "text": script,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-        },
+        json={"text": script, "model_id": "eleven_multilingual_v2",
+              "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}},
         timeout=60
     )
     r.raise_for_status()
@@ -361,8 +340,7 @@ def generate_voice(script, job_id):
         print(f"[{job_id}] Padding {pad:.1f}s")
         subprocess.run([
             "ffmpeg", "-y", "-i", raw_path,
-            "-af", f"apad=pad_dur={pad}", "-t", "25",
-            audio_path
+            "-af", f"apad=pad_dur={pad}", "-t", "25", audio_path
         ], capture_output=True, timeout=20)
         os.remove(raw_path)
     else:
@@ -373,6 +351,15 @@ def generate_voice(script, job_id):
 
 # ==========================================
 # VIDEO RENDERING
+#
+# FREE TIER STRATEGY — no Ken Burns (too CPU-heavy):
+#
+# Per clip:
+#   STEP 1: PNG → scale to OUT_WIDTH x OUT_HEIGHT (fast, 1-2s)
+#   STEP 2: scaled image → H.264 clip with burned captions (fast, 5-8s)
+#
+# Then concat all clips + mux audio + optional logo.
+# Total render time: ~30-40s for 3 clips. Well within 600s timeout.
 # ==========================================
 
 def escape_dt(text):
@@ -383,66 +370,29 @@ def escape_dt(text):
     return text
 
 
-def preprocess_image(src_path, dst_path, job_id):
+def render_scene_clip(img_path, duration, scene_idx, captions, job_id):
     """
-    PNG → half-res JPEG with explicit mjpeg codec.
-    PRE_WIDTH x PRE_HEIGHT = 540x960 → ~150-250KB
-    (vs 4-5MB PNG — saves ~95% RAM per image)
-    Leonardo images are 9:16 (864x1536) → output is 9:16 (540x960), no crop needed.
-    """
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", src_path,
-        "-vf", f"scale={PRE_WIDTH}:{PRE_HEIGHT}",
-        "-frames:v", "1",
-        "-f", "image2",
-        "-vcodec", "mjpeg",
-        "-q:v", "5",          # JPEG quality 2=best, 31=worst — 5 is high quality
-        dst_path
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-    if result.returncode != 0:
-        raise Exception(f"Preprocess failed: {result.stderr[-200:]}")
-    size = os.path.getsize(dst_path)
-    print(f"[{job_id}] Preprocessed JPEG: {size // 1024}KB ({PRE_WIDTH}x{PRE_HEIGHT})")
-    return size
-
-
-def render_scene_clip(preprocessed_jpg, duration, scene_idx, captions, job_id):
-    """
-    Half-res JPEG → full-res H.264 clip with Ken Burns + captions.
-    Scale: PRE_WIDTH x PRE_HEIGHT → OUT_WIDTH*1.05 x OUT_HEIGHT*1.05 then crop.
+    Scale image to output size, encode to H.264 clip with captions.
+    No Ken Burns — pure static with captions. Fast on free tier.
     """
     clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
     third     = duration / 3.0
-
-    # Scale up from half-res with 5% Ken Burns headroom
-    kb_w = int(OUT_WIDTH  * 1.05)
-    kb_h = int(OUT_HEIGHT * 1.05)
-    dx   = kb_w - OUT_WIDTH   # 54px
-    dy   = kb_h - OUT_HEIGHT  # 96px
-
-    drifts = [
-        (f"'min({dx}*t/{duration},{dx})'",     f"'min({dy}*t/{duration},{dy})'"),
-        (f"'{dx}-min({dx}*t/{duration},{dx})'", f"'min({dy}*t/{duration},{dy})'"),
-        (f"'min({dx}*t/{duration},{dx})'",     f"'{dy}-min({dy}*t/{duration},{dy})'"),
-    ]
-    x_expr, y_expr = drifts[scene_idx % 3]
 
     scene_caps = captions[scene_idx * 3: scene_idx * 3 + 3]
     while len(scene_caps) < 3:
         scene_caps.append("")
 
     cap_y    = int(OUT_HEIGHT * 0.73)
-    cap_size = 56
+    cap_size = 58
 
-    # Scale from PRE_WIDTH x PRE_HEIGHT → kb_w x kb_h → crop to OUT_WIDTH x OUT_HEIGHT
+    # Base: scale to output size, force exact dimensions
     vf_parts = [
-        f"scale={kb_w}:{kb_h}:flags=lanczos",
-        f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
+        f"scale={OUT_WIDTH}:{OUT_HEIGHT}:force_original_aspect_ratio=increase",
+        f"crop={OUT_WIDTH}:{OUT_HEIGHT}",
         "setsar=1",
     ]
 
+    # Add caption drawtext for each third of the clip
     for ci, cap in enumerate(scene_caps):
         cap = cap.strip()
         if not cap:
@@ -453,7 +403,7 @@ def render_scene_clip(preprocessed_jpg, duration, scene_idx, captions, job_id):
         vf_parts.append(
             f"drawtext=text='{escaped}'"
             f":fontsize={cap_size}:fontcolor=white"
-            f":borderw=5:bordercolor=black@0.9"
+            f":borderw=5:bordercolor=black@0.85"
             f":x=(w-text_w)/2:y={cap_y}"
             f":enable='between(t,{t_start},{t_end})'"
         )
@@ -464,23 +414,23 @@ def render_scene_clip(preprocessed_jpg, duration, scene_idx, captions, job_id):
         "ffmpeg", "-y",
         "-loop", "1",
         "-r", str(FPS),
-        "-i", preprocessed_jpg,
+        "-i", img_path,
         "-vf", vf,
         "-t", str(duration),
         "-r", str(FPS),
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "22",
+        "-crf", "23",
         "-pix_fmt", "yuv420p",
         clip_path
     ]
 
     print(f"[{job_id}] Rendering clip {scene_idx} ({duration:.1f}s, caps: {scene_caps})...")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=360)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
     if result.returncode != 0:
         print(f"[{job_id}] Clip {scene_idx} error:\n{result.stderr[-600:]}")
-        raise Exception(f"Clip {scene_idx} failed: {result.stderr[-150:]}")
+        raise Exception(f"Clip {scene_idx} failed: {result.stderr[-200:]}")
 
     size = os.path.getsize(clip_path)
     print(f"[{job_id}] Clip {scene_idx}: {size // 1024}KB")
@@ -499,23 +449,14 @@ def render_video(images, audio, captions, job_id):
 
     clip_paths = []
     for i, img in enumerate(images):
-        # PASS 1: PNG → small JPEG (explicit mjpeg codec, half resolution)
-        pre_jpg = f"{TMP_DIR}/{job_id}_pre{i}.jpg"
-        preprocess_image(img, pre_jpg, job_id)
+        clip = render_scene_clip(img, scene_dur, i, captions, job_id)
+        clip_paths.append(clip)
 
-        # Delete source PNG immediately — free ~800KB-1MB
+        # Delete source PNG after clip is done — free RAM
         try: os.remove(img)
         except Exception: pass
 
-        # PASS 2: JPEG → H.264 clip with scale-up + Ken Burns + captions
-        clip = render_scene_clip(pre_jpg, scene_dur, i, captions, job_id)
-        clip_paths.append(clip)
-
-        # Delete JPEG immediately — free ~200KB before next iteration
-        try: os.remove(pre_jpg)
-        except Exception: pass
-
-    # Concat all clips
+    # Concat clips
     list_path   = f"{TMP_DIR}/{job_id}_clips.txt"
     concat_path = f"{TMP_DIR}/{job_id}_concat.mp4"
 
@@ -551,8 +492,7 @@ def render_video(images, audio, captions, job_id):
             "-map", "[vout]", "-map", "2:a",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
-            "-shortest", "-movflags", "+faststart",
-            video_path
+            "-shortest", "-movflags", "+faststart", video_path
         ]
     else:
         cmd = [
@@ -561,8 +501,7 @@ def render_video(images, audio, captions, job_id):
             "-map", "0:v", "-map", "1:a",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
-            "-shortest", "-movflags", "+faststart",
-            video_path
+            "-shortest", "-movflags", "+faststart", video_path
         ]
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -586,10 +525,8 @@ def render_video(images, audio, captions, job_id):
 def get_youtube_token():
     r = requests.post(
         "https://oauth2.googleapis.com/token",
-        data={
-            "client_id": YOUTUBE_CLIENT_ID, "client_secret": YOUTUBE_CLIENT_SECRET,
-            "refresh_token": YOUTUBE_REFRESH_TOKEN, "grant_type": "refresh_token"
-        },
+        data={"client_id": YOUTUBE_CLIENT_ID, "client_secret": YOUTUBE_CLIENT_SECRET,
+              "refresh_token": YOUTUBE_REFRESH_TOKEN, "grant_type": "refresh_token"},
         timeout=10
     )
     r.raise_for_status()
@@ -619,10 +556,8 @@ India20Sixty - Exploring India's near future.
         r = requests.post(
             "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
             headers={"Authorization": f"Bearer {token}"},
-            files={
-                "snippet": (None, json.dumps(metadata), "application/json"),
-                "video": ("video.mp4", vf, "video/mp4")
-            },
+            files={"snippet": (None, json.dumps(metadata), "application/json"),
+                   "video": ("video.mp4", vf, "video/mp4")},
             timeout=300
         )
     r.raise_for_status()
@@ -675,14 +610,10 @@ def pipeline():
         try:
             requests.post(
                 f"{SUPABASE_URL}/rest/v1/videos",
-                headers={
-                    "apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                    "Content-Type": "application/json", "Prefer": "return=minimal"
-                },
-                json={
-                    "job_id": job_id, "topic": topic,
-                    "youtube_url": f"https://youtube.com/watch?v={video_id}" if video_id != "TEST_MODE" else None
-                },
+                headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                         "Content-Type": "application/json", "Prefer": "return=minimal"},
+                json={"job_id": job_id, "topic": topic,
+                      "youtube_url": f"https://youtube.com/watch?v={video_id}" if video_id != "TEST_MODE" else None},
                 timeout=10
             )
         except Exception as e:
@@ -690,8 +621,8 @@ def pipeline():
 
         update_status(job_id, final_status, {
             "youtube_id": video_id,
-            "script_package": {"text": script, "lines": script_lines, "captions": captions,
-                               "generated_at": datetime.utcnow().isoformat()}
+            "script_package": {"text": script, "lines": script_lines,
+                               "captions": captions, "generated_at": datetime.utcnow().isoformat()}
         })
 
         for f in [audio, video]:
@@ -715,7 +646,7 @@ def health():
     return jsonify({
         "status": "healthy", "test_mode": TEST_MODE,
         "images_per_video": 3,
-        "pre_dimensions": f"{PRE_WIDTH}x{PRE_HEIGHT}",
+        "render_mode": "static_no_ken_burns",
         "out_dimensions": f"{OUT_WIDTH}x{OUT_HEIGHT}",
         "logo_present": os.path.exists(LOGO_PATH)
     })
