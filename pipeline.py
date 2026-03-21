@@ -704,17 +704,14 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
         duration = get_audio_duration(raw_path)
         print(f"  Raw: {duration:.1f}s")
 
-        if duration < 24.0:
-            run_ffmpeg([
-                "ffmpeg", "-y", "-i", raw_path,
-                "-af", f"apad=pad_dur={25.0-duration}", "-t", "25", audio_path
-            ], "voice-pad", timeout=20)
-            os.remove(raw_path)
-        else:
-            os.rename(raw_path, audio_path)
+        # No padding — video length matches audio exactly
+        # apad was causing jibberish/static at the end
+        # Just use the raw audio as-is
+        os.rename(raw_path, audio_path)
 
-        print(f"  Final: {get_audio_duration(audio_path):.1f}s")
-        return audio_path
+        actual_dur = get_audio_duration(audio_path)
+        print(f"  Final: {actual_dur:.1f}s")
+        return audio_path, actual_dur
 
     # ── RENDER ────────────────────────────────────────────────────
 
@@ -901,12 +898,11 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             except Exception: pass
             return concat_path
 
-    def render_video(images, audio, captions):
+    def render_video(images, audio, audio_dur, captions):
         update_status("render")
         print("\n[Render]")
 
-        audio_dur  = get_audio_duration(audio)
-        total_dur  = max(audio_dur, 25.0)
+        total_dur  = audio_dur          # video length = audio length exactly
         scene_dur  = total_dur / len(images)
         video_path = f"{TMP_DIR}/{job_id}.mp4"
 
@@ -933,6 +929,7 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", transitioned, "-i", audio,
+                "-t", str(round(total_dur, 3)),
                 "-vf", f"fade=t=out:st={fade_out_st:.2f}:d=0.5",
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
@@ -944,6 +941,7 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", transitioned, "-i", audio,
+                "-t", str(round(total_dur, 3)),
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
@@ -1101,11 +1099,11 @@ Return ONLY the title text, nothing else."""
         log_to_db(f"Images: {len(images)}")
 
         # PHASE 5: Voice — natural narration settings
-        audio = generate_voice(script)
+        audio, audio_dur = generate_voice(script)
         log_to_db("Voice done")
 
         # PHASE 6: Render — effects + watermark
-        video = render_video(images, audio, captions)
+        video = render_video(images, audio, audio_dur, captions)
         log_to_db("Video rendered")
 
         # PHASE 7: Upload
