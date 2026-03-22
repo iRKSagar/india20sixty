@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 
 # ==========================================
-# MODAL APP DEFINITION
+# MODAL APP
 # ==========================================
 
 app = modal.App("india20sixty")
@@ -42,41 +42,27 @@ LEONARDO_MODELS = [
 ]
 
 # ==========================================
-# EFFECT LIBRARY
+# EFFECTS
 # ==========================================
 
-# Color grades — eq + unsharp only (proven safe on Modal debian ffmpeg)
 SCENE_GRADES = [
     {"eq": "eq=contrast=1.18:brightness=0.03:saturation=1.35",
-     "sharp": "unsharp=5:5:0.8:3:3:0.0", "label": "warm"},
+     "sharp": "unsharp=5:5:0.8:3:3:0.0", "hue": "hue=h=8:s=1.2",   "label": "warm"},
     {"eq": "eq=contrast=1.12:brightness=0.0:saturation=1.1",
-     "sharp": "unsharp=3:3:1.0:3:3:0.0", "label": "cool"},
+     "sharp": "unsharp=3:3:1.0:3:3:0.0", "hue": "hue=h=-10:s=1.05", "label": "cool"},
     {"eq": "eq=contrast=1.08:brightness=0.05:saturation=1.45",
-     "sharp": "unsharp=5:5:0.6:3:3:0.0", "label": "golden"},
-]
-
-# Ken Burns — scale 110%, crop from 3 different positions per scene
-KB_SCALE_W = int(OUT_WIDTH  * 1.10)
-KB_SCALE_H = int(OUT_HEIGHT * 1.10)
-KB_DX      = KB_SCALE_W - OUT_WIDTH
-KB_DY      = KB_SCALE_H - OUT_HEIGHT
-
-CROP_POSITIONS = [
-    (0,          0,          "top-left"),
-    (KB_DX,      KB_DY // 2, "mid-right"),
-    (KB_DX // 2, KB_DY,      "bottom-center"),
+     "sharp": "unsharp=5:5:0.6:3:3:0.0", "hue": "hue=h=5:s=1.3",   "label": "golden"},
 ]
 
 XFADE_TRANSITIONS = ["dissolve", "fade", "wipeleft", "wiperight",
                      "slideleft", "slideright", "fadeblack"]
 
-# Visual variety pools
 VISUAL_STYLES = [
     "cinematic ultra-realistic photography, golden hour, warm saffron palette, 8K",
     "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic",
     "aerial drone perspective, sweeping wide angle, vibrant saturated colors",
     "close-up editorial photography, shallow depth of field, soft bokeh",
-    "epic establishing shot, atmospheric haze and mist, moody cinematic film grain",
+    "epic establishing shot, atmospheric haze, moody cinematic film grain",
     "futuristic neon-lit India, rain-slicked streets, warm orange glow",
     "bright optimistic daylight, clean futuristic architecture, hopeful vibrant",
     "golden sunset silhouettes, dust particles, emotionally powerful cinematic",
@@ -94,9 +80,9 @@ SHOT_TYPES = [
 ]
 
 SCENE_TEMPLATES_FALLBACK = [
-    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, saffron teal palette, cinematic ultra-realistic photography",
-    "Indian scientists in smart traditional attire, holographic data displays, temple architecture meets research campus, dramatic cinematic lighting",
-    "aerial view transformed green India, solar farms vertical gardens, diverse communities, Indian tricolor, hopeful sunrise, epic cinematic wide shot"
+    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, cinematic",
+    "Indian scientists in smart traditional attire, holographic displays, temple meets research campus",
+    "aerial view transformed green India, solar farms, diverse communities, hopeful sunrise, epic"
 ]
 
 # ==========================================
@@ -117,15 +103,31 @@ def trigger(data: dict):
 @app.function(image=image, secrets=secrets)
 @modal.fastapi_endpoint(method="GET")
 def health():
+    voice_mode = "unknown"
+    try:
+        import os
+        SUPABASE_URL      = os.environ.get("SUPABASE_URL","")
+        SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY","")
+        if SUPABASE_URL:
+            import requests as req
+            r = req.get(f"{SUPABASE_URL}/rest/v1/system_state?id=eq.main&select=voice_mode",
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                timeout=3)
+            if r.status_code == 200 and r.json():
+                voice_mode = r.json()[0].get("voice_mode","ai")
+    except Exception:
+        pass
     return {
-        "status":   "healthy",
-        "platform": "modal",
-        "version":  "3.0-factual",
-        "effects":  ["scale_lanczos", "kb_crop", "eq", "unsharp",
-                     "xfade", "captions", "watermark", "loudnorm"],
-        "sources":  ["google_news_rss", "pib_rss", "reddit"],
-        "out":      f"{OUT_WIDTH}x{OUT_HEIGHT}",
-        "memory":   "2GB",
+        "status":     "healthy",
+        "platform":   "modal",
+        "version":    "4.0",
+        "voice_mode": voice_mode,
+        "effects":    ["pan_motion", "eq", "hue", "unsharp", "grain",
+                       "xfade", "captions", "watermark", "fade_out"],
+        "council":    ["trend_scout", "topic_council", "script_architect",
+                       "language_expert"],
+        "out":        f"{OUT_WIDTH}x{OUT_HEIGHT}",
     }
 
 
@@ -140,7 +142,7 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
 
     OPENAI_API_KEY        = os.environ["OPENAI_API_KEY"]
     LEONARDO_API_KEY      = os.environ["LEONARDO_API_KEY"]
-    ELEVENLABS_API_KEY    = os.environ["ELEVENLABS_API_KEY"]
+    ELEVENLABS_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
     VOICE_ID              = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
     SUPABASE_URL          = os.environ["SUPABASE_URL"]
     SUPABASE_ANON_KEY     = os.environ["SUPABASE_ANON_KEY"]
@@ -148,12 +150,17 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
     YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
     YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
     TEST_MODE             = os.environ.get("TEST_MODE", "true").lower() == "true"
+    R2_ACCOUNT_ID         = os.environ.get("R2_ACCOUNT_ID", "")
+    R2_ACCESS_KEY_ID      = os.environ.get("R2_ACCESS_KEY_ID", "")
+    R2_SECRET_ACCESS_KEY  = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    R2_BUCKET             = os.environ.get("R2_BUCKET", "india20sixty")
+    R2_BASE_URL           = os.environ.get("R2_BASE_URL", "")  # public bucket URL
 
     print(f"\n{'='*60}")
-    print(f"PIPELINE START: {job_id}")
+    print(f"PIPELINE v4.0 START: {job_id}")
     print(f"TOPIC: {topic}")
     print(f"TIME:  {datetime.utcnow().isoformat()}")
-    print(f"TEST_MODE: {TEST_MODE}")
+    print(f"TEST:  {TEST_MODE}")
     print(f"{'='*60}\n")
 
     # ── HELPERS ──────────────────────────────────────────────────
@@ -172,7 +179,7 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
                 json=payload, timeout=10
             )
         except Exception as e:
-            print(f"STATUS UPDATE FAILED: {e}")
+            print(f"STATUS: {e}")
 
     def log_to_db(message):
         try:
@@ -196,14 +203,14 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
             )
             return float(r.stdout.strip())
         except Exception:
-            return 27.0
+            return 25.0
 
     def run_ffmpeg(cmd, label, timeout=300):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             print(f"  ffmpeg [{label}] FAILED:")
-            print(result.stderr[-600:])
-            raise Exception(f"{label} failed: {result.stderr[-200:]}")
+            print(result.stderr[-500:])
+            raise Exception(f"{label}: {result.stderr[-150:]}")
         return result
 
     def escape_dt(text):
@@ -213,19 +220,14 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
         text = text.replace('%', '\\%')
         return text
 
-    # ==========================================
-    # REAL SOURCE FETCHING
-    # Pulls actual news headlines before scripting
-    # so every video is anchored to real facts
-    # ==========================================
+    # ── PHASE 1: RESEARCH ─────────────────────────────────────────
 
     def fetch_google_news_rss(query):
-        """Fetch real headlines from Google News RSS — no API key needed."""
         try:
             encoded = requests.utils.quote(query)
-            url     = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
-            r       = requests.get(url, timeout=10,
-                                   headers={"User-Agent": "Mozilla/5.0"})
+            url     = (f"https://news.google.com/rss/search"
+                       f"?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en")
+            r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
             r.raise_for_status()
             root    = ET.fromstring(r.content)
             items   = root.findall(".//item")[:5]
@@ -233,179 +235,57 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
             for item in items:
                 title  = item.findtext("title", "").strip()
                 source = item.findtext("source", "").strip()
-                pubdate = item.findtext("pubDate", "").strip()
                 if title:
-                    results.append({
-                        "headline": title,
-                        "source":   source or "Google News",
-                        "date":     pubdate[:16] if pubdate else ""
-                    })
-            print(f"  Google News: {len(results)} headlines")
+                    results.append({"headline": title, "source": source or "News"})
             return results
         except Exception as e:
-            print(f"  Google News failed: {e}")
+            print(f"  News [{query[:25]}]: {e}")
             return []
 
     def fetch_pib_rss():
-        """Fetch official Indian government press releases from PIB."""
         try:
             url = "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3"
-            r   = requests.get(url, timeout=10,
-                               headers={"User-Agent": "Mozilla/5.0"})
+            r   = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
             r.raise_for_status()
             root  = ET.fromstring(r.content)
-            items = root.findall(".//item")[:5]
-            results = []
-            for item in items:
-                title = item.findtext("title", "").strip()
-                if title:
-                    results.append({
-                        "headline": title,
-                        "source":   "PIB — Press Information Bureau of India",
-                        "date":     item.findtext("pubDate", "")[:16]
-                    })
-            print(f"  PIB: {len(results)} releases")
-            return results
+            items = root.findall(".//item")[:8]
+            return [{"headline": i.findtext("title","").strip(),
+                     "source":   "PIB India"}
+                    for i in items if i.findtext("title","").strip()]
         except Exception as e:
-            print(f"  PIB failed: {e}")
+            print(f"  PIB: {e}")
             return []
 
-    def extract_fact_anchor(topic, headlines):
-        """
-        Use GPT to extract the most relevant fact + stat
-        from real headlines for use in the script.
-        """
-        if not headlines:
-            return None
-
-        headlines_text = "\n".join(
-            f"- {h['headline']} ({h['source']})"
-            for h in headlines[:8]
-        )
-
-        prompt = f"""You are a fact-checker for an Indian YouTube channel about India's future.
-
-Topic we are covering: "{topic}"
-
-Real headlines from today:
-{headlines_text}
-
-Find the MOST RELEVANT headline to our topic.
-Extract a factual anchor we can use in the script.
-
-Return ONLY valid JSON:
-{{
-  "headline": "exact headline text",
-  "source": "source name",
-  "key_fact": "one specific fact, number, or stat from this headline",
-  "relevance": "why this is relevant to our topic",
-  "found": true
-}}
-
-If NO headline is relevant, return: {{"found": false}}"""
-
-        try:
-            r = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={"model": "gpt-4o-mini",
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.2, "max_tokens": 300},
-                timeout=20
-            )
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"].strip()
-            start   = content.find('{')
-            end     = content.rfind('}') + 1
-            data    = json.loads(content[start:end])
-            if data.get("found"):
-                print(f"  Fact anchor: {data.get('key_fact', '')[:80]}")
-                return data
-        except Exception as e:
-            print(f"  Fact extraction failed: {e}")
-        return None
-
-    def research_topic(topic):
-        """
-        Pull real sources and extract a fact anchor for the script.
-        Returns fact_package dict or None if nothing relevant found.
-        """
+    def research_topic():
         print("\n[Research]")
-
-        # Search multiple angles
-        queries   = [topic, f"{topic} India", f"{topic} 2025 India government"]
+        queries   = [topic, f"{topic} India 2025"]
         headlines = []
         for q in queries:
             headlines += fetch_google_news_rss(q)
-            if len(headlines) >= 8:
-                break
+        headlines += fetch_pib_rss()
 
-        # Also pull PIB for government announcements
-        pib_items = fetch_pib_rss()
-        headlines += pib_items
-
-        # Deduplicate by headline text
         seen, unique = set(), []
         for h in headlines:
             if h["headline"] not in seen:
                 seen.add(h["headline"])
                 unique.append(h)
 
-        print(f"  Total unique headlines: {len(unique)}")
-
+        print(f"  Headlines: {len(unique)}")
         if not unique:
-            print("  No headlines found — proceeding without fact anchor")
             return None
 
-        return extract_fact_anchor(topic, unique)
+        headlines_text = "\n".join(
+            f"- {h['headline']} ({h['source']})" for h in unique[:10]
+        )
+        prompt = f"""Find the most relevant headline to topic: "{topic}"
 
-    # ── SCRIPT ───────────────────────────────────────────────────
+Headlines:
+{headlines_text}
 
-    def generate_script(fact_package=None):
-        print("SCRIPT START")
+Return ONLY JSON:
+{{"found": true, "headline": "...", "source": "...", "key_fact": "specific stat or number"}}
 
-        # Build fact anchor section for prompt
-        if fact_package and fact_package.get("found"):
-            fact_section = f"""
-REAL FACT ANCHOR — you MUST use this in the script:
-Headline: {fact_package['headline']}
-Source: {fact_package['source']}
-Key fact: {fact_package['key_fact']}
-
-Ground your story in this real fact. Do not contradict it.
-Do not invent statistics beyond what this provides."""
-        else:
-            fact_section = """
-No specific headline found. Use general knowledge about this topic.
-Only make claims you are confident are accurate.
-Avoid specific numbers you are not sure about."""
-
-        prompt = f"""Write a YouTube Shorts voiceover for India20Sixty — India's near future channel.
-
-Topic: {topic}
-{fact_section}
-
-STRICT LENGTH RULE: Maximum 55 words total. Count every word. Stop at 55.
-This must fit in exactly 25 seconds when spoken at normal pace.
-
-LANGUAGE: Mostly English. Use 2-3 Hindi/Urdu words naturally for emphasis only.
-Good Hindi words to sprinkle: yaar, dekho, soch lo, iska matlab, lekin, bas, toh, wahi, abhi
-Do NOT write full Hindi sentences. 1-2 Hindi words per sentence maximum.
-
-STRUCTURE — 6 short punchy sentences:
-1. Hook — shocking real fact, stop the scroll (use fact anchor if available)
-2. What is actually happening right now
-3. The scale — numbers, money, reach
-4. What this means for regular Indians
-5. The challenge or twist — honest
-6. Sharp question that demands a comment
-
-EXAMPLE (55 words, natural Hinglish):
-"Dekho — AIIMS just deployed an AI that detects cancer in 90 seconds, 95% accuracy. Government has approved ₹3,000 crore to scale this to 1.5 lakh villages. Yaar, that means no waiting lists, no city hospitals for a basic diagnosis. But here's the real question — is the rural internet ready for this? Comment below."
-
-Now write for: {topic}
-Count your words. Stop at 55."""
+If none relevant: {{"found": false}}"""
 
         try:
             r = requests.post(
@@ -414,7 +294,59 @@ Count your words. Stop at 55."""
                          "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
                       "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.88, "max_tokens": 450},
+                      "temperature": 0.2, "max_tokens": 200},
+                timeout=15
+            )
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            data    = json.loads(content[content.find('{'):content.rfind('}')+1])
+            if data.get("found"):
+                print(f"  Fact: {data.get('key_fact','')[:80]}")
+                return data
+        except Exception as e:
+            print(f"  Fact extract: {e}")
+        return None
+
+    # ── PHASE 2: SCRIPT ───────────────────────────────────────────
+
+    def generate_script(fact_package=None):
+        print("\nSCRIPT START")
+
+        fact_section = ""
+        if fact_package and fact_package.get("found"):
+            fact_section = f"""
+REAL FACT ANCHOR — use this:
+Fact: {fact_package['key_fact']}
+Source: {fact_package['source']}"""
+
+        prompt = f"""Write a YouTube Shorts voiceover for India20Sixty — India's near future channel.
+
+Topic: {topic}
+{fact_section}
+
+STRICT: Maximum 55 words total. Count every word.
+
+LANGUAGE: Mostly English. Use 2-3 natural Hindi words only.
+Good ones: yaar, dekho, lekin, bas, soch lo, wahi, abhi
+
+6 punchy sentences:
+1. Hook with real fact — stop the scroll
+2. What is happening right now
+3. Scale — numbers, money, reach
+4. What this means for regular Indians
+5. The challenge or twist
+6. Debate question
+
+Return ONLY the script as plain text. No labels. No JSON."""
+
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.85, "max_tokens": 200},
                 timeout=30
             )
             r.raise_for_status()
@@ -422,30 +354,91 @@ Count your words. Stop at 55."""
             lines = [re.sub(r'^[\d]+[.)]\s*|^[-•]\s*', '', l.strip())
                      for l in raw.split('\n') if l.strip()]
             script = ' '.join(lines)
-            print(f"SCRIPT DONE ({len(lines)} lines): {script[:120]}...")
+            print(f"SCRIPT DONE ({len(script.split())} words): {script[:100]}...")
             return script, lines
         except Exception as e:
             print(f"SCRIPT FAILED: {e}")
-            fallback = [
-                f"Socho agar kal subah, {topic} India mein reality ban jaye...",
-                "Yeh sirf kisi science fiction ki kahani nahi.",
-                "Desh bhar ke scientists aur engineers iss sapne ko haqeeqat bana rahe hain.",
-                "Already kai projects shuru ho chuke hain — aur results aa rahe hain.",
-                "Jo aaj impossible lagta hai, woh kal normal ho jayega.",
-                "India sirf follow nahi karta — ab India lead karta hai.",
-                "Hamare daadi-nani ne bullock carts dekhe, humne smartphones dekhe.",
-                "Aapko kya lagta hai — kya hum ready hain? Comment karo."
-            ]
-            return ' '.join(fallback), fallback
+            fallback = f"Dekho — {topic} is already happening in India. This is real, yaar, not just a plan. The government has allocated serious money for this. Lekin here is what nobody is asking — is the infrastructure ready? What do you think — comment below."
+            return fallback, [fallback]
 
-    # ── CAPTIONS ─────────────────────────────────────────────────
+    # ── PHASE 3: PRONUNCIATION FIX ────────────────────────────────
+    # Pure deterministic find-and-replace — NO GPT, NO rewriting
+    # Just swap known problem words. Script content is never changed.
+
+    def language_expert_review(script):
+        print("\n[Pronunciation Fix]")
+        fixed = script
+
+        # Acronyms — spell out so ElevenLabs reads letter by letter
+        acronyms = [
+            ("ISRO",        "I.S.R.O."),
+            ("DRDO",        "D.R.D.O."),
+            ("DRDO's",      "D.R.D.O.'s"),
+            ("ISRO's",      "I.S.R.O.'s"),
+            ("IIT",         "I.I.T."),
+            ("IITs",        "I.I.T.s"),
+            ("IIM",         "I.I.M."),
+            ("AIIMS",       "A.I.I.M.S."),
+            ("UPI",         "U.P.I."),
+            ("NDTV",        "N.D.T.V."),
+            ("NASSCOM",     "NAS-com"),
+            ("SEBI",        "SEE-bi"),
+            # EV is fine as-is, AI is fine as-is
+        ]
+        for wrong, right in acronyms:
+            fixed = fixed.replace(wrong, right)
+
+        # Indian mission names — add hyphens for syllabification
+        missions = [
+            ("Chandrayaan",  "Chandra-yaan"),
+            ("Gaganyaan",    "Gagan-yaan"),
+            ("Mangalyaan",   "Mangal-yaan"),
+            ("Aditya-L1",    "Aditya L-one"),
+        ]
+        for wrong, right in missions:
+            fixed = fixed.replace(wrong, right)
+
+        # Symbols → words
+        fixed = fixed.replace("₹", "rupees ")
+        fixed = fixed.replace("%", " percent")
+        fixed = fixed.replace("&", " and ")
+        fixed = fixed.replace("→", " to ")
+        fixed = fixed.replace("~", " approximately ")
+
+        # Large Indian number formats → readable
+        import re as _re
+        # 1,00,000 → 1 lakh | 10,00,000 → 10 lakh | 1,00,00,000 → 1 crore
+        def fix_numbers(text):
+            text = _re.sub(r'(\d+),00,00,000', lambda m: m.group(1)+' crore', text)
+            text = _re.sub(r'(\d+),00,000',    lambda m: m.group(1)+' lakh', text)
+            text = _re.sub(r'(\d+),000',        lambda m: m.group(1)+' thousand', text)
+            return text
+        fixed = fix_numbers(fixed)
+
+        # Add emotion tags at specific structural positions
+        # Only at sentence boundaries — never mid-sentence
+        # Rule: first sentence gets <excited> if it has a number/stat
+        sentences = fixed.split('. ')
+        if len(sentences) >= 1 and any(c.isdigit() for c in sentences[0]):
+            sentences[0] = '<excited>' + sentences[0] + '</excited>'
+        # Last question sentence gets <happy>
+        if len(sentences) >= 2 and sentences[-1].strip().endswith('?'):
+            sentences[-1] = '<happy>' + sentences[-1].strip() + '</happy>'
+        fixed = '. '.join(sentences)
+
+        print(f"  Fixed: {fixed[:120]}...")
+        return fixed
+
+    # ── PHASE 4: CAPTIONS ─────────────────────────────────────────
 
     def extract_captions(script_lines):
         full = ' '.join(script_lines)
-        prompt = f"""Extract exactly 9 ultra-short caption phrases from this script.
+        # Strip emotion tags for caption extraction
+        clean = re.sub(r'<[^>]+>', '', full)
+        prompt = f"""Extract exactly 9 caption phrases from this script.
 Rules: 3-5 words each, ALL CAPS, punchy, in order, no punctuation except ! or ?
 Output exactly 9 lines, one phrase per line only.
-Script: {full}"""
+Script: {clean}"""
         try:
             r = requests.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -467,17 +460,16 @@ Script: {full}"""
             return captions
         except Exception as e:
             print(f"CAPTION FAILED: {e}")
-            words = full.upper().split()
+            words = clean.upper().split()
             caps, step = [], max(1, len(words) // 9)
             for i in range(9):
-                chunk = words[i * step: i * step + 4]
+                chunk = words[i*step: i*step+4]
                 caps.append(' '.join(chunk) if chunk else "INDIA KA FUTURE")
             return caps[:9]
 
-    # ── SCENE PROMPTS ─────────────────────────────────────────────
+    # ── PHASE 5: SCENE PROMPTS ────────────────────────────────────
 
     def generate_scene_prompts(fact_package=None):
-        # Scenes 2+3 use randomised styles for variety
         style_insight = random.choice(VISUAL_STYLES)
         style_ending  = random.choice([s for s in VISUAL_STYLES if s != style_insight])
         shot_insight  = random.choice(SHOT_TYPES[1])
@@ -485,94 +477,63 @@ Script: {full}"""
 
         fact_hint = ""
         if fact_package and fact_package.get("found"):
-            fact_hint = f"\nReal context to incorporate: {fact_package.get('key_fact','')}"
+            fact_hint = f"\nReal context: {fact_package.get('key_fact','')}"
 
-        # Scene 1 — HOOK IMAGE: always a dedicated showstopper
-        # High contrast, dramatic, instantly communicates the topic
-        # Must make viewer stop scrolling and rewatch
-        hook_prompt_request = f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
-
+        # Hook image — dedicated showstopper brief
+        hook_brief = f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
 Topic: "{topic}"{fact_hint}
+Must: be visually SHOCKING, extreme contrast (dark vs light, old vs new),
+ONE dominant subject filling 70% of frame, hyperrealistic ARRI Alexa cinematic,
+make viewer stop mid-scroll and say "what IS this?"
+Style: ultra high contrast, extreme dramatic lighting, 8K, film grain, award-winning photojournalism
+Return ONLY the prompt as a single string."""
 
-This image appears in the FIRST 2 SECONDS. It must:
-- Be visually SHOCKING or deeply CONTRASTING — dark vs light, old vs new, small vs massive
-- Immediately communicate what the topic is WITHOUT text
-- Create a feeling of AWE, URGENCY, or CURIOSITY in 0.5 seconds
-- Be hyper-realistic cinematic photography quality
-- Feature real Indian visual elements (people, places, colors)
-- Use EXTREME contrast — either very dark dramatic lighting OR blinding bright colors
-- Include ONE dominant subject that fills 70% of the frame
-- Think: the kind of image that makes you stop mid-scroll and say "what IS this?"
-
-Style: ultra high contrast cinematic photography, extreme dramatic lighting, 
-8K hyperdetailed, film grain, shot on ARRI Alexa, award-winning photojournalism
-
-Return ONLY the image prompt as a single string — no explanation, no labels."""
-
-        scene2_3_request = f"""Create 2 cinematic image prompts for scenes 2 and 3 of a YouTube Short about: "{topic}"{fact_hint}
-
-Scene 2 (Insight — the technology/change in action):
-- Style: {style_insight}
-- Shot: {shot_insight}
-- Show the real innovation happening, human scale
-
-Scene 3 (Ending — hopeful wide shot):
-- Style: {style_ending}  
-- Shot: {shot_ending}
-- Emotional, wide, hopeful — India leading the future
-
-Rules: SPECIFIC to "{topic}", Indian visual elements, 20-35 words each
-
+        scenes_brief = f"""Create 2 cinematic prompts for scenes 2 and 3 about: "{topic}"{fact_hint}
+Scene 2 (Insight): {style_insight}, {shot_insight} — technology in action
+Scene 3 (Ending): {style_ending}, {shot_ending} — hopeful, wide, emotional
 Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 
-        hook_prompt  = None
-        scene_2_3    = None
+        hook_prompt = None
+        scene_2_3   = None
 
         try:
-            # Generate hook image prompt
             r = requests.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
                          "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
-                      "messages": [{"role": "user", "content": hook_prompt_request}],
+                      "messages": [{"role": "user", "content": hook_brief}],
                       "temperature": 0.95, "max_tokens": 200},
                 timeout=20
             )
             r.raise_for_status()
             hook_prompt = r.json()["choices"][0]["message"]["content"].strip().strip('"')
-            print(f"  Hook image: {hook_prompt[:100]}...")
+            print(f"  Hook: {hook_prompt[:80]}...")
         except Exception as e:
-            print(f"  Hook prompt failed: {e}")
+            print(f"  Hook prompt: {e}")
             hook_prompt = (
-                f"Extreme cinematic contrast — ancient Indian village on left half, "
-                f"futuristic {topic} technology on right half, split-frame composition, "
-                f"dramatic ARRI lighting, hyperdetailed 8K, film grain, award-winning photography"
+                f"Extreme cinematic contrast — crumbling vs futuristic India, "
+                f"{topic} transformation, ARRI lighting, 8K film grain"
             )
 
         try:
-            # Generate scenes 2+3
             r = requests.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
                          "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
-                      "messages": [{"role": "user", "content": scene2_3_request}],
+                      "messages": [{"role": "user", "content": scenes_brief}],
                       "temperature": 0.9, "max_tokens": 250},
                 timeout=20
             )
             r.raise_for_status()
-            content  = r.json()["choices"][0]["message"]["content"].strip()
-            start    = content.find('[')
-            end      = content.rfind(']') + 1
-            scene_2_3 = json.loads(content[start:end])
-            print(f"  Scene 2: {scene_2_3[0][:80]}...")
-            print(f"  Scene 3: {scene_2_3[1][:80]}...")
+            content   = r.json()["choices"][0]["message"]["content"].strip()
+            scene_2_3 = json.loads(content[content.find('['):content.rfind(']')+1])
         except Exception as e:
-            print(f"  Scene 2+3 prompts failed: {e}")
+            print(f"  Scene 2+3: {e}")
             scene_2_3 = [
-                f"{topic} technology in action, Indian engineers, {style_insight}",
-                f"Future of {topic} in India — {SCENE_TEMPLATES_FALLBACK[2]}"
+                f"{topic} technology India — {SCENE_TEMPLATES_FALLBACK[1]}",
+                f"Future {topic} India — {SCENE_TEMPLATES_FALLBACK[2]}"
             ]
 
         return [
@@ -581,7 +542,7 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             scene_2_3[1] if scene_2_3 and len(scene_2_3) > 1 else SCENE_TEMPLATES_FALLBACK[2],
         ]
 
-    # ── IMAGES ───────────────────────────────────────────────────
+    # ── PHASE 6: IMAGES ───────────────────────────────────────────
 
     def poll_for_image(generation_id, output_path):
         for poll in range(80):
@@ -602,24 +563,21 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 if status == "COMPLETE":
                     images = gen.get("generated_images", [])
                     if not images:
-                        raise Exception("COMPLETE but no images")
+                        raise Exception("No images")
                     img_r = requests.get(images[0]["url"], timeout=30)
                     img_r.raise_for_status()
                     with open(output_path, "wb") as f:
                         f.write(img_r.content)
-                    size = os.path.getsize(output_path)
-                    print(f"  Saved: {size // 1024}KB")
+                    print(f"  Saved: {os.path.getsize(output_path)//1024}KB")
                     return True
             except Exception as e:
                 if "FAILED" in str(e) or "COMPLETE" in str(e):
                     raise
-        raise Exception("Timeout: no image after 240s")
+        raise Exception("Timeout")
 
     def generate_image(scene_prompt, output_path):
-        last_error = None
         for model_id in LEONARDO_MODELS:
             try:
-                print(f"  Model: {model_id[:8]}...")
                 r = requests.post(
                     "https://cloud.leonardo.ai/api/rest/v1/generations",
                     headers={"Authorization": f"Bearer {LEONARDO_API_KEY}",
@@ -630,34 +588,33 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                     timeout=30
                 )
                 if r.status_code != 200:
-                    raise Exception(f"{r.status_code}: {r.text[:200]}")
+                    raise Exception(f"{r.status_code}")
                 data = r.json()
                 if "sdGenerationJob" not in data:
-                    raise Exception("No sdGenerationJob")
+                    raise Exception("No job")
                 gen_id = data["sdGenerationJob"]["generationId"]
-                print(f"  Gen ID: {gen_id}")
+                print(f"  Gen: {gen_id}")
                 return poll_for_image(gen_id, output_path)
             except Exception as e:
-                last_error = e
-                print(f"  Model failed: {str(e)[:100]}")
+                print(f"  Model failed: {str(e)[:80]}")
                 time.sleep(5)
-        raise Exception(f"All models failed: {last_error}")
+        raise Exception("All models failed")
 
     def generate_all_images(fact_package=None):
-        print("\n[Generating scene prompts]")
+        print("\n[Scene Prompts]")
         scene_prompts = generate_scene_prompts(fact_package)
         image_paths   = []
-        for i, scene_prompt in enumerate(scene_prompts):
+        for i, sp in enumerate(scene_prompts):
             update_status("images")
             print(f"\n[Image {i+1}/3]")
             path = f"{TMP_DIR}/{job_id}_{i}.png"
             if i > 0:
                 time.sleep(8)
             try:
-                generate_image(scene_prompt, path)
+                generate_image(sp, path)
                 image_paths.append(path)
             except Exception as e:
-                print(f"Image {i+1} failed: {e}")
+                print(f"  Failed: {e}")
                 if image_paths:
                     shutil.copy(image_paths[-1], path)
                 else:
@@ -669,27 +626,27 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 image_paths.append(path)
         return image_paths
 
-    # ── VOICE ─────────────────────────────────────────────────────
+    # ── PHASE 7: VOICE ────────────────────────────────────────────
 
-    def generate_voice(script):
+    def generate_voice(reviewed_script):
         update_status("voice")
         print("\n[Voice]")
 
-        # Convert "..." to ElevenLabs break tag for natural pauses
-        speech_text = script.replace("...", "<break time='0.4s'/>")
+        # Convert "..." to ElevenLabs pause
+        speech_text = reviewed_script.replace("...", "<break time='0.5s'/>")
 
         r = requests.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
             headers={"xi-api-key": ELEVENLABS_API_KEY,
                      "Content-Type": "application/json"},
             json={
-                "text": speech_text,
+                "text":     speech_text,
                 "model_id": "eleven_multilingual_v2",
                 "voice_settings": {
-                    "stability":         0.35,  # Lower = more expressive
-                    "similarity_boost":  0.85,  # Stays true to voice character
-                    "style":             0.45,  # Emotional range
-                    "use_speaker_boost": True   # Clarity and presence
+                    "stability":         0.42,   # Slightly higher = less random accent drift
+                    "similarity_boost":  0.85,
+                    "style":             0.35,
+                    "use_speaker_boost": True
                 }
             },
             timeout=60
@@ -702,108 +659,56 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             f.write(r.content)
 
         duration = get_audio_duration(raw_path)
-        print(f"  Raw: {duration:.1f}s")
-
-        # No padding — video length matches audio exactly
-        # apad was causing jibberish/static at the end
-        # Just use the raw audio as-is
+        print(f"  Duration: {duration:.1f}s")
         os.rename(raw_path, audio_path)
+        return audio_path, duration
 
-        actual_dur = get_audio_duration(audio_path)
-        print(f"  Final: {actual_dur:.1f}s")
-        return audio_path, actual_dur
-
-    # ── RENDER ────────────────────────────────────────────────────
+    # ── PHASE 8: RENDER ───────────────────────────────────────────
 
     def render_scene_clip(img_path, duration, scene_idx, captions):
-        """
-        Two-pass render:
-        Pass 1: PNG → scaled JPEG at 110% (fast, low memory)
-        Pass 2: JPEG → H264 clip with:
-                 - panning motion via overlay (no zoompan expressions)
-                 - eq color grade
-                 - hue tint
-                 - unsharp
-                 - noise grain
-                 - watermark
-                 - captions
-        """
-        clip_path  = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
-        pre_path   = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
-        third      = duration / 3.0
-        grade      = SCENE_GRADES[scene_idx % 3]
-        n_frames   = int(duration * FPS)
-        cap_y      = int(OUT_HEIGHT * 0.73)
-        cap_size   = 58
-        wm         = escape_dt("@India20Sixty")
-
-        # Hue tint per scene — quote-free, safe on all ffmpeg builds
-        hue_filters = [
-            "hue=h=8:s=1.2",    # warm
-            "hue=h=-10:s=1.05", # cool
-            "hue=h=5:s=1.3",    # golden
-        ]
+        clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
+        pre_path  = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
+        third     = duration / 3.0
+        grade     = SCENE_GRADES[scene_idx % 3]
+        n_frames  = int(duration * FPS)
+        cap_y     = int(OUT_HEIGHT * 0.73)
+        cap_size  = 58
+        wm        = escape_dt("@India20Sixty")
 
         print(f"  Clip {scene_idx}: [{grade['label']}]")
 
-        # PASS 1: PNG → JPEG at 115% scale (gives us pan headroom)
+        # PASS 1: PNG → JPEG at 115% for panning headroom
         pan_w = int(OUT_WIDTH  * 1.15)
         pan_h = int(OUT_HEIGHT * 1.15)
-        dx    = pan_w - OUT_WIDTH   # 162px horizontal travel
-        dy    = pan_h - OUT_HEIGHT  # 288px vertical travel
+        dx    = pan_w - OUT_WIDTH
+        dy    = pan_h - OUT_HEIGHT
 
         run_ffmpeg([
             "ffmpeg", "-y", "-i", img_path,
             "-vf", f"scale={pan_w}:{pan_h}:force_original_aspect_ratio=increase:flags=lanczos,crop={pan_w}:{pan_h}",
             "-frames:v", "1", "-q:v", "3", "-f", "image2", "-vcodec", "mjpeg",
             pre_path
-        ], f"preprocess-{scene_idx}", timeout=20)
+        ], f"pre-{scene_idx}", timeout=20)
 
-        pre_size = os.path.getsize(pre_path)
-        print(f"  Pre JPEG: {pre_size // 1024}KB ({pan_w}x{pan_h})")
-
-        # PASS 2: JPEG → clip with pan motion via crop x/y
-        # Pan direction varies per scene — creates visible motion without expressions
-        # Use overlay approach: input is larger than output, we select a window
-        # that moves linearly using -vf crop=OUT_W:OUT_H:x_start+step*n:y
-        # Since we can't use 'n' in crop safely, we use the TWO-INPUT overlay trick:
-        # Pad to pan dimensions, then overlay moves — but simplest is:
-        # Generate a video where we use -vf "crop=w:h:x:y" with a fixed offset
-        # per scene. Motion comes from DIFFERENT offsets (not animated) per video section
-        # The REAL motion approach that works: use -ss on input to create different
-        # crop windows for beginning vs end, then crossfade.
-
-        # SIMPLEST WORKING MOTION: use scale slightly bigger, then crop
-        # with framerate-based expression using 'n' (frame number)
-        # crop filter supports 'n' as a variable — this is different from zoompan
+        # PASS 2: JPEG → H264 with pan + grade + grain + watermark + captions
         pan_directions = [
-            # Scene 0: pan right  (x increases, y fixed center)
-            (f"{dx}*n/{n_frames}", f"{dy//2}"),
-            # Scene 1: pan left   (x decreases from dx to 0)
-            (f"{dx}-{dx}*n/{n_frames}", f"{dy//3}"),
-            # Scene 2: pan up     (y decreases, x fixed center)
-            (f"{dx//2}", f"{dy}-{dy}*n/{n_frames}"),
+            (f"{dx}*n/{n_frames}",           f"{dy//2}"),
+            (f"{dx}-{dx}*n/{n_frames}",      f"{dy//3}"),
+            (f"{dx//2}",                      f"{dy}-{dy//2}*n/{n_frames}"),
         ]
         x_expr, y_expr = pan_directions[scene_idx % 3]
 
         vf_parts = [
-            # Crop moves — creates panning motion
             f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
-            # Color grade
             grade["eq"],
-            # Hue tint
-            hue_filters[scene_idx % 3],
-            # Sharpness
+            grade["hue"],
             grade["sharp"],
-            # Film grain — animated per frame
             "noise=c0s=12:c0f=t+u",
             "setsar=1",
-            # Watermark burned into every clip
             f"drawtext=text='{wm}':fontsize=44:fontcolor=white@0.9"
             f":borderw=4:bordercolor=black@0.95:x=28:y=h-88",
         ]
 
-        # Captions
         scene_caps = captions[scene_idx * 3: scene_idx * 3 + 3]
         while len(scene_caps) < 3:
             scene_caps.append("")
@@ -822,30 +727,21 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 f":enable='between(t,{t_start:.3f},{t_end:.3f})'"
             )
 
-        vf_str = ",".join(vf_parts)
-        print(f"  vf: {vf_str[:160]}...")
-
         run_ffmpeg([
-            "ffmpeg", "-y",
-            "-loop", "1", "-r", str(FPS),
+            "ffmpeg", "-y", "-loop", "1", "-r", str(FPS),
             "-i", pre_path,
-            "-vf", vf_str,
-            "-t", str(duration),
-            "-r", str(FPS),
+            "-vf", ",".join(vf_parts),
+            "-t", str(duration), "-r", str(FPS),
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-pix_fmt", "yuv420p",
-            clip_path
+            "-pix_fmt", "yuv420p", clip_path
         ], f"clip-{scene_idx}", timeout=300)
 
-        # Clean up pre-processed JPEG immediately
         try: os.remove(pre_path)
         except Exception: pass
-        # Clean up source PNG
         try: os.remove(img_path)
         except Exception: pass
 
-        size = os.path.getsize(clip_path)
-        print(f"  Clip {scene_idx}: {size // 1024}KB")
+        print(f"  Clip {scene_idx}: {os.path.getsize(clip_path)//1024}KB")
         return clip_path
 
     def apply_xfade(clip_paths, scene_dur):
@@ -857,7 +753,6 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
         inputs      = []
         for cp in clip_paths:
             inputs += ["-i", cp]
-
         fc_parts = []
         offset   = scene_dur - XFADE_DUR
         fc_parts.append(
@@ -871,8 +766,7 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 f"{prev}[{i}:v]xfade=transition={transition}"
                 f":duration={XFADE_DUR}:offset={offset:.3f}[xf{i-1}]"
             )
-
-        print(f"\n  xfade: {transition}")
+        print(f"  xfade: {transition}")
         try:
             run_ffmpeg([
                 "ffmpeg", "-y", *inputs,
@@ -884,7 +778,7 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             print(f"  xfaded: {os.path.getsize(output_path)//1024}KB")
             return output_path
         except Exception as e:
-            print(f"  xfade failed ({e}), using concat")
+            print(f"  xfade failed: {e}, using concat")
             list_path   = f"{TMP_DIR}/{job_id}_list.txt"
             concat_path = f"{TMP_DIR}/{job_id}_concat.mp4"
             with open(list_path, "w") as f:
@@ -901,35 +795,25 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
     def render_video(images, audio, audio_dur, captions):
         update_status("render")
         print("\n[Render]")
-
-        total_dur  = audio_dur          # video length = audio length exactly
-        scene_dur  = total_dur / len(images)
+        scene_dur  = audio_dur / len(images)
         video_path = f"{TMP_DIR}/{job_id}.mp4"
+        print(f"  {audio_dur:.1f}s | {len(images)} scenes x {scene_dur:.1f}s")
 
-        print(f"  Audio: {audio_dur:.1f}s | {len(images)} scenes x {scene_dur:.1f}s")
-
-        # Render clips — each clip deletes its own source image after processing
         clip_paths = []
         for i, img in enumerate(images):
             clip = render_scene_clip(img, scene_dur, i, captions)
             clip_paths.append(clip)
 
-        # xfade transitions
         transitioned = apply_xfade(clip_paths, scene_dur)
         for cp in clip_paths:
             try: os.remove(cp)
             except Exception: pass
 
-        # Final mux: audio + fade out only
-        # Watermark already burned into each clip above
-        # No filter_complex (was silently failing with loudnorm)
-        fade_out_st = total_dur - 0.5
-
+        fade_out_st = audio_dur - 0.5
         try:
             run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", transitioned, "-i", audio,
-                "-t", str(round(total_dur, 3)),
                 "-vf", f"fade=t=out:st={fade_out_st:.2f}:d=0.5",
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
@@ -937,11 +821,10 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 "-shortest", "-movflags", "+faststart", video_path
             ], "final-mux", timeout=120)
         except Exception as e:
-            print(f"  fade failed ({e}), retrying plain mux")
+            print(f"  fade failed ({e}), plain mux")
             run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", transitioned, "-i", audio,
-                "-t", str(round(total_dur, 3)),
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
@@ -954,46 +837,26 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
         size = os.path.getsize(video_path)
         if size < 100_000:
             raise Exception(f"Video too small: {size}")
-        print(f"  Final video: {size // 1024}KB")
+        print(f"  Final: {size//1024}KB")
         return video_path
 
-    # ── TITLE GENERATION ─────────────────────────────────────────
+    # ── PHASE 9: TITLE ────────────────────────────────────────────
 
-    def generate_title(topic, script, fact_package=None):
-        """Generate a unique, clickable YouTube title for each video."""
-
-        key_fact = ""
-        if fact_package and fact_package.get("found"):
-            key_fact = fact_package.get("key_fact", "")
-
-        # Title hook patterns — randomly picked for variety
-        hook_patterns = [
-            "Question hook: start with 'Why' or 'How' or 'What'",
-            "Shock stat hook: lead with the most surprising number",
-            "Contrast hook: 'India vs' or 'Before vs After'",
-            "Timeline hook: '5 Years From Now' or 'By 2030'",
-            "Revelation hook: 'Nobody Talks About This' or 'Hidden Truth'",
+    def generate_title(script, fact_package=None):
+        key_fact = fact_package.get("key_fact","") if fact_package else ""
+        hooks    = [
+            "Question hook: start with Why/How/What",
+            "Shock stat: lead with the most surprising number",
+            "Contrast: India Before vs After",
+            "Timeline: 5 Years From Now / By 2030",
+            "Revelation: Nobody Talks About This",
         ]
-        pattern = random.choice(hook_patterns)
-
-        prompt = f"""Write a YouTube Shorts title for this video.
-
+        prompt = f"""Write a YouTube Shorts title.
 Topic: {topic}
 Key fact: {key_fact}
-First line of script: {script[:120]}
-
-Title hook pattern to use: {pattern}
-
-Rules:
-- Under 60 characters
-- Include 1 relevant emoji at the start or end
-- Clickable and curiosity-driven
-- Must feel DIFFERENT from generic "India Future Tech" titles
-- No hashtags in the title
-- Should make someone stop scrolling
-
-Return ONLY the title text, nothing else."""
-
+Hook pattern: {random.choice(hooks)}
+Rules: under 60 chars, 1 emoji, clickable, no hashtags.
+Return ONLY the title."""
         try:
             r = requests.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -1006,21 +869,21 @@ Return ONLY the title text, nothing else."""
             )
             r.raise_for_status()
             title = r.json()["choices"][0]["message"]["content"].strip().strip('"')
-            # Ensure under 100 chars (YouTube limit)
             if len(title) > 95:
                 title = title[:92] + "..."
             print(f"  Title: {title}")
             return title
         except Exception as e:
-            print(f"  Title generation failed: {e}")
-            # Fallback with variety
-            fallbacks = [
+            print(f"  Title failed: {e}")
+            options = [
                 f"🚀 {topic[:50]} — India's Next Big Leap",
-                f"⚡ This Is Already Happening In India | {topic[:35]}",
-                f"🇮🇳 {topic[:55]} #Shorts",
-                f"🔬 India Just Did This — {topic[:45]}",
+                f"⚡ This Is Already Happening In India",
+                f"🇮🇳 Nobody Talks About This India Tech Story",
+                f"🔬 India Just Changed The Game — {topic[:35]}",
             ]
-            return random.choice(fallbacks)
+            return random.choice(options)
+
+    # ── PHASE 10: YOUTUBE ─────────────────────────────────────────
 
     def upload_to_youtube(video_path, title, script, fact_package=None):
         update_status("upload")
@@ -1036,24 +899,19 @@ Return ONLY the title text, nothing else."""
         r.raise_for_status()
         token = r.json()["access_token"]
 
-        # Include source credit in description if we have a fact anchor
-        source_line = ""
-        if fact_package and fact_package.get("found"):
-            source_line = f"\nSource: {fact_package.get('source', '')}\n"
-
+        source_line = f"\nSource: {fact_package.get('source','')}\n" \
+                      if fact_package and fact_package.get("found") else ""
         description = (
-            f"{script}\n\n"
-            f"{source_line}"
-            "India20Sixty - India's near future, explained.\n\n"
+            f"{script}\n\n{source_line}"
+            "India20Sixty — India's near future, explained.\n\n"
             "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
         )
-
         metadata = {
             "snippet": {
                 "title":       title[:100],
                 "description": description[:5000],
                 "tags":        ["Future India", "India innovation", "AI",
-                                "Technology", "Shorts", "India2035"],
+                                "Technology", "Shorts", "India2030"],
                 "categoryId":  "28"
             },
             "status": {
@@ -1061,7 +919,6 @@ Return ONLY the title text, nothing else."""
                 "selfDeclaredMadeForKids": False
             }
         }
-
         with open(video_path, "rb") as vf:
             r = requests.post(
                 "https://www.googleapis.com/upload/youtube/v3/videos"
@@ -1073,84 +930,404 @@ Return ONLY the title text, nothing else."""
             )
         r.raise_for_status()
         video_id = r.json()["id"]
-        print(f"  YouTube: https://youtube.com/watch?v={video_id}")
+        print(f"  https://youtube.com/watch?v={video_id}")
         return video_id
+
+    def render_video_silent(images, captions):
+        """Render video without audio track — for human voice staging."""
+        update_status("render")
+        print("\n[Render — silent]")
+
+        # Use fixed 8.6s per scene (25s total / 3 scenes)
+        # In human mode we don't know voice duration yet
+        scene_dur  = 8.6
+        total_dur  = scene_dur * len(images)
+        video_path = f"{TMP_DIR}/{job_id}_silent.mp4"
+
+        print(f"  {len(images)} scenes x {scene_dur:.1f}s = {total_dur:.1f}s total")
+
+        clip_paths = []
+        for i, img in enumerate(images):
+            clip = render_scene_clip(img, scene_dur, i, captions)
+            clip_paths.append(clip)
+
+        transitioned = apply_xfade(clip_paths, scene_dur)
+        for cp in clip_paths:
+            try: os.remove(cp)
+            except Exception: pass
+
+        # Simple copy — no audio
+        run_ffmpeg([
+            "ffmpeg", "-y",
+            "-i", transitioned,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-an",  # no audio
+            "-movflags", "+faststart",
+            video_path
+        ], "silent-render", timeout=120)
+
+        try: os.remove(transitioned)
+        except Exception: pass
+
+        size = os.path.getsize(video_path)
+        print(f"  Silent video: {size//1024}KB")
+        return video_path
+
+    def upload_to_r2(file_path, r2_key):
+        """
+        Upload file to Cloudflare R2 via S3-compatible API.
+        Returns public URL or signed URL.
+        """
+        print(f"\n[R2 Upload] {r2_key}")
+
+        if not R2_ACCOUNT_ID:
+            print("  R2 not configured — returning local path for TEST_MODE")
+            return f"file://{file_path}"
+
+        try:
+            import hmac
+            import hashlib
+            import base64
+            from urllib.parse import quote
+
+            endpoint = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+            url      = f"{endpoint}/{R2_BUCKET}/{r2_key}"
+
+            with open(file_path, "rb") as f:
+                data = f.read()
+
+            # Use AWS4 signature (R2 is S3-compatible)
+            now       = datetime.utcnow()
+            date_str  = now.strftime("%Y%m%d")
+            time_str  = now.strftime("%Y%m%dT%H%M%SZ")
+            content_type = "video/mp4"
+            payload_hash = hashlib.sha256(data).hexdigest()
+
+            headers = {
+                "Content-Type": content_type,
+                "x-amz-content-sha256": payload_hash,
+                "x-amz-date": time_str,
+                "Host": f"{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            }
+
+            # Canonical request
+            signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date"
+            canonical = "\n".join([
+                "PUT",
+                f"/{R2_BUCKET}/{quote(r2_key, safe='/')}",
+                "",
+                f"content-type:{content_type}",
+                f"host:{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+                f"x-amz-content-sha256:{payload_hash}",
+                f"x-amz-date:{time_str}",
+                "",
+                signed_headers,
+                payload_hash,
+            ])
+
+            cred_scope = f"{date_str}/auto/s3/aws4_request"
+            string_to_sign = "\n".join([
+                "AWS4-HMAC-SHA256",
+                time_str,
+                cred_scope,
+                hashlib.sha256(canonical.encode()).hexdigest(),
+            ])
+
+            def sign(key, msg):
+                return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+            signing_key = sign(
+                sign(sign(sign(
+                    f"AWS4{R2_SECRET_ACCESS_KEY}".encode(),
+                    date_str), "auto"), "s3"), "aws4_request")
+
+            signature = hmac.new(
+                signing_key, string_to_sign.encode(), hashlib.sha256
+            ).hexdigest()
+
+            headers["Authorization"] = (
+                f"AWS4-HMAC-SHA256 Credential={R2_ACCESS_KEY_ID}/{cred_scope},"
+                f"SignedHeaders={signed_headers},Signature={signature}"
+            )
+
+            r = requests.put(url, data=data, headers=headers, timeout=120)
+            r.raise_for_status()
+
+            # Return public URL if configured, else the R2 endpoint URL
+            if R2_BASE_URL:
+                public_url = f"{R2_BASE_URL.rstrip('/')}/{r2_key}"
+            else:
+                public_url = url
+
+            size = len(data)
+            print(f"  R2: {size//1024}KB → {public_url}")
+            return public_url
+
+        except Exception as e:
+            print(f"  R2 upload failed: {e}")
+            # Non-fatal in test mode
+            if TEST_MODE:
+                return f"r2-error://{r2_key}"
+            raise
 
     # ── RUN ───────────────────────────────────────────────────────
 
+    def preflight_check():
+        """
+        Check everything before spending a single credit.
+        Returns (ok: bool, reason: str)
+        """
+        print("\n[Pre-flight Check]")
+        issues = []
+
+        # 1. YouTube OAuth — try to get a fresh access token
+        if not TEST_MODE:
+            if not all([YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN]):
+                issues.append("YouTube credentials missing from secrets")
+            else:
+                try:
+                    r = requests.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={"client_id":     YOUTUBE_CLIENT_ID,
+                              "client_secret":  YOUTUBE_CLIENT_SECRET,
+                              "refresh_token":  YOUTUBE_REFRESH_TOKEN,
+                              "grant_type":     "refresh_token"},
+                        timeout=10
+                    )
+                    if r.status_code == 200:
+                        token_data = r.json()
+                        if "access_token" not in token_data:
+                            issues.append(f"YouTube token missing access_token: {token_data}")
+                        else:
+                            print("  YouTube OAuth: OK ✓")
+                            # Channel check — non-fatal warning only
+                            try:
+                                ch = requests.get(
+                                    "https://www.googleapis.com/youtube/v3/channels"
+                                    "?part=status,snippet&mine=true",
+                                    headers={"Authorization": f"Bearer {token_data['access_token']}"},
+                                    timeout=10
+                                )
+                                if ch.status_code == 200:
+                                    items = ch.json().get("items", [])
+                                    if items:
+                                        ch_name = items[0].get("snippet", {}).get("title", "Unknown")
+                                        print(f"  Channel: {ch_name} ✓")
+                                    else:
+                                        print("  Channel check: no items returned (non-fatal)")
+                                else:
+                                    print(f"  Channel check: {ch.status_code} (non-fatal, continuing)")
+                            except Exception as ce:
+                                print(f"  Channel check skipped: {ce} (non-fatal)")
+
+                            # Quota check — non-fatal
+                            try:
+                                qr = requests.get(
+                                    "https://www.googleapis.com/youtube/v3/videos"
+                                    "?part=id&mine=true&maxResults=1",
+                                    headers={"Authorization": f"Bearer {token_data['access_token']}"},
+                                    timeout=10
+                                )
+                                if qr.status_code == 403:
+                                    err = qr.json().get("error", {})
+                                    if "quotaExceeded" in str(err):
+                                        issues.append("YouTube API quota exceeded for today")
+                                    else:
+                                        print(f"  Quota check: 403 (non-quota error, continuing)")
+                                else:
+                                    print(f"  Quota check: {qr.status_code} ✓")
+                            except Exception as qe:
+                                print(f"  Quota check skipped: {qe} (non-fatal)")
+                    else:
+                        err_body = r.json() if r.headers.get("content-type","").startswith("application/json") else r.text[:200]
+                        issues.append(f"YouTube OAuth failed {r.status_code}: {err_body}")
+                except Exception as e:
+                    issues.append(f"YouTube pre-flight exception: {e}")
+
+        # 4. ElevenLabs — check subscription/credits
+        try:
+            el = requests.get(
+                "https://api.elevenlabs.io/v1/user/subscription",
+                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                timeout=8
+            )
+            if el.status_code == 200:
+                sub  = el.json()
+                used = sub.get("character_count", 0)
+                lim  = sub.get("character_limit", 0)
+                left = lim - used
+                print(f"  ElevenLabs: {used:,}/{lim:,} chars used, {left:,} remaining")
+                if left < 500:
+                    issues.append(f"ElevenLabs nearly out of credits: {left} chars left")
+            else:
+                print(f"  ElevenLabs check: {el.status_code} (non-fatal)")
+        except Exception as e:
+            print(f"  ElevenLabs check failed (non-fatal): {e}")
+
+        # 5. Leonardo — check credits
+        try:
+            leo = requests.get(
+                "https://cloud.leonardo.ai/api/rest/v1/me",
+                headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
+                timeout=8
+            )
+            if leo.status_code == 200:
+                data    = leo.json().get("user_details", [{}])[0]
+                tokens  = data.get("tokenRenewalDate", "unknown")
+                credits = data.get("apiCreditBalance", "?")
+                print(f"  Leonardo: credits={credits}, renewal={tokens}")
+                if isinstance(credits, (int, float)) and credits < 10:
+                    issues.append(f"Leonardo credits very low: {credits}")
+            else:
+                print(f"  Leonardo check: {leo.status_code} (non-fatal)")
+        except Exception as e:
+            print(f"  Leonardo check failed (non-fatal): {e}")
+
+        if issues:
+            print(f"  PRE-FLIGHT FAILED: {issues}")
+            return False, " | ".join(issues)
+
+        print("  Pre-flight: ALL CLEAR ✓")
+        return True, "ok"
+
     try:
         update_status("processing", {"topic": topic})
-        log_to_db("Pipeline started v3.0-factual")
+        log_to_db("Pipeline v4.0 started")
 
-        # PHASE 1: Research — pull real sources
-        fact_package = research_topic(topic)
+        # 0. PRE-FLIGHT — check publish state before spending any credits
+        ok, reason = preflight_check()
+        if not ok:
+            raise Exception(f"Pre-flight failed: {reason}")
+        log_to_db(f"Pre-flight: {reason}")
+
+        # 0b. Read voice mode from system_state
+        voice_mode = "ai"  # default
+        try:
+            rows = requests.get(
+                f"{SUPABASE_URL}/rest/v1/system_state?id=eq.main&select=voice_mode",
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                timeout=5
+            ).json()
+            voice_mode = rows[0].get("voice_mode", "ai") if rows else "ai"
+        except Exception as e:
+            print(f"  voice_mode read failed ({e}), defaulting to 'ai'")
+        print(f"  Voice mode: {voice_mode.upper()}")
+        log_to_db(f"Voice mode: {voice_mode}")
+
+        # 1. Research
+        fact_package = research_topic()
         log_to_db(f"Research: {'found' if fact_package else 'no anchor'}")
 
-        # PHASE 2: Script — anchored to real facts
+        # 2. Script
         script, script_lines = generate_script(fact_package)
-        log_to_db(f"Script: {script[:80]}")
+        log_to_db(f"Script ({len(script.split())}w): {script[:60]}")
 
-        # PHASE 3: Captions
+        # 3. Language Expert — pronunciation + emotion tags
+        reviewed_script = language_expert_review(script)
+        log_to_db("Language review done")
+
+        # 4. Captions
         captions = extract_captions(script_lines)
-        log_to_db(f"Captions: {captions[:3]}")
 
-        # PHASE 4: Images — topic-specific prompts
+        # 5. Images
         images = generate_all_images(fact_package)
         log_to_db(f"Images: {len(images)}")
 
-        # PHASE 5: Voice — natural narration settings
-        audio, audio_dur = generate_voice(script)
-        log_to_db("Voice done")
+        # ══ BRANCH ON VOICE MODE ══════════════════════════════════
 
-        # PHASE 6: Render — effects + watermark
-        video = render_video(images, audio, audio_dur, captions)
-        log_to_db("Video rendered")
+        if voice_mode == "human":
+            # ── HUMAN VOICE MODE ──────────────────────────────────
+            # Render silent video (no audio track)
+            # Save to R2 and park in staging queue
+            print("\n[Human Voice Mode — rendering silent video]")
 
-        # PHASE 7: Upload
-        if TEST_MODE:
-            print(f"\nTEST MODE — skipping upload")
-            video_id, final_status = "TEST_MODE", "test_complete"
-        else:
-            title        = generate_title(topic, script, fact_package)
-            video_id     = upload_to_youtube(video, title, script, fact_package)
-            final_status = "complete"
-            log_to_db(f"Uploaded: {video_id} | Title: {title}")
+            video = render_video_silent(images, captions)
+            log_to_db("Silent video rendered")
 
-        try:
-            requests.post(
-                f"{SUPABASE_URL}/rest/v1/videos",
-                headers={"apikey": SUPABASE_ANON_KEY,
-                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                         "Content-Type": "application/json",
-                         "Prefer": "return=minimal"},
-                json={"job_id": job_id, "topic": topic,
-                      "youtube_url": f"https://youtube.com/watch?v={video_id}"
-                                     if video_id != "TEST_MODE" else None},
-                timeout=10
-            )
-        except Exception as e:
-            print(f"videos insert (non-fatal): {e}")
+            # Upload to R2
+            r2_key      = f"staged/{job_id}/video.mp4"
+            video_r2_url = upload_to_r2(video, r2_key)
+            log_to_db(f"Staged to R2: {r2_key}")
 
-        update_status(final_status, {
-            "youtube_id":     video_id,
-            "script_package": {
-                "text":         script,
-                "lines":        script_lines,
-                "captions":     captions,
-                "fact_anchor":  fact_package,
-                "generated_at": datetime.utcnow().isoformat()
-            }
-        })
+            # Save script package for the studio view
+            update_status("staged", {
+                "script_package": {
+                    "text":         reviewed_script,
+                    "original":     script,
+                    "lines":        script_lines,
+                    "captions":     captions,
+                    "fact_anchor":  fact_package,
+                    "generated_at": datetime.utcnow().isoformat(),
+                },
+                "video_r2_url":  video_r2_url,
+                "video_r2_key":  r2_key,
+            })
 
-        for f in [audio, video]:
-            try: os.remove(f)
+            print(f"\nSTAGED: {job_id}")
+            print(f"  Video: {video_r2_url}")
+            print("  Waiting for human voice recording in dashboard.")
+
+            try: os.remove(video)
             except Exception: pass
 
-        print(f"\nPIPELINE COMPLETE: {video_id}\n")
+        else:
+            # ── AI VOICE MODE ─────────────────────────────────────
+            # Full ElevenLabs pipeline, auto-upload to YouTube
+            print("\n[AI Voice Mode — full auto pipeline]")
+
+            audio, audio_dur = generate_voice(reviewed_script)
+            log_to_db(f"Voice: {audio_dur:.1f}s")
+
+            video = render_video(images, audio, audio_dur, captions)
+            log_to_db("Video rendered")
+
+            # AI mode: upload to YouTube
+            if TEST_MODE:
+                print(f"\nTEST MODE — skipping YouTube upload")
+                video_id, final_status = "TEST_MODE", "test_complete"
+            else:
+                title        = generate_title(reviewed_script, fact_package)
+                video_id     = upload_to_youtube(video, title, reviewed_script, fact_package)
+                final_status = "complete"
+                log_to_db(f"Uploaded: {video_id} | {title}")
+
+            try:
+                requests.post(
+                    f"{SUPABASE_URL}/rest/v1/videos",
+                    headers={"apikey": SUPABASE_ANON_KEY,
+                             "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                             "Content-Type": "application/json",
+                             "Prefer": "return=minimal"},
+                    json={"job_id": job_id, "topic": topic,
+                          "youtube_url": f"https://youtube.com/watch?v={video_id}"
+                                         if video_id not in ("TEST_MODE",) else None},
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"videos insert: {e}")
+
+            update_status(final_status, {
+                "youtube_id":     video_id,
+                "script_package": {
+                    "text":         reviewed_script,
+                    "original":     script,
+                    "lines":        script_lines,
+                    "captions":     captions,
+                    "fact_anchor":  fact_package,
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+            })
+
+            for f in [audio, video]:
+                try: os.remove(f)
+                except Exception: pass
+
+            print(f"\nPIPELINE COMPLETE (AI): {video_id}\n")
 
     except Exception as e:
         msg = str(e)
-        print(f"\nPIPELINE FAILED: {msg}\n{traceback.format_exc()}")
+        print(f"\nFAILED: {msg}\n{traceback.format_exc()}")
         log_to_db(f"FAILED: {msg[:400]}")
         update_status("failed", {"error": msg[:400]})
         raise
@@ -1162,9 +1339,9 @@ Return ONLY the title text, nothing else."""
 
 @app.local_entrypoint()
 def main():
-    print("Running v3.0 factual pipeline test...")
+    print("Running v4.0 pipeline test...")
     run_pipeline.remote(
-        job_id="test-v3-001",
+        job_id="test-v4-001",
         topic="ISRO building Indias first space station by 2035",
         webhook_url=""
     )
