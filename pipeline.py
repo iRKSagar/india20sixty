@@ -141,31 +141,33 @@ SCENE_GRADES      = [GRADES["warm_golden"], GRADES["cool_blue"], GRADES["vivid_p
 XFADE_TRANSITIONS = list(v for v in TRANSITIONS.values() if v)
 
 VISUAL_STYLES = [
-    "cinematic ultra-realistic photography, golden hour, warm saffron palette, 8K",
-    "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic",
-    "aerial drone perspective, sweeping wide angle, vibrant saturated colors",
-    "close-up editorial photography, shallow depth of field, soft bokeh",
-    "epic establishing shot, atmospheric haze, moody cinematic film grain",
-    "futuristic neon-lit India, rain-slicked streets, warm orange glow",
-    "bright optimistic daylight, clean futuristic architecture, hopeful vibrant",
-    "golden sunset silhouettes, dust particles, emotionally powerful cinematic",
-    "blue hour twilight, city lights reflecting, serene futuristic, ultra sharp",
-    "dramatic overcast sky, god rays breaking through clouds, epic and hopeful",
+    "cinematic ultra-realistic photography, golden hour, warm saffron and ochre palette, 8K India",
+    "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic Indian urban setting",
+    "aerial drone perspective, sweeping wide angle, vibrant India, bustling cityscape below",
+    "close-up editorial photography, shallow depth of field, Indian faces, soft bokeh, expressive",
+    "epic establishing shot, atmospheric haze, moody cinematic film grain, Indian landscape",
+    "futuristic neon-lit Indian megacity, rain-slicked streets, autorickshaws and flying drones",
+    "bright optimistic daylight, clean futuristic Indian architecture, hopeful vibrant, lotus motifs",
+    "golden sunset silhouettes over Indian skyline, dust particles, emotionally powerful cinematic",
+    "blue hour twilight, Indian city lights reflecting in water, serene futuristic, ultra sharp",
+    "dramatic overcast monsoon sky, god rays breaking through clouds, epic Indian landscape, hopeful",
+    "hyperrealistic Indian scientist or engineer, modern lab with traditional motifs, ARRI cinematic",
+    "vibrant street-level India, mix of ancient and ultra-modern, people of all ages, optimistic",
 ]
 
 SHOT_TYPES = [
-    ["extreme wide establishing shot", "dramatic low angle hero shot",
-     "sweeping panoramic", "epic aerial wide shot"],
-    ["medium shot close-up detail", "intimate human-scale scene",
-     "detailed technological environment", "focused mid-shot with depth"],
-    ["soaring aerial overview", "wide hopeful landscape",
-     "golden hour wide establishing", "emotional cinematic close-up"],
+    ["extreme wide establishing shot of Indian city or landscape", "dramatic low angle hero shot of Indian technology",
+     "sweeping panoramic view of India from above", "epic aerial wide shot of Indian megaproject"],
+    ["medium shot of Indian engineers or workers in action", "intimate human-scale scene in Indian context",
+     "detailed view of Indian technology or infrastructure", "focused mid-shot with Indian faces and depth"],
+    ["soaring aerial overview of transformed Indian landscape", "wide hopeful scene of India's future",
+     "golden hour wide shot of Indian achievement", "emotional cinematic close-up of Indian people"],
 ]
 
 SCENE_TEMPLATES_FALLBACK = [
-    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, cinematic",
-    "Indian scientists in smart traditional attire, holographic displays, temple meets research campus",
-    "aerial view transformed green India, solar farms, diverse communities, hopeful sunrise, epic"
+    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, marigold hues, cinematic",
+    "Indian scientists in smart traditional attire, holographic displays, IIT-style research campus, temple meets lab",
+    "aerial view of transformed green India, solar farms, villages with fibre internet, diverse communities, hopeful sunrise"
 ]
 
 # ==========================================
@@ -672,18 +674,41 @@ Return ONLY valid JSON, no explanation:
         if fact_package and fact_package.get("found"):
             fact_hint = f"\nReal context: {fact_package.get('key_fact','')}"
 
-        # Hook image — dedicated showstopper brief
+        # Hook image — dedicated showstopper brief, explicitly Indian
         hook_brief = f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
-Topic: "{topic}"{fact_hint}
-Must: be visually SHOCKING, extreme contrast (dark vs light, old vs new),
-ONE dominant subject filling 70% of frame, hyperrealistic ARRI Alexa cinematic,
-make viewer stop mid-scroll and say "what IS this?"
-Style: ultra high contrast, extreme dramatic lighting, 8K, film grain, award-winning photojournalism
-Return ONLY the prompt as a single string."""
 
-        scenes_brief = f"""Create 2 cinematic prompts for scenes 2 and 3 about: "{topic}"{fact_hint}
-Scene 2 (Insight): {style_insight}, {shot_insight} — technology in action
-Scene 3 (Ending): {style_ending}, {shot_ending} — hopeful, wide, emotional
+Channel: India20Sixty — India's near future (tech, space, innovation, startups)
+Topic: "{topic}"{fact_hint}
+
+MANDATORY REQUIREMENTS:
+- The image MUST look unmistakably Indian — Indian faces, Indian architecture, Indian landscape, or Indian technology
+- ONE dominant subject filling 70% of frame
+- Extreme contrast: old India vs new India, or dramatic futuristic Indian scene
+- Hyperrealistic ARRI Alexa cinematic quality, 8K, film grain
+- Make a viewer stop mid-scroll and say "what IS this happening in India?"
+
+Indian visual anchors to consider: saffron sky, monsoon light, Indian scientists/engineers, ISRO control rooms,
+IIT campuses, Indian megacity skylines, rural India transformed by tech, lotus motifs in futuristic architecture,
+marigold colour palettes, Indian street life meets future tech
+
+Return ONLY the image prompt as a single descriptive string. No labels."""
+
+        scenes_brief = f"""Create 2 cinematic image prompts for an Indian tech/innovation YouTube Short.
+
+Topic: "{topic}"{fact_hint}
+Channel: India20Sixty — India's near future
+
+Scene 2 (Insight/Story): {style_insight}, {shot_insight}
+- Show the technology or innovation IN an Indian context
+- Must include Indian visual elements: Indian people, Indian setting, Indian aesthetic
+- Technology in action, showing scale and impact
+
+Scene 3 (Hopeful Ending): {style_ending}, {shot_ending}
+- Wide, emotional, optimistic view of India's future
+- Should feel uplifting — India achieving something remarkable
+- Real Indian people benefiting from this change
+
+Both prompts must feel distinctly Indian, not generic international tech imagery.
 Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 
         hook_prompt = None
@@ -705,8 +730,9 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
         except Exception as e:
             print(f"  Hook prompt: {e}")
             hook_prompt = (
-                f"Extreme cinematic contrast — crumbling vs futuristic India, "
-                f"{topic} transformation, ARRI lighting, 8K film grain"
+                f"Extreme cinematic contrast — crumbling old India vs gleaming futuristic India, "
+                f"{topic} transformation, Indian engineers at work, ARRI cinematic lighting, "
+                f"saffron sky, 8K film grain, hyperrealistic, unmistakably Indian"
             )
 
         try:
