@@ -279,11 +279,6 @@ def do_mix(job_id, video_url, voice_url, music_track, music_vol,
         source_line  = f"\nSource: {fact_anchor.get('source','')}\n" \
                        if fact_anchor.get("found") else ""
 
-        # Use title_override if provided (CBDP review publish)
-        if title_override:
-            title = title_override[:100]
-        else:
-
         # 8. YouTube OAuth
         r = requests.post(
             "https://oauth2.googleapis.com/token",
@@ -303,8 +298,10 @@ def do_mix(job_id, video_url, voice_url, music_track, music_vol,
             "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
         )
 
-        # Title: use override (from CBDP review) or generate fresh
-        if not title_override:
+        # Title: use override (CBDP) or generate fresh via GPT
+        if title_override:
+            title = title_override[:100]
+        else:
             title = topic[:55]
             try:
                 tr = requests.post(
