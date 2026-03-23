@@ -928,6 +928,10 @@ Return ONLY the title text, nothing else."""
         for bad, good in replacements:
             text = text.replace(bad, good)
 
+        # Strip ElevenLabs emotion tags — YouTube rejects < > in descriptions
+        import re as _re
+        text = _re.sub(r'</?(?:excited|happy|sad|whisper|angry)[^>]*>', '', text)
+
         # Step 2: remove control chars (keep newline \n and tab \t)
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
 
