@@ -319,25 +319,29 @@ REAL FACT ANCHOR — use this:
 Fact: {fact_package['key_fact']}
 Source: {fact_package['source']}"""
 
-        prompt = f"""Write a YouTube Shorts voiceover for India20Sixty — India's near future channel.
+        prompt = f"""Write a YouTube Shorts voiceover script for India20Sixty — India's near future channel.
 
 Topic: {topic}
 {fact_section}
 
-STRICT: Maximum 55 words total. Count every word.
+STRICT RULES:
+- Maximum 55 words total. Count every word before returning.
+- Language: Indian English. Clear, confident, modern. NOT American or British tone.
+  Indian English sounds direct and warm. Example: "This is actually happening" not "This is literally happening".
+  No slang. No desi broken English. Proper grammar. But distinctly Indian in context and reference.
+- NO Hindi words. NO Hinglish. Pure English only.
+- Every sentence must be short and punchy — maximum 12 words per sentence.
+- Open with a fact that stops the scroll.
 
-LANGUAGE: Mostly English. Use 2-3 natural Hindi words only.
-Good ones: yaar, dekho, lekin, bas, soch lo, wahi, abhi
+6 sentences:
+1. Hook — the real fact or number, make it land hard
+2. What is happening right now in India
+3. The scale — money, reach, jobs, impact
+4. What this means for ordinary Indians
+5. The honest challenge or twist
+6. One debate question to drive comments
 
-6 punchy sentences:
-1. Hook with real fact — stop the scroll
-2. What is happening right now
-3. Scale — numbers, money, reach
-4. What this means for regular Indians
-5. The challenge or twist
-6. Debate question
-
-Return ONLY the script as plain text. No labels. No JSON."""
+Return ONLY the script as plain text. No labels. No JSON. No Markdown."""
 
         try:
             r = requests.post(
@@ -346,7 +350,7 @@ Return ONLY the script as plain text. No labels. No JSON."""
                          "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
                       "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.85, "max_tokens": 200},
+                      "temperature": 0.75, "max_tokens": 200},
                 timeout=30
             )
             r.raise_for_status()
@@ -358,7 +362,7 @@ Return ONLY the script as plain text. No labels. No JSON."""
             return script, lines
         except Exception as e:
             print(f"SCRIPT FAILED: {e}")
-            fallback = f"Dekho — {topic} is already happening in India. This is real, yaar, not just a plan. The government has allocated serious money for this. Lekin here is what nobody is asking — is the infrastructure ready? What do you think — comment below."
+            fallback = f"India is building something that will change everything. {topic} is no longer a dream — work has already started. The government has committed serious money and a real deadline. Thousands of skilled jobs will follow. But execution is the real test. Will India deliver on time?"
             return fallback, [fallback]
 
     # ── PHASE 3: PRONUNCIATION FIX ────────────────────────────────
@@ -897,46 +901,60 @@ Return ONLY the title text, nothing else."""
 
     def sanitize_for_youtube(text):
         """
-        Aggressively strip anything YouTube API rejects.
-        Strategy: encode to ASCII ignoring errors, then decode back.
-        This nukes ALL non-ASCII including Devanagari, smart quotes,
-        em dashes, zero-width chars, private use area — everything.
-        Then replace known problem chars with safe equivalents first.
+        Remove characters YouTube API rejects in title and description.
+        YouTube API (not Studio) rejects: emoji, Devanagari, smart quotes,
+        em dashes, zero-width chars, control chars.
+        All replacements go to safe ASCII equivalents.
+        Letters, numbers, punctuation, spaces — ALL preserved.
         """
         import re
         if not text:
             return ""
-        # Step 1: replace known problem chars with ASCII equivalents
+
+        # Step 1: replace smart punctuation with ASCII equivalents
         replacements = [
-            ('\u2019', "'"),   # right single quote
-            ('\u2018', "'"),   # left single quote
-            ('\u201c', '"'),   # left double quote
-            ('\u201d', '"'),   # right double quote
-            ('\u2013', '-'),   # en dash
-            ('\u2014', '-'),   # em dash
-            ('\u2026', '...'), # ellipsis
-            ('\u00a0', ' '),   # non-breaking space
-            ('\u20b9', 'Rs.'), # rupee sign
-            ('\u2022', '-'),   # bullet
+            ('\u2019', "'"),    # right single quote / apostrophe
+            ('\u2018', "'"),    # left single quote
+            ('\u201c', '"'),    # left double quote
+            ('\u201d', '"'),    # right double quote
+            ('\u2013', '-'),    # en dash
+            ('\u2014', '-'),    # em dash
+            ('\u2026', '...'),  # ellipsis
+            ('\u00a0', ' '),    # non-breaking space
+            ('\u20b9', 'Rs.'),  # Indian rupee sign
+            ('\u2022', '-'),    # bullet
+            ('\u00b7', '-'),    # middle dot
         ]
         for bad, good in replacements:
             text = text.replace(bad, good)
-        # Step 2: remove control chars (keep \n \t)
+
+        # Step 2: remove control chars (keep newline \n and tab \t)
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-        # Step 3: remove zero-width and invisible unicode
+
+        # Step 3: remove zero-width and invisible formatting chars
         text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]', '', text)
-        # Step 4: remove emoji and symbols that cause 400s
-        # YouTube rejects many emoji in descriptions via API (works in UI, not API)
-        text = re.sub(r'[\U0001F000-\U0001FFFF]', '', text)  # emoji block
-        text = re.sub(r'[\u2600-\u27BF]', '', text)           # misc symbols
-        text = re.sub(r'[\u1F300-\u1F9FF]', '', text)         # more emoji
-        # Step 5: remove Devanagari and other non-Latin scripts
-        # ElevenLabs handles pronunciation from our fixed script,
-        # description only needs to be readable Latin text
-        text = re.sub(r'[\u0900-\u097F]', '', text)  # Devanagari
-        text = re.sub(r'[\u0980-\u09FF]', '', text)  # Bengali
-        text = re.sub(r'[\uFB50-\uFDFF\uFE70-\uFEFF]', '', text)  # Arabic
-        # Step 6: collapse whitespace
+
+        # Step 4: remove emoji — supplementary plane (U+1F000 and above)
+        # Use \U (8-digit) for supplementary characters — \u only handles BMP
+        text = re.sub(u'[\U0001F000-\U0001FFFF]', '', text)  # emoji / misc symbols
+        text = re.sub(u'[\U00020000-\U0002FA1F]', '', text)  # CJK extension
+
+        # Step 5: remove BMP emoji and symbol blocks (safe ranges only)
+        text = re.sub(r'[\u2600-\u26FF]', '', text)   # misc symbols (☀☁⚡ etc)
+        text = re.sub(r'[\u2700-\u27BF]', '', text)   # dingbats
+
+        # Step 6: remove Devanagari and other non-Latin scripts
+        text = re.sub(r'[\u0900-\u097F]', '', text)   # Devanagari (Hindi)
+        text = re.sub(r'[\u0980-\u09FF]', '', text)   # Bengali
+        text = re.sub(r'[\u0A00-\u0A7F]', '', text)   # Gurmukhi
+        text = re.sub(r'[\u0A80-\u0AFF]', '', text)   # Gujarati
+        text = re.sub(r'[\u0B00-\u0B7F]', '', text)   # Odia
+        text = re.sub(r'[\u0B80-\u0BFF]', '', text)   # Tamil
+        text = re.sub(r'[\u0C00-\u0C7F]', '', text)   # Telugu
+        text = re.sub(r'[\u0C80-\u0CFF]', '', text)   # Kannada
+        text = re.sub(r'[\u0D00-\u0D7F]', '', text)   # Malayalam
+
+        # Step 7: collapse whitespace
         text = re.sub(r' {2,}', ' ', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
