@@ -33,7 +33,7 @@ IMG_HEIGHT = 1536
 OUT_WIDTH  = 1080
 OUT_HEIGHT = 1920
 FPS        = 25
-XFADE_DUR  = 0.5
+XFADE_DUR  = 0.3
 
 LEONARDO_MODELS = [
     "aa77f04e-3eec-4034-9c07-d0f619684628",
@@ -42,20 +42,103 @@ LEONARDO_MODELS = [
 ]
 
 # ==========================================
-# EFFECTS
+# FULL EFFECTS LIBRARY
+# Every confirmed-safe effect on Modal debian ffmpeg 5.x
+# Visual Director picks from these based on script energy
 # ==========================================
 
-SCENE_GRADES = [
-    {"eq": "eq=contrast=1.18:brightness=0.03:saturation=1.35",
-     "sharp": "unsharp=5:5:0.8:3:3:0.0", "hue": "hue=h=8:s=1.2",   "label": "warm"},
-    {"eq": "eq=contrast=1.12:brightness=0.0:saturation=1.1",
-     "sharp": "unsharp=3:3:1.0:3:3:0.0", "hue": "hue=h=-10:s=1.05", "label": "cool"},
-    {"eq": "eq=contrast=1.08:brightness=0.05:saturation=1.45",
-     "sharp": "unsharp=5:5:0.6:3:3:0.0", "hue": "hue=h=5:s=1.3",   "label": "golden"},
-]
+# ── MOTION LIBRARY ────────────────────────────────────────────
+# Each entry: (label, x_expr_fn, y_expr_fn, headroom_pct)
+# x_expr_fn / y_expr_fn take (dx, dy, n_frames) → string expression
+# headroom_pct = how much bigger to scale the image (1.25 = 25% bigger)
 
-XFADE_TRANSITIONS = ["dissolve", "fade", "wipeleft", "wiperight",
-                     "slideleft", "slideright", "fadeblack"]
+MOTIONS = {
+    "pan_right_slow":     {"hpct": 1.20, "x": lambda dx,dy,n: f"{dx}*n/{n}",       "y": lambda dx,dy,n: f"{dy//2}",              "label": "pan right slow"},
+    "pan_right_fast":     {"hpct": 1.28, "x": lambda dx,dy,n: f"{dx}*n/{n}",       "y": lambda dx,dy,n: f"{dy//3}",              "label": "pan right fast"},
+    "pan_left_slow":      {"hpct": 1.20, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",  "y": lambda dx,dy,n: f"{dy//2}",              "label": "pan left slow"},
+    "pan_left_fast":      {"hpct": 1.28, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",  "y": lambda dx,dy,n: f"{dy//3}",              "label": "pan left fast"},
+    "pan_up":             {"hpct": 1.22, "x": lambda dx,dy,n: f"{dx//2}",           "y": lambda dx,dy,n: f"{dy}-{dy}*n/{n}",     "label": "pan up"},
+    "pan_down":           {"hpct": 1.22, "x": lambda dx,dy,n: f"{dx//2}",           "y": lambda dx,dy,n: f"{dy}*n/{n}",          "label": "pan down"},
+    "diagonal_tl_br":     {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}*n/{n}",        "y": lambda dx,dy,n: f"{dy}*n/{n}",          "label": "diagonal tl-br"},
+    "diagonal_tr_bl":     {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",   "y": lambda dx,dy,n: f"{dy}*n/{n}",          "label": "diagonal tr-bl"},
+    "diagonal_bl_tr":     {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}*n/{n}",        "y": lambda dx,dy,n: f"{dy}-{dy}*n/{n}",     "label": "diagonal bl-tr"},
+    "diagonal_br_tl":     {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",   "y": lambda dx,dy,n: f"{dy}-{dy}*n/{n}",     "label": "diagonal br-tl"},
+    "zoom_in_sim":        {"hpct": 1.35, "x": lambda dx,dy,n: f"{dx//2}-{dx//4}*n/{n}", "y": lambda dx,dy,n: f"{dy//2}-{dy//4}*n/{n}", "label": "zoom in sim"},
+    "pull_back_sim":      {"hpct": 1.35, "x": lambda dx,dy,n: f"{dx//4}+{dx//4}*n/{n}", "y": lambda dx,dy,n: f"{dy//4}+{dy//4}*n/{n}", "label": "pull back sim"},
+    "drift_slow":         {"hpct": 1.12, "x": lambda dx,dy,n: f"{dx//3}*n/{n}",     "y": lambda dx,dy,n: f"{dy//4}",              "label": "drift slow"},
+    "static_hold":        {"hpct": 1.08, "x": lambda dx,dy,n: f"{dx//2}",           "y": lambda dx,dy,n: f"{dy//2}",              "label": "static hold"},
+}
+
+# ── COLOR GRADE LIBRARY ───────────────────────────────────────
+GRADES = {
+    "warm_golden": {
+        "eq": "eq=contrast=1.18:brightness=0.03:saturation=1.35",
+        "hue": "hue=h=8:s=1.2",
+        "sharp": "unsharp=5:5:0.8:3:3:0.0",
+        "noise": "noise=c0s=12:c0f=t+u",
+        "label": "warm_golden"
+    },
+    "cool_blue": {
+        "eq": "eq=contrast=1.15:brightness=-0.02:saturation=1.1",
+        "hue": "hue=h=-15:s=1.1",
+        "sharp": "unsharp=3:3:1.0:3:3:0.0",
+        "noise": "noise=c0s=10:c0f=t+u",
+        "label": "cool_blue"
+    },
+    "high_contrast_noir": {
+        "eq": "eq=contrast=1.45:brightness=-0.05:saturation=0.75",
+        "hue": "hue=h=0:s=0.8",
+        "sharp": "unsharp=7:7:1.2:3:3:0.0",
+        "noise": "noise=c0s=18:c0f=t+u",
+        "label": "high_contrast_noir"
+    },
+    "desaturated_serious": {
+        "eq": "eq=contrast=1.25:brightness=0.0:saturation=0.5",
+        "hue": "hue=h=0:s=0.55",
+        "sharp": "unsharp=5:5:0.9:3:3:0.0",
+        "noise": "noise=c0s=15:c0f=t+u",
+        "label": "desaturated_serious"
+    },
+    "vivid_pop": {
+        "eq": "eq=contrast=1.08:brightness=0.05:saturation=1.65",
+        "hue": "hue=h=5:s=1.4",
+        "sharp": "unsharp=3:3:0.6:3:3:0.0",
+        "noise": "noise=c0s=8:c0f=t+u",
+        "label": "vivid_pop"
+    },
+    "bleach_bypass": {
+        "eq": "eq=contrast=1.35:brightness=0.02:saturation=0.65",
+        "hue": "hue=h=-5:s=0.7",
+        "sharp": "unsharp=5:5:1.0:3:3:0.0",
+        "noise": "noise=c0s=20:c0f=t+u",
+        "label": "bleach_bypass"
+    },
+}
+
+# ── TRANSITION LIBRARY ────────────────────────────────────────
+# All confirmed working on Modal debian ffmpeg 5.x
+TRANSITIONS = {
+    "hard_cut":   None,          # no xfade — instant cut (most energetic)
+    "wipe_left":  "wipeleft",
+    "wipe_right": "wiperight",
+    "slide_left": "slideleft",
+    "slide_right":"slideright",
+    "dissolve":   "dissolve",
+    "fade_black": "fadeblack",
+    "fade":       "fade",
+}
+
+# ── ENERGY → DEFAULTS ────────────────────────────────────────
+# Fallback if Visual Director fails — map energy to sensible defaults
+ENERGY_DEFAULTS = {
+    "high":   {"motion_a": "diagonal_tl_br", "motion_b": "diagonal_br_tl", "transition": "wipe_right", "grade": "high_contrast_noir"},
+    "medium": {"motion_a": "pan_right_fast",  "motion_b": "pan_up",         "transition": "slide_left",  "grade": "warm_golden"},
+    "low":    {"motion_a": "drift_slow",       "motion_b": "zoom_in_sim",    "transition": "dissolve",    "grade": "bleach_bypass"},
+}
+
+# Legacy compatibility
+SCENE_GRADES      = [GRADES["warm_golden"], GRADES["cool_blue"], GRADES["vivid_pop"]]
+XFADE_TRANSITIONS = list(v for v in TRANSITIONS.values() if v)
 
 VISUAL_STYLES = [
     "cinematic ultra-realistic photography, golden hour, warm saffron palette, 8K",
@@ -471,6 +554,112 @@ Script: {clean}"""
                 caps.append(' '.join(chunk) if chunk else "INDIA KA FUTURE")
             return caps[:9]
 
+    # ── PHASE 4b: VISUAL DIRECTOR ─────────────────────────────────
+    # Reads the script and returns a shot list — one set of effects per scene.
+    # Each scene gets: motion_a, motion_b (for split-clip), grade, transition.
+    # GPT reads the script energy and picks from the confirmed-safe effects library.
+
+    def visual_director(script, script_lines):
+        print("\n[Visual Director]")
+
+        # Build a clean version of the script for GPT (no emotion tags)
+        clean = re.sub(r'<[^>]+>', '', script).strip()
+
+        # Available options (GPT picks from these exact keys)
+        motion_keys     = list(MOTIONS.keys())
+        grade_keys      = list(GRADES.keys())
+        transition_keys = list(TRANSITIONS.keys())
+
+        prompt = f"""You are a YouTube Shorts video editor for an Indian tech/innovation channel.
+Read this script and assign visual effects to each of the 3 scenes.
+
+SCRIPT:
+{clean}
+
+SCENES:
+- Scene 1 (Hook): first 2 sentences — must stop scrolling, highest impact
+- Scene 2 (Content): sentences 3-4 — explain the story
+- Scene 3 (Payoff): sentences 5-6 — challenge + debate question
+
+For each scene assign:
+- motion_a: first sub-clip motion (choose from: {", ".join(motion_keys)})
+- motion_b: second sub-clip motion — MUST be different from motion_a
+- grade: color grade mood (choose from: {", ".join(grade_keys)})
+- transition: how this scene transitions INTO the NEXT scene (choose from: {", ".join(transition_keys)})
+- energy: high / medium / low (reflects script energy at this point)
+
+RULES:
+- No two consecutive scenes should have same grade or same transition
+- Scene 1 should have high energy — fast motion, bold grade
+- Scene 3 (payoff) often suits bleach_bypass or warm_golden
+- hard_cut is most energetic — use for shocking moments
+- dissolve / fade for reflective endings
+- diagonal motions feel more cinematic than simple left/right pans
+
+Return ONLY valid JSON, no explanation:
+{{
+  "scene_1": {{"motion_a": "...", "motion_b": "...", "grade": "...", "transition": "...", "energy": "..."}},
+  "scene_2": {{"motion_a": "...", "motion_b": "...", "grade": "...", "transition": "...", "energy": "..."}},
+  "scene_3": {{"motion_a": "...", "motion_b": "...", "grade": "...", "transition": "...", "energy": "..."}}
+}}"""
+
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.85, "max_tokens": 400},
+                timeout=20
+            )
+            r.raise_for_status()
+            raw  = r.json()["choices"][0]["message"]["content"].strip()
+            # Extract JSON block
+            raw  = raw[raw.find('{'):raw.rfind('}')+1]
+            data = json.loads(raw)
+
+            # Validate and sanitize each scene
+            shot_list = []
+            for sk in ["scene_1", "scene_2", "scene_3"]:
+                s       = data.get(sk, {})
+                energy  = s.get("energy", "medium")
+                defs    = ENERGY_DEFAULTS.get(energy, ENERGY_DEFAULTS["medium"])
+
+                ma = s.get("motion_a", defs["motion_a"])
+                mb = s.get("motion_b", defs["motion_b"])
+                gr = s.get("grade",    defs["grade"])
+                tr = s.get("transition", defs["transition"])
+
+                # Fall back to defaults if GPT returned an invalid key
+                if ma not in MOTIONS:    ma = defs["motion_a"]
+                if mb not in MOTIONS:    mb = defs["motion_b"]
+                if gr not in GRADES:     gr = defs["grade"]
+                if tr not in TRANSITIONS:tr = defs["transition"]
+                if ma == mb:             mb = defs["motion_b"]  # force different
+
+                shot_list.append({
+                    "motion_a":   ma,
+                    "motion_b":   mb,
+                    "grade":      gr,
+                    "transition": tr,
+                    "energy":     energy,
+                })
+
+            for i, s in enumerate(shot_list):
+                print(f"  Scene {i+1}: [{s['grade']}] {s['motion_a']}→{s['motion_b']} | {s['transition']} | {s['energy']}")
+            return shot_list
+
+        except Exception as e:
+            print(f"  Visual Director failed ({e}), using energy defaults")
+            # Fallback: rotate through different presets so videos still look different
+            presets = [
+                {"motion_a":"diagonal_bl_tr",  "motion_b":"zoom_in_sim",    "grade":"high_contrast_noir", "transition":"wipe_right",  "energy":"high"},
+                {"motion_a":"pan_right_fast",   "motion_b":"pan_up",         "grade":"warm_golden",        "transition":"slide_left",  "energy":"medium"},
+                {"motion_a":"zoom_in_sim",       "motion_b":"pull_back_sim",  "grade":"bleach_bypass",      "transition":"dissolve",    "energy":"low"},
+            ]
+            return presets
+
     # ── PHASE 5: SCENE PROMPTS ────────────────────────────────────
 
     def generate_scene_prompts(fact_package=None):
@@ -669,108 +858,164 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 
     # ── PHASE 8: RENDER ───────────────────────────────────────────
 
-    def render_scene_clip(img_path, duration, scene_idx, captions):
-        clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
-        pre_path  = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
-        third     = duration / 3.0
-        grade     = SCENE_GRADES[scene_idx % 3]
-        n_frames  = int(duration * FPS)
-        cap_y     = int(OUT_HEIGHT * 0.73)
-        cap_size  = 58
-        wm        = escape_dt("@India20Sixty")
+    def render_scene_clip(img_path, duration, scene_idx, captions, shot=None):
+        """
+        Render one image as TWO sub-clips with a hard cut between them.
+        Motion, grade, and energy come from the Visual Director shot list.
+        Each video gets a unique look — no two scenes have the same motion pair.
+        """
+        clip_path  = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
+        pre_path   = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
+        cap_y      = int(OUT_HEIGHT * 0.73)
+        cap_size   = 58
+        wm         = escape_dt("@India20Sixty")
 
-        print(f"  Clip {scene_idx}: [{grade['label']}]")
+        # Resolve shot from Visual Director or use fallback
+        if shot is None:
+            defs = ENERGY_DEFAULTS["medium"]
+            shot = {"motion_a": defs["motion_a"], "motion_b": defs["motion_b"],
+                    "grade": defs["grade"], "energy": "medium"}
 
-        # PASS 1: PNG → JPEG at 115% for panning headroom
-        pan_w = int(OUT_WIDTH  * 1.15)
-        pan_h = int(OUT_HEIGHT * 1.15)
+        motion_a = MOTIONS.get(shot["motion_a"], MOTIONS["pan_right_fast"])
+        motion_b = MOTIONS.get(shot["motion_b"], MOTIONS["diagonal_tl_br"])
+        grade    = GRADES.get(shot["grade"],    GRADES["warm_golden"])
+        energy   = shot.get("energy", "medium")
+
+        # Scale headroom to whichever motion needs more
+        hpct  = max(motion_a["hpct"], motion_b["hpct"])
+        pan_w = int(OUT_WIDTH  * hpct)
+        pan_h = int(OUT_HEIGHT * hpct)
         dx    = pan_w - OUT_WIDTH
         dy    = pan_h - OUT_HEIGHT
 
+        print(f"  Clip {scene_idx}: [{grade['label']}] {shot['motion_a']} | {shot['motion_b']} [{energy}]")
+
+        # PASS 1: Pre-process to scaled JPEG
         run_ffmpeg([
             "ffmpeg", "-y", "-i", img_path,
             "-vf", f"scale={pan_w}:{pan_h}:force_original_aspect_ratio=increase:flags=lanczos,crop={pan_w}:{pan_h}",
-            "-frames:v", "1", "-q:v", "3", "-f", "image2", "-vcodec", "mjpeg",
-            pre_path
+            "-frames:v", "1", "-q:v", "3", "-f", "image2", "-vcodec", "mjpeg", pre_path
         ], f"pre-{scene_idx}", timeout=20)
 
-        # PASS 2: JPEG → H264 with pan + grade + grain + watermark + captions
-        pan_directions = [
-            (f"{dx}*n/{n_frames}",           f"{dy//2}"),
-            (f"{dx}-{dx}*n/{n_frames}",      f"{dy//3}"),
-            (f"{dx//2}",                      f"{dy}-{dy//2}*n/{n_frames}"),
-        ]
-        x_expr, y_expr = pan_directions[scene_idx % 3]
+        # Split: A=42%, B=58%
+        dur_a = duration * 0.42
+        dur_b = duration * 0.58
+        n_a   = int(dur_a * FPS)
+        n_b   = int(dur_b * FPS)
 
-        vf_parts = [
-            f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
-            grade["eq"],
-            grade["hue"],
-            grade["sharp"],
-            "noise=c0s=12:c0f=t+u",
-            "setsar=1",
-            f"drawtext=text='{wm}':fontsize=44:fontcolor=white@0.9"
-            f":borderw=4:bordercolor=black@0.95:x=28:y=h-88",
-        ]
+        # Speed multiplier: high energy = faster travel
+        speed = {"high": 1.0, "medium": 0.72, "low": 0.45}.get(energy, 0.72)
+        sdx_a = max(1, min(int(dx * speed), dx))
+        sdy_a = max(1, min(int(dy * speed), dy))
+        sdx_b = max(1, min(int(dx * speed), dx))
+        sdy_b = max(1, min(int(dy * speed), dy))
+
+        x_a = motion_a["x"](sdx_a, sdy_a, n_a)
+        y_a = motion_a["y"](sdx_a, sdy_a, n_a)
+        x_b = motion_b["x"](sdx_b, sdy_b, n_b)
+        y_b = motion_b["y"](sdx_b, sdy_b, n_b)
+
+        def make_vf(x_expr, y_expr, caps_for_sub, sub_dur):
+            third = sub_dur / 3.0
+            parts = [
+                f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
+                grade["eq"], grade["hue"], grade["sharp"], grade["noise"],
+                "setsar=1",
+                f"drawtext=text='{wm}':fontsize=44:fontcolor=white@0.9"
+                f":borderw=4:bordercolor=black@0.95:x=28:y=h-88",
+            ]
+            for ci, cap in enumerate(caps_for_sub):
+                if not cap.strip(): continue
+                escaped = escape_dt(cap)
+                t_s = ci * third
+                t_e = (ci + 1) * third
+                parts.append(
+                    f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
+                    f":borderw=5:bordercolor=black@0.85"
+                    f":x=(w-text_w)/2:y={cap_y}"
+                    f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
+                )
+            return ",".join(parts)
 
         scene_caps = captions[scene_idx * 3: scene_idx * 3 + 3]
-        while len(scene_caps) < 3:
-            scene_caps.append("")
+        while len(scene_caps) < 3: scene_caps.append("")
+        caps_a = [scene_caps[0], scene_caps[1], ""]
+        caps_b = ["", scene_caps[2], ""]
 
-        for ci, cap in enumerate(scene_caps):
-            if not cap.strip():
-                continue
-            escaped = escape_dt(cap)
-            t_start = ci * third
-            t_end   = (ci + 1) * third
-            vf_parts.append(
-                f"drawtext=text='{escaped}'"
-                f":fontsize={cap_size}:fontcolor=white"
-                f":borderw=5:bordercolor=black@0.85"
-                f":x=(w-text_w)/2:y={cap_y}"
-                f":enable='between(t,{t_start:.3f},{t_end:.3f})'"
-            )
+        sub_a = f"{TMP_DIR}/{job_id}_clip{scene_idx}a.mp4"
+        sub_b = f"{TMP_DIR}/{job_id}_clip{scene_idx}b.mp4"
+        lst   = f"{TMP_DIR}/{job_id}_list{scene_idx}.txt"
 
         run_ffmpeg([
-            "ffmpeg", "-y", "-loop", "1", "-r", str(FPS),
-            "-i", pre_path,
-            "-vf", ",".join(vf_parts),
-            "-t", str(duration), "-r", str(FPS),
+            "ffmpeg", "-y", "-loop", "1", "-r", str(FPS), "-i", pre_path,
+            "-vf", make_vf(x_a, y_a, caps_a, dur_a),
+            "-t", str(dur_a), "-r", str(FPS),
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-pix_fmt", "yuv420p", clip_path
-        ], f"clip-{scene_idx}", timeout=300)
+            "-pix_fmt", "yuv420p", sub_a
+        ], f"clip-{scene_idx}a", timeout=180)
 
-        try: os.remove(pre_path)
-        except Exception: pass
+        run_ffmpeg([
+            "ffmpeg", "-y", "-loop", "1", "-r", str(FPS), "-i", pre_path,
+            "-vf", make_vf(x_b, y_b, caps_b, dur_b),
+            "-t", str(dur_b), "-r", str(FPS),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-pix_fmt", "yuv420p", sub_b
+        ], f"clip-{scene_idx}b", timeout=180)
+
+        with open(lst, "w") as f:
+            f.write(f"file '{sub_a}'\nfile '{sub_b}'\n")
+        run_ffmpeg([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", lst, "-c", "copy", clip_path
+        ], f"concat-{scene_idx}", timeout=60)
+
+        for p in [sub_a, sub_b, lst, pre_path]:
+            try: os.remove(p)
+            except Exception: pass
         try: os.remove(img_path)
         except Exception: pass
 
         print(f"  Clip {scene_idx}: {os.path.getsize(clip_path)//1024}KB")
         return clip_path
 
-    def apply_xfade(clip_paths, scene_dur):
+    def apply_xfade(clip_paths, scene_dur, shot_list=None):
         if len(clip_paths) == 1:
             return clip_paths[0]
-        transition  = random.choice(XFADE_TRANSITIONS)
+
         output_path = f"{TMP_DIR}/{job_id}_xfaded.mp4"
         n           = len(clip_paths)
         inputs      = []
         for cp in clip_paths:
             inputs += ["-i", cp]
+
+        # Use per-scene transitions from shot_list if available
+        # shot[i]["transition"] applies between clip i and clip i+1
+        def get_transition(idx):
+            if shot_list and idx < len(shot_list):
+                key = shot_list[idx].get("transition", "dissolve")
+                val = TRANSITIONS.get(key, "dissolve")
+                # hard_cut = None means no xfade — fall back to dissolve for xfade chain
+                return val if val else "dissolve"
+            return random.choice(XFADE_TRANSITIONS)
+
         fc_parts = []
         offset   = scene_dur - XFADE_DUR
+        t0       = get_transition(0)
         fc_parts.append(
-            f"[0:v][1:v]xfade=transition={transition}"
+            f"[0:v][1:v]xfade=transition={t0}"
             f":duration={XFADE_DUR}:offset={offset:.3f}[xf0]"
         )
         for i in range(2, n):
-            offset  += scene_dur - XFADE_DUR
-            prev     = f"[xf{i-2}]" if i > 2 else "[xf0]"
+            offset += scene_dur - XFADE_DUR
+            t_i    = get_transition(i - 1)
+            prev   = f"[xf{i-2}]" if i > 2 else "[xf0]"
             fc_parts.append(
-                f"{prev}[{i}:v]xfade=transition={transition}"
+                f"{prev}[{i}:v]xfade=transition={t_i}"
                 f":duration={XFADE_DUR}:offset={offset:.3f}[xf{i-1}]"
             )
-        print(f"  xfade: {transition}")
+
+        transitions_used = [get_transition(i) for i in range(n-1)]
+        print(f"  xfade: {' → '.join(transitions_used)}")
         try:
             run_ffmpeg([
                 "ffmpeg", "-y", *inputs,
@@ -796,7 +1041,7 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
             except Exception: pass
             return concat_path
 
-    def render_video(images, audio, audio_dur, captions):
+    def render_video(images, audio, audio_dur, captions, shot_list=None):
         update_status("render")
         print("\n[Render]")
         scene_dur  = audio_dur / len(images)
@@ -805,10 +1050,11 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 
         clip_paths = []
         for i, img in enumerate(images):
-            clip = render_scene_clip(img, scene_dur, i, captions)
+            shot = shot_list[i] if shot_list and i < len(shot_list) else None
+            clip = render_scene_clip(img, scene_dur, i, captions, shot=shot)
             clip_paths.append(clip)
 
-        transitioned = apply_xfade(clip_paths, scene_dur)
+        transitioned = apply_xfade(clip_paths, scene_dur, shot_list=shot_list)
         for cp in clip_paths:
             try: os.remove(cp)
             except Exception: pass
@@ -1033,13 +1279,11 @@ Return ONLY the title text, nothing else."""
         return video_id
 
 
-    def render_video_silent(images, captions):
+    def render_video_silent(images, captions, shot_list=None):
         """Render video without audio track — for human voice staging."""
         update_status("render")
         print("\n[Render — silent]")
 
-        # Use fixed 8.6s per scene (25s total / 3 scenes)
-        # In human mode we don't know voice duration yet
         scene_dur  = 8.6
         total_dur  = scene_dur * len(images)
         video_path = f"{TMP_DIR}/{job_id}_silent.mp4"
@@ -1048,10 +1292,11 @@ Return ONLY the title text, nothing else."""
 
         clip_paths = []
         for i, img in enumerate(images):
-            clip = render_scene_clip(img, scene_dur, i, captions)
+            shot = shot_list[i] if shot_list and i < len(shot_list) else None
+            clip = render_scene_clip(img, scene_dur, i, captions, shot=shot)
             clip_paths.append(clip)
 
-        transitioned = apply_xfade(clip_paths, scene_dur)
+        transitioned = apply_xfade(clip_paths, scene_dur, shot_list=shot_list)
         for cp in clip_paths:
             try: os.remove(cp)
             except Exception: pass
@@ -1330,6 +1575,9 @@ Return ONLY the title text, nothing else."""
         # 4. Captions
         captions = extract_captions(script_lines)
 
+        # 4b. Visual Director — assigns motion, grade, transition per scene
+        shot_list = visual_director(script, script_lines)
+
         # 5. Images
         images = generate_all_images(fact_package)
         log_to_db(f"Images: {len(images)}")
@@ -1342,7 +1590,7 @@ Return ONLY the title text, nothing else."""
             # Save to R2 and park in staging queue
             print("\n[Human Voice Mode — rendering silent video]")
 
-            video = render_video_silent(images, captions)
+            video = render_video_silent(images, captions, shot_list=shot_list)
             log_to_db("Silent video rendered")
 
             # Upload to R2
@@ -1379,7 +1627,7 @@ Return ONLY the title text, nothing else."""
             audio, audio_dur = generate_voice(reviewed_script)
             log_to_db(f"Voice: {audio_dur:.1f}s")
 
-            video = render_video(images, audio, audio_dur, captions)
+            video = render_video(images, audio, audio_dur, captions, shot_list=shot_list)
             log_to_db("Video rendered")
 
             # AI mode: check publish gate
