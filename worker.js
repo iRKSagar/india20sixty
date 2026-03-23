@@ -1900,13 +1900,6 @@ function renderReviewGrid(){
     el.innerHTML='<div class="empty" style="grid-column:1/-1"><span class="empty-icon">\u26A0</span>Render error: '+err.message+'</div>';
   }
 }
-      +'<div class="staged-body" style="font-size:.72rem;line-height:1.6">'+scr.slice(0,150)+(scr.length>150?'\u2026':'')+'</div>'
-      +'<div class="staged-foot" style="gap:6px">'
-      +'<button class="btn btn-primary" style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="publishCBDP(this.dataset.jid,this)">\uD83D\uDE80 Publish</button>'
-      +'<button class="btn btn-red"     style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="rejectCBDP(this.dataset.jid,this)">\u2715 Reject</button>'
-      +'</div></div>';
-  }).join('');
-}
 
 async function publishCBDP(jobId,btn){
   if(!confirm('Publish this video to YouTube now?'))return;
