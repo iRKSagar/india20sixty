@@ -1299,7 +1299,7 @@ function showPage(name,btn){
   document.getElementById('page-'+name).classList.add('active');
   btn.classList.add('active'); currentPage=name;
   if(name==='staging'){ renderStagingGrid(); }
-  if(name==='review'){loadCBDP();renderReviewGrid();}
+  if(name==='review'){ loadCBDP(); }
   if(name==='calendar'){loadCalendar();renderCalendar();}
   if(name==='analytics') renderAnalytics();
   if(name==='topics') renderTopicsPage();
@@ -1849,45 +1849,57 @@ async function loadCBDP(){
     allReview=Array.isArray(data)?data:[];
     var rc=document.getElementById('rev-cnt'); if(rc)rc.textContent=allReview.length;
     var rc2=document.getElementById('cbdp-count'); if(rc2)rc2.textContent=allReview.length;
-    if(currentPage==='review') renderReviewGrid();
+    renderReviewGrid();
   }catch(e){console.error('loadCBDP:',e);}
 }
 
 function renderReviewGrid(){
   var el=document.getElementById('cbdp-grid'); if(!el)return;
-  if(!allReview.length){
+  if(!allReview||!allReview.length){
     el.innerHTML='<div class="empty" style="grid-column:1/-1"><span class="empty-icon">\uD83C\uDFAC</span>'
       +'No videos awaiting review.<br>'
       +'<span style="color:var(--muted)">Switch PUBLISH OFF to queue rendered videos here for review before publishing.</span>'
       +'</div>';
     return;
   }
-  el.innerHTML=allReview.map(function(j){
-    var cat=CATS[j.cluster]||{color:'var(--muted)',emoji:'\uD83D\uDCF9',label:j.cluster||'?'};
-    var scr=(j.script_package&&j.script_package.text)||'';
-    var title=(j.script_package&&j.script_package.title)||j.topic||'Untitled';
-    var age=j.updated_at?ago(j.updated_at)+' ago':'';
-    var videoUrl = j.video_public_url || (R2_BASE_URL && j.video_r2_url ? R2_BASE_URL+'/'+j.video_r2_url : '');
-    return '<div class="staged-card" style="cursor:default">'
-      +'<div class="staged-head">'
-      +'<div class="staged-topic">'+title+'</div>'
-      +'<div class="staged-meta">'
-      +'<span style="font-size:.68rem;color:'+cat.color+'">'+cat.emoji+' '+cat.label+'</span>'
-      +'<span class="score-pill '+scClass(j.council_score||0)+'">'+(j.council_score||0)+'</span>'
-      +'<span style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">'+age+'</span>'
-      +'</div></div>'
-      +(videoUrl
-        ?'<video src="'+videoUrl+'" controls preload="metadata" '
-         +'style="width:100%;max-height:200px;background:#000;display:block"></video>'
-         +'<div style="text-align:center;padding:4px 0">'
-         +'<a href="'+videoUrl+'" target="_blank" '
-         +'style="font-family:var(--mono);font-size:.62rem;color:var(--accent);text-decoration:none">'
-         +'\u25B6 Open video in new tab</a></div>'
-        :'<div style="background:var(--surface2);height:80px;display:flex;align-items:center;justify-content:center;'
-         +'font-size:.72rem;color:var(--muted);flex-direction:column;gap:4px">'
-         +'\uD83D\uDCF9 Video URL not available<br>'
-         +'<span style="font-size:.6rem">Check R2_BASE_URL in Cloudflare env vars</span>'
-         +'</div>')
+  try{
+    el.innerHTML=allReview.map(function(j){
+      var cat=CATS[j.cluster]||{color:'var(--muted)',emoji:'\uD83D\uDCF9',label:j.cluster||'?'};
+      var scr=(j.script_package&&j.script_package.text)||'';
+      var title=(j.script_package&&j.script_package.title)||j.topic||'Untitled';
+      var age=j.updated_at?ago(j.updated_at)+' ago':'';
+      var videoUrl=j.video_public_url||(R2_BASE_URL&&j.video_r2_url?R2_BASE_URL+'/'+j.video_r2_url:'');
+      return '<div class="staged-card" style="cursor:default">'
+        +'<div class="staged-head">'
+        +'<div class="staged-topic">'+(title||'Untitled')+'</div>'
+        +'<div class="staged-meta">'
+        +'<span style="font-size:.68rem;color:'+cat.color+'">'+cat.emoji+' '+cat.label+'</span>'
+        +'<span class="score-pill '+scClass(j.council_score||0)+'">'+(j.council_score||0)+'</span>'
+        +'<span style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">'+age+'</span>'
+        +'</div></div>'
+        +(videoUrl
+          ?'<video src="'+videoUrl+'" controls preload="metadata" '
+           +'style="width:100%;max-height:220px;background:#000;display:block"></video>'
+           +'<div style="text-align:center;padding:5px 0;border-bottom:1px solid var(--border)">'
+           +'<a href="'+videoUrl+'" target="_blank" '
+           +'style="font-family:var(--mono);font-size:.62rem;color:var(--accent);text-decoration:none">'
+           +'\u25B6 Watch in new tab</a></div>'
+          :'<div style="background:var(--surface2);height:80px;display:flex;align-items:center;'
+           +'justify-content:center;font-size:.72rem;color:var(--muted);flex-direction:column;gap:4px">'
+           +'\uD83D\uDCF9 Video not available'
+           +(R2_BASE_URL?'':'<br><span style="font-size:.6rem">R2_BASE_URL not set in Cloudflare</span>')
+           +'</div>')
+        +'<div class="staged-body" style="font-size:.72rem;line-height:1.6">'+scr.slice(0,150)+(scr.length>150?'\u2026':'')+'</div>'
+        +'<div class="staged-foot" style="gap:6px">'
+        +'<button class="btn btn-primary" style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="publishCBDP(this.dataset.jid,this)">\uD83D\uDE80 Publish</button>'
+        +'<button class="btn btn-red"     style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="rejectCBDP(this.dataset.jid,this)">\u2715 Reject</button>'
+        +'</div></div>';
+    }).join('');
+  }catch(err){
+    console.error('renderReviewGrid error:',err);
+    el.innerHTML='<div class="empty" style="grid-column:1/-1"><span class="empty-icon">\u26A0</span>Render error: '+err.message+'</div>';
+  }
+}
       +'<div class="staged-body" style="font-size:.72rem;line-height:1.6">'+scr.slice(0,150)+(scr.length>150?'\u2026':'')+'</div>'
       +'<div class="staged-foot" style="gap:6px">'
       +'<button class="btn btn-primary" style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="publishCBDP(this.dataset.jid,this)">\uD83D\uDE80 Publish</button>'
