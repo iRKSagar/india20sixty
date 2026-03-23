@@ -15,7 +15,7 @@ export default {
 
     // ── DASHBOARD ─────────────────────────────────────────────
     if (url.pathname === "/" || url.pathname === "/dashboard") {
-      return new Response(buildDashboard(), {
+      return new Response(buildDashboard(env), {
         headers: { "content-type": "text/html;charset=UTF-8",
                    "cache-control": "no-store" }
       });
@@ -90,7 +90,15 @@ export default {
         const rows = await sbGet(env,
           "jobs?status=eq.review&order=updated_at.desc" +
           "&select=id,topic,cluster,script_package,video_r2_url,council_score,updated_at");
-        return cors(rows);
+        const r2Base = (env.R2_BASE_URL || "").replace(/\/$/, "");
+        // Attach full public URL so dashboard can play video directly
+        const enriched = rows.map(j => ({
+          ...j,
+          video_public_url: j.video_r2_url && r2Base
+            ? r2Base + "/" + j.video_r2_url
+            : null
+        }));
+        return cors(enriched);
       } catch (e) { return cors({ error: e.message }, 500); }
     }
 
@@ -802,10 +810,8 @@ async function syncYouTubeAnalytics(env) {
 // ============================================================
 // DASHBOARD HTML
 // ============================================================
-function buildDashboard() {
-  // NOTE: All JS inside this string uses single quotes and string concat
-  // to avoid backtick conflicts with the outer template literal.
-  // Worker-scope constants (CATEGORIES, VPD_SCHEDULES) are NOT repeated here.
+function buildDashboard(env) {
+  const r2Base = (env && env.R2_BASE_URL) ? env.R2_BASE_URL.replace(/\/$/, "") : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1250,6 +1256,9 @@ body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear
 </div>
 
 <script>
+// ── CONFIG (injected from worker env) ──────────────────────────
+var R2_BASE_URL = '` + r2Base + `';
+
 // ── DATA ───────────────────────────────────────────────────────
 var CATS = {
   AI:        {label:'AI & ML',         color:'#00e5ff', emoji:'\uD83E\uDD16'},
@@ -1858,6 +1867,7 @@ function renderReviewGrid(){
     var scr=(j.script_package&&j.script_package.text)||'';
     var title=(j.script_package&&j.script_package.title)||j.topic||'Untitled';
     var age=j.updated_at?ago(j.updated_at)+' ago':'';
+    var videoUrl = j.video_public_url || (R2_BASE_URL && j.video_r2_url ? R2_BASE_URL+'/'+j.video_r2_url : '');
     return '<div class="staged-card" style="cursor:default">'
       +'<div class="staged-head">'
       +'<div class="staged-topic">'+title+'</div>'
@@ -1866,11 +1876,18 @@ function renderReviewGrid(){
       +'<span class="score-pill '+scClass(j.council_score||0)+'">'+(j.council_score||0)+'</span>'
       +'<span style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">'+age+'</span>'
       +'</div></div>'
-      +(j.video_r2_url
-        ?'<video src="'+j.video_r2_url+'" controls preload="metadata" '
+      +(videoUrl
+        ?'<video src="'+videoUrl+'" controls preload="metadata" '
          +'style="width:100%;max-height:200px;background:#000;display:block"></video>'
-        :'<div style="background:var(--surface2);height:120px;display:flex;align-items:center;justify-content:center;'
-         +'font-size:.75rem;color:var(--muted)">No video URL configured</div>')
+         +'<div style="text-align:center;padding:4px 0">'
+         +'<a href="'+videoUrl+'" target="_blank" '
+         +'style="font-family:var(--mono);font-size:.62rem;color:var(--accent);text-decoration:none">'
+         +'\u25B6 Open video in new tab</a></div>'
+        :'<div style="background:var(--surface2);height:80px;display:flex;align-items:center;justify-content:center;'
+         +'font-size:.72rem;color:var(--muted);flex-direction:column;gap:4px">'
+         +'\uD83D\uDCF9 Video URL not available<br>'
+         +'<span style="font-size:.6rem">Check R2_BASE_URL in Cloudflare env vars</span>'
+         +'</div>')
       +'<div class="staged-body" style="font-size:.72rem;line-height:1.6">'+scr.slice(0,150)+(scr.length>150?'\u2026':'')+'</div>'
       +'<div class="staged-foot" style="gap:6px">'
       +'<button class="btn btn-primary" style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="publishCBDP(this.dataset.jid,this)">\uD83D\uDE80 Publish</button>'
