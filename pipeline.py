@@ -818,7 +818,8 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
-                "-shortest", "-movflags", "+faststart", video_path
+                "-t", str(audio_dur),          # use audio duration — not -shortest
+                "-movflags", "+faststart", video_path
             ], "final-mux", timeout=120)
         except Exception as e:
             print(f"  fade failed ({e}), plain mux")
@@ -828,7 +829,8 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "aac", "-b:a", "128k",
-                "-shortest", "-movflags", "+faststart", video_path
+                "-t", str(audio_dur),          # use audio duration — not -shortest
+                "-movflags", "+faststart", video_path
             ], "final-mux-plain", timeout=120)
 
         try: os.remove(transitioned)
@@ -855,8 +857,8 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
 Topic: {topic}
 Key fact: {key_fact}
 Hook pattern: {random.choice(hooks)}
-Rules: under 60 chars, 1 emoji, clickable, no hashtags.
-Return ONLY the title."""
+Rules: under 60 chars, NO emoji, plain English only, clickable, no hashtags.
+Return ONLY the title text, nothing else."""
         try:
             r = requests.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -868,20 +870,28 @@ Return ONLY the title."""
                 timeout=15
             )
             r.raise_for_status()
-            title = r.json()["choices"][0]["message"]["content"].strip().strip('"')
-            if len(title) > 95:
-                title = title[:92] + "..."
-            print(f"  Title: {title}")
-            return title
+            raw_title = r.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            # Strip any emoji GPT adds despite instructions
+            import re
+            raw_title = re.sub(r'[\U0001F000-\U0001FFFF]', '', raw_title)
+            raw_title = re.sub(r'[\u2600-\u27BF]', '', raw_title).strip()
+            if len(raw_title) > 95:
+                raw_title = raw_title[:92] + "..."
+            if not raw_title:
+                raise ValueError("Empty title after sanitize")
+            print(f"  Title: {raw_title}")
+            return raw_title
         except Exception as e:
-            print(f"  Title failed: {e}")
+            print(f"  Title failed ({e}), using fallback")
+            # Safe ASCII fallback titles — no emoji, no special chars
             options = [
-                f"🚀 {topic[:50]} — India's Next Big Leap",
-                f"⚡ This Is Already Happening In India",
-                f"🇮🇳 Nobody Talks About This India Tech Story",
-                f"🔬 India Just Changed The Game — {topic[:35]}",
+                f"India's {topic[:45]} - The Real Story",
+                f"Why Nobody Is Talking About This India Story",
+                f"What Is Actually Happening With {topic[:40]}",
+                f"India Just Changed The Game - {topic[:35]}",
+                f"The Truth About {topic[:50]}",
             ]
-            return random.choice(options)
+            return random.choice(options)[:95]
 
     # ── PHASE 10: YOUTUBE ─────────────────────────────────────────
 
@@ -1350,55 +1360,360 @@ Return ONLY the title."""
             video = render_video(images, audio, audio_dur, captions)
             log_to_db("Video rendered")
 
-            # AI mode: upload to YouTube
+            # AI mode: check publish gate
             if TEST_MODE:
                 print(f"\nTEST MODE — skipping YouTube upload")
                 video_id, final_status = "TEST_MODE", "test_complete"
             else:
-                title        = generate_title(reviewed_script, fact_package)
-                video_id     = upload_to_youtube(video, title, reviewed_script, fact_package)
-                final_status = "complete"
-                log_to_db(f"Uploaded: {video_id} | {title}")
+                # Check publish state from system_state
+                publish_enabled = False
+                try:
+                    pub_rows = requests.get(
+                        f"{SUPABASE_URL}/rest/v1/system_state?id=eq.main&select=publish",
+                        headers={"apikey": SUPABASE_ANON_KEY,
+                                 "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                        timeout=5
+                    ).json()
+                    publish_enabled = pub_rows[0].get("publish", False) if pub_rows else False
+                except Exception as e:
+                    print(f"  Publish state check failed: {e}")
 
-            try:
-                requests.post(
-                    f"{SUPABASE_URL}/rest/v1/videos",
-                    headers={"apikey": SUPABASE_ANON_KEY,
-                             "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                             "Content-Type": "application/json",
-                             "Prefer": "return=minimal"},
-                    json={"job_id": job_id, "topic": topic,
-                          "youtube_url": f"https://youtube.com/watch?v={video_id}"
-                                         if video_id not in ("TEST_MODE",) else None},
-                    timeout=10
-                )
-            except Exception as e:
-                print(f"videos insert: {e}")
+                if not publish_enabled:
+                    # CBDP mode — video rendered, PUBLISH is OFF
+                    # Save to R2 for review in dashboard
+                    print("\n[PUBLISH OFF — saving to review queue (CBDP)]")
+                    r2_key       = f"review/{job_id}/video.mp4"
+                    video_r2_url = upload_to_r2(video, r2_key)
+                    title        = generate_title(reviewed_script, fact_package)
+                    update_status("review", {
+                        "video_r2_url":  video_r2_url,
+                        "video_r2_key":  r2_key,
+                        "script_package": {
+                            "text":         reviewed_script,
+                            "original":     script,
+                            "lines":        script_lines,
+                            "captions":     captions,
+                            "fact_anchor":  fact_package,
+                            "title":        title,
+                            "generated_at": datetime.utcnow().isoformat(),
+                        }
+                    })
+                    print(f"\nCBDP: {job_id}")
+                    print(f"  Video saved to R2: {r2_key}")
+                    print(f"  Title ready: {title}")
+                    print("  Waiting for review in dashboard.")
+                    try: os.remove(video)
+                    except Exception: pass
+                    try: os.remove(audio)
+                    except Exception: pass
+                else:
+                    title        = generate_title(reviewed_script, fact_package)
+                    video_id     = upload_to_youtube(video, title, reviewed_script, fact_package)
+                    final_status = "complete"
+                    log_to_db(f"Uploaded: {video_id} | {title}")
 
-            update_status(final_status, {
-                "youtube_id":     video_id,
-                "script_package": {
-                    "text":         reviewed_script,
-                    "original":     script,
-                    "lines":        script_lines,
-                    "captions":     captions,
-                    "fact_anchor":  fact_package,
-                    "generated_at": datetime.utcnow().isoformat(),
-                }
-            })
+                    try:
+                        requests.post(
+                            f"{SUPABASE_URL}/rest/v1/videos",
+                            headers={"apikey": SUPABASE_ANON_KEY,
+                                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                                     "Content-Type": "application/json",
+                                     "Prefer": "return=minimal"},
+                            json={"job_id": job_id, "topic": topic,
+                                  "youtube_url": f"https://youtube.com/watch?v={video_id}"
+                                                 if video_id not in ("TEST_MODE",) else None},
+                            timeout=10
+                        )
+                    except Exception as e:
+                        print(f"videos insert: {e}")
 
-            for f in [audio, video]:
-                try: os.remove(f)
-                except Exception: pass
+                    update_status(final_status, {
+                        "youtube_id":     video_id,
+                        "script_package": {
+                            "text":         reviewed_script,
+                            "original":     script,
+                            "lines":        script_lines,
+                            "captions":     captions,
+                            "fact_anchor":  fact_package,
+                            "generated_at": datetime.utcnow().isoformat(),
+                        }
+                    })
 
-            print(f"\nPIPELINE COMPLETE (AI): {video_id}\n")
+                    for f in [audio, video]:
+                        try: os.remove(f)
+                        except Exception: pass
+
+                    print(f"\nPIPELINE COMPLETE (AI): {video_id}\n")
 
     except Exception as e:
         msg = str(e)
         print(f"\nFAILED: {msg}\n{traceback.format_exc()}")
         log_to_db(f"FAILED: {msg[:400]}")
-        update_status("failed", {"error": msg[:400]})
+
+        # ── CBDP Detection ─────────────────────────────────────────
+        # "Completed But Didn't Publish" — video rendered, upload failed
+        # Check if this failure happened at upload stage (video exists in R2)
+        upload_keywords = ["400", "401", "403", "youtube", "upload", "quota",
+                           "invalidDescription", "Bad Request", "oauth"]
+        is_upload_fail  = any(kw.lower() in msg.lower() for kw in upload_keywords)
+
+        # Check if video_r2_url was saved (AI mode saves locally not R2,
+        # but script_package exists meaning we got past render)
+        try:
+            job_rows = requests.get(
+                f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}"
+                "&select=script_package,video_r2_url",
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                timeout=5
+            ).json()
+            has_script = bool(job_rows and job_rows[0].get("script_package"))
+        except Exception:
+            has_script = False
+
+        if is_upload_fail and has_script:
+            # Mark as CBDP — video was ready, only upload failed
+            print("  → CBDP: upload failed but video was rendered. Marking for retry.")
+            update_status("cbdp", {
+                "error": f"CBDP: {msg[:350]}",
+            })
+        else:
+            update_status("failed", {"error": msg[:400]})
         raise
+
+
+# ==========================================
+# RETRY UPLOAD — for CBDP jobs
+# ==========================================
+
+@app.function(image=image, secrets=secrets, cpu=1.0, memory=512, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def retry_upload(data: dict):
+    """
+    Re-upload a CBDP job to YouTube without re-rendering.
+    Called from dashboard Staging → CBDP tab → Retry button.
+    data = { job_id: str }
+    For AI mode jobs: re-downloads rendered video from script_package data
+    and re-attempts YouTube upload with fixed sanitizer.
+    """
+    import json as _json, traceback as _tb
+
+    job_id   = data.get("job_id")
+    if not job_id:
+        return {"status": "error", "message": "Missing job_id"}
+
+    SUPABASE_URL      = os.environ["SUPABASE_URL"]
+    SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
+    YOUTUBE_CLIENT_ID     = os.environ.get("YOUTUBE_CLIENT_ID")
+    YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
+    YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+    OPENAI_API_KEY    = os.environ["OPENAI_API_KEY"]
+    TEST_MODE         = os.environ.get("TEST_MODE", "true").lower() == "true"
+
+    def sb_patch(ep, payload):
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/{ep}",
+            headers={"apikey": SUPABASE_ANON_KEY,
+                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                     "Content-Type": "application/json",
+                     "Prefer": "return=minimal"},
+            json=payload, timeout=10
+        )
+
+    try:
+        # Fetch job
+        rows = requests.get(
+            f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}"
+            "&select=id,topic,status,script_package,council_score,cluster",
+            headers={"apikey": SUPABASE_ANON_KEY,
+                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+            timeout=10
+        ).json()
+
+        if not rows:
+            return {"status": "error", "message": "Job not found"}
+        job = rows[0]
+
+        if job["status"] not in ("cbdp", "failed"):
+            return {"status": "error",
+                    "message": f"Job status is '{job['status']}' — only cbdp/failed can be retried"}
+
+        script_pkg = job.get("script_package") or {}
+        topic      = job.get("topic", "India Future Tech")
+        script     = script_pkg.get("text", "")
+        fact_pkg   = script_pkg.get("fact_anchor", {})
+
+        if not script:
+            return {"status": "error",
+                    "message": "No script found — job needs full re-render, not just retry"}
+
+        # Mark as retrying
+        sb_patch(f"jobs?id=eq.{job_id}", {
+            "status": "upload",
+            "error": None,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+        print(f"\nCBDP RETRY: {job_id}")
+        print(f"  Topic: {topic}")
+
+        if TEST_MODE:
+            sb_patch(f"jobs?id=eq.{job_id}", {
+                "status": "test_complete",
+                "youtube_id": "CBDP_TEST",
+                "updated_at": datetime.utcnow().isoformat()
+            })
+            return {"status": "test_complete", "job_id": job_id}
+
+        # ── Sanitize for YouTube ───────────────────────────────────
+        import re as _re
+
+        def sanitize(text):
+            if not text: return ""
+            replacements = [
+                ('\u2019', "'"), ('\u2018', "'"),
+                ('\u201c', '"'), ('\u201d', '"'),
+                ('\u2013', '-'), ('\u2014', '-'),
+                ('\u2026', '...'), ('\u00a0', ' '),
+                ('\u20b9', 'Rs.'), ('\u2022', '-'),
+            ]
+            for bad, good in replacements:
+                text = text.replace(bad, good)
+            text = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+            text = _re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]', '', text)
+            text = _re.sub(r'[\U0001F000-\U0001FFFF]', '', text)
+            text = _re.sub(r'[\u2600-\u27BF]', '', text)
+            text = _re.sub(r'[\u0900-\u097F]', '', text)
+            text = _re.sub(r' {2,}', ' ', text)
+            text = _re.sub(r'\n{3,}', '\n\n', text)
+            return text.strip()
+
+        # ── Generate title ────────────────────────────────────────
+        import random as _rnd
+        try:
+            tr = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user",
+                                    "content": f"Write a YouTube title for: {topic}\n"
+                                               f"Rules: under 60 chars, NO emoji, plain English only.\n"
+                                               f"Return ONLY the title."}],
+                      "temperature": 0.9, "max_tokens": 60},
+                timeout=15
+            )
+            raw_title = tr.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            raw_title = _re.sub(r'[\U0001F000-\U0001FFFF]', '', raw_title)
+            raw_title = _re.sub(r'[\u2600-\u27BF]', '', raw_title).strip()
+            if not raw_title:
+                raise ValueError("empty")
+            title = raw_title[:95]
+        except Exception:
+            options = [
+                f"India's {topic[:45]} - The Real Story",
+                f"Why Nobody Is Talking About This India Story",
+                f"What Is Actually Happening With {topic[:40]}",
+                f"India Just Changed The Game - {topic[:35]}",
+            ]
+            title = _rnd.choice(options)[:95]
+
+        print(f"  Title: {title}")
+
+        # ── Build description ─────────────────────────────────────
+        source_raw = ""
+        if fact_pkg and fact_pkg.get("found"):
+            src = fact_pkg.get("source", "")
+            if src: source_raw = f"\nSource: {src}\n"
+
+        description = sanitize(
+            f"{script}\n\n{source_raw}"
+            "India20Sixty - India's near future, explained.\n\n"
+            "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
+        )[:5000]
+
+        # ── OAuth token ───────────────────────────────────────────
+        tr = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={"client_id":     YOUTUBE_CLIENT_ID,
+                  "client_secret":  YOUTUBE_CLIENT_SECRET,
+                  "refresh_token":  YOUTUBE_REFRESH_TOKEN,
+                  "grant_type":     "refresh_token"},
+            timeout=10
+        )
+        tr.raise_for_status()
+        token = tr.json()["access_token"]
+
+        # ── We need the video file ────────────────────────────────
+        # For CBDP jobs the video was rendered but cleaned up from /tmp
+        # We need to get it from R2 if it was staged, or re-render minimal
+        # For now: download from R2 if video_r2_url exists
+        video_r2_url = job.get("video_r2_url") or ""
+        video_path   = f"/tmp/cbdp_{job_id}.mp4"
+
+        if video_r2_url and video_r2_url.startswith("http"):
+            print(f"  Downloading from R2: {video_r2_url}")
+            r2r = requests.get(video_r2_url, timeout=120, stream=True)
+            r2r.raise_for_status()
+            with open(video_path, "wb") as f:
+                for chunk in r2r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"  Downloaded: {os.path.getsize(video_path)//1024}KB")
+        else:
+            return {"status": "error",
+                    "message": "No R2 video URL found. This job needs full re-render — use Restore Failed instead."}
+
+        # ── Upload ────────────────────────────────────────────────
+        metadata = {
+            "snippet": {
+                "title":       title,
+                "description": description,
+                "tags":        ["Future India", "India innovation", "AI",
+                                "Technology", "Shorts", "India2030"],
+                "categoryId":  "28"
+            },
+            "status": {
+                "privacyStatus":          "public",
+                "selfDeclaredMadeForKids": False
+            }
+        }
+
+        print(f"  Uploading {os.path.getsize(video_path)//1024}KB...")
+        with open(video_path, "rb") as vf:
+            up = requests.post(
+                "https://www.googleapis.com/upload/youtube/v3/videos"
+                "?uploadType=multipart&part=snippet,status",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"snippet": (None, _json.dumps(metadata), "application/json"),
+                       "video":   ("video.mp4", vf, "video/mp4")},
+                timeout=300
+            )
+        print(f"  YouTube ({up.status_code}): {up.text[:200]}")
+        up.raise_for_status()
+        video_id = up.json()["id"]
+        print(f"  UPLOADED: https://youtube.com/watch?v={video_id}")
+
+        sb_patch(f"jobs?id=eq.{job_id}", {
+            "status":     "complete",
+            "youtube_id": video_id,
+            "error":      None,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+
+        try: os.remove(video_path)
+        except Exception: pass
+
+        return {"status": "complete", "job_id": job_id, "youtube_id": video_id,
+                "url": f"https://youtube.com/watch?v={video_id}"}
+
+    except Exception as e:
+        msg = str(e)
+        print(f"\nCBDP RETRY FAILED: {msg}")
+        sb_patch(f"jobs?id=eq.{job_id}", {
+            "status": "cbdp",
+            "error":  f"Retry failed: {msg[:350]}",
+            "updated_at": datetime.utcnow().isoformat()
+        })
+        return {"status": "error", "message": msg}
 
 
 # ==========================================

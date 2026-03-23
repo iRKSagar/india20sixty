@@ -68,13 +68,20 @@ def mix(data: dict):
     voice_url     = data.get("voice_url")
     music_track   = data.get("music_track", "neutral_01")
     music_vol     = float(data.get("music_volume", 0.08))
-    publish_at    = data.get("publish_at")  # None = publish immediately
+    publish_at    = data.get("publish_at")
     voice_offset  = int(data.get("voice_offset_ms", 0))
+    upload_only   = data.get("upload_only", False)  # CBDP: video already has audio
+    title_override = data.get("title")              # CBDP: pre-generated title
 
-    if not all([job_id, video_url, voice_url]):
-        return {"status": "error", "message": "Missing job_id, video_url, or voice_url"}
+    if not job_id or not video_url:
+        return {"status": "error", "message": "Missing job_id or video_url"}
 
-    print(f"MIX START: {job_id}")
+    # upload_only = CBDP review publish — video already rendered with audio
+    if upload_only:
+        if not voice_url and not upload_only:
+            return {"status": "error", "message": "Missing voice_url"}
+
+    print(f"{'UPLOAD-ONLY' if upload_only else 'MIX'} START: {job_id}")
     do_mix.spawn(
         job_id=job_id,
         video_url=video_url,
@@ -83,15 +90,17 @@ def mix(data: dict):
         music_vol=music_vol,
         publish_at=publish_at,
         voice_offset=voice_offset,
+        upload_only=upload_only,
+        title_override=title_override,
     )
-    return {"status": "mixing", "job_id": job_id}
+    return {"status": "mixing" if not upload_only else "publishing", "job_id": job_id}
 
 
 # ── MAIN MIX FUNCTION ─────────────────────────────────────────────
 
 @app.function(image=image, secrets=secrets, cpu=2.0, memory=1024, timeout=300)
 def do_mix(job_id, video_url, voice_url, music_track, music_vol,
-           publish_at, voice_offset):
+           publish_at, voice_offset, upload_only=False, title_override=None):
 
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -152,29 +161,35 @@ def do_mix(job_id, video_url, voice_url, music_track, music_vol,
         return size
 
     try:
-        update_status("mixing")
+        update_status("upload" if upload_only else "mixing")
         print(f"\n{'='*50}")
-        print(f"MIXER: {job_id}")
-        print(f"Music: {music_track} @ {music_vol*100:.0f}%")
-        print(f"Voice offset: {voice_offset}ms")
+        print(f"{'UPLOAD-ONLY (CBDP)' if upload_only else 'MIXER'}: {job_id}")
         print(f"Publish at: {publish_at or 'immediate'}")
         print(f"{'='*50}\n")
 
         # 1. Download video
         download(video_url, video_path, "video")
 
-        # 2. Download voice recording
-        download(voice_url, voice_path, "voice")
+        # CBDP upload_only path — video already has audio baked in
+        # Skip all mixing, go straight to YouTube upload
+        if upload_only:
+            final_path = video_path
+            print("  Upload-only mode: skipping mix, uploading as-is")
+            # fall through to YouTube upload below
 
-        # 3. Get music from R2 or use silence if track not found
-        music_url = f"{R2_BASE_URL}/music/{music_track}.mp3" if R2_BASE_URL else None
-        has_music = False
-        if music_url:
-            try:
-                download(music_url, music_path, "music")
-                has_music = True
-            except Exception as e:
-                print(f"  Music download failed (non-fatal): {e}")
+        else:
+            # 2. Download voice recording
+            download(voice_url, voice_path, "voice")
+
+            # 3. Get music from R2 or use silence if track not found
+            music_url = f"{R2_BASE_URL}/music/{music_track}.mp3" if R2_BASE_URL else None
+            has_music = False
+            if music_url:
+                try:
+                    download(music_url, music_path, "music")
+                    has_music = True
+                except Exception as e:
+                    print(f"  Music download failed (non-fatal): {e}")
 
         # 4. Get video duration
         probe = subprocess.run(
@@ -264,6 +279,11 @@ def do_mix(job_id, video_url, voice_url, music_track, music_vol,
         source_line  = f"\nSource: {fact_anchor.get('source','')}\n" \
                        if fact_anchor.get("found") else ""
 
+        # Use title_override if provided (CBDP review publish)
+        if title_override:
+            title = title_override[:100]
+        else:
+
         # 8. YouTube OAuth
         r = requests.post(
             "https://oauth2.googleapis.com/token",
@@ -279,27 +299,28 @@ def do_mix(job_id, video_url, voice_url, music_track, music_vol,
         # 9. Build metadata
         description = (
             f"{script_text}\n\n{source_line}"
-            "India20Sixty — India's near future, explained.\n\n"
+            "India20Sixty - India's near future, explained.\n\n"
             "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
         )
 
-        # Title generation
-        title = f"🇮🇳 {topic[:55]}"
-        try:
-            tr = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
-                         "Content-Type": "application/json"},
-                json={"model": "gpt-4o-mini",
-                      "messages": [{"role": "user",
-                                    "content": f"Write a YouTube Shorts title for: {topic}\nUnder 60 chars, 1 emoji, clickable. Return only the title."}],
-                      "temperature": 0.9, "max_tokens": 60},
-                timeout=15
-            )
-            if tr.status_code == 200:
-                title = tr.json()["choices"][0]["message"]["content"].strip().strip('"')[:95]
-        except Exception as e:
-            print(f"  Title gen failed (non-fatal): {e}")
+        # Title: use override (from CBDP review) or generate fresh
+        if not title_override:
+            title = topic[:55]
+            try:
+                tr = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                             "Content-Type": "application/json"},
+                    json={"model": "gpt-4o-mini",
+                          "messages": [{"role": "user",
+                                        "content": f"Write a YouTube Shorts title for: {topic}\nUnder 60 chars, NO emoji, plain English only, clickable. Return only the title."}],
+                          "temperature": 0.9, "max_tokens": 60},
+                    timeout=15
+                )
+                if tr.status_code == 200:
+                    title = tr.json()["choices"][0]["message"]["content"].strip().strip('"')[:95]
+            except Exception as e:
+                print(f"  Title gen failed (non-fatal): {e}")
 
         # Scheduled publish
         privacy_status = "private" if publish_at else "public"
