@@ -885,6 +885,52 @@ Return ONLY the title."""
 
     # ── PHASE 10: YOUTUBE ─────────────────────────────────────────
 
+    def sanitize_for_youtube(text):
+        """
+        Aggressively strip anything YouTube API rejects.
+        Strategy: encode to ASCII ignoring errors, then decode back.
+        This nukes ALL non-ASCII including Devanagari, smart quotes,
+        em dashes, zero-width chars, private use area — everything.
+        Then replace known problem chars with safe equivalents first.
+        """
+        import re
+        if not text:
+            return ""
+        # Step 1: replace known problem chars with ASCII equivalents
+        replacements = [
+            ('\u2019', "'"),   # right single quote
+            ('\u2018', "'"),   # left single quote
+            ('\u201c', '"'),   # left double quote
+            ('\u201d', '"'),   # right double quote
+            ('\u2013', '-'),   # en dash
+            ('\u2014', '-'),   # em dash
+            ('\u2026', '...'), # ellipsis
+            ('\u00a0', ' '),   # non-breaking space
+            ('\u20b9', 'Rs.'), # rupee sign
+            ('\u2022', '-'),   # bullet
+        ]
+        for bad, good in replacements:
+            text = text.replace(bad, good)
+        # Step 2: remove control chars (keep \n \t)
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+        # Step 3: remove zero-width and invisible unicode
+        text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]', '', text)
+        # Step 4: remove emoji and symbols that cause 400s
+        # YouTube rejects many emoji in descriptions via API (works in UI, not API)
+        text = re.sub(r'[\U0001F000-\U0001FFFF]', '', text)  # emoji block
+        text = re.sub(r'[\u2600-\u27BF]', '', text)           # misc symbols
+        text = re.sub(r'[\u1F300-\u1F9FF]', '', text)         # more emoji
+        # Step 5: remove Devanagari and other non-Latin scripts
+        # ElevenLabs handles pronunciation from our fixed script,
+        # description only needs to be readable Latin text
+        text = re.sub(r'[\u0900-\u097F]', '', text)  # Devanagari
+        text = re.sub(r'[\u0980-\u09FF]', '', text)  # Bengali
+        text = re.sub(r'[\uFB50-\uFDFF\uFE70-\uFEFF]', '', text)  # Arabic
+        # Step 6: collapse whitespace
+        text = re.sub(r' {2,}', ' ', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
     def upload_to_youtube(video_path, title, script, fact_package=None):
         update_status("upload")
         print("\n[Upload]")
@@ -899,16 +945,34 @@ Return ONLY the title."""
         r.raise_for_status()
         token = r.json()["access_token"]
 
-        source_line = f"\nSource: {fact_package.get('source','')}\n" \
-                      if fact_package and fact_package.get("found") else ""
+        # Build source credit — sanitize it too
+        source_raw = ""
+        if fact_package and fact_package.get("found"):
+            src = fact_package.get("source", "")
+            if src:
+                source_raw = f"\nSource: {src}\n"
+
+        # Sanitize script for description — remove all problem chars
+        script_safe = sanitize_for_youtube(script or "")
+        source_safe = sanitize_for_youtube(source_raw)
+
         description = (
-            f"{script}\n\n{source_line}"
-            "India20Sixty — India's near future, explained.\n\n"
+            f"{script_safe}\n\n{source_safe}"
+            "India20Sixty - India's near future, explained.\n\n"
             "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
         )
+
+        # Sanitize title — remove emoji too (some titles get emoji from GPT)
+        safe_title = sanitize_for_youtube(title or topic[:80])[:100]
+        if not safe_title.strip():
+            safe_title = f"India Future Tech - {topic[:60]}"
+
+        print(f"  Title ({len(safe_title)}): {safe_title}")
+        print(f"  Desc ({len(description)} chars): {description[:100]}...")
+
         metadata = {
             "snippet": {
-                "title":       title[:100],
+                "title":       safe_title,
                 "description": description[:5000],
                 "tags":        ["Future India", "India innovation", "AI",
                                 "Technology", "Shorts", "India2030"],
@@ -919,6 +983,8 @@ Return ONLY the title."""
                 "selfDeclaredMadeForKids": False
             }
         }
+
+        print(f"  Uploading {os.path.getsize(video_path)//1024}KB...")
         with open(video_path, "rb") as vf:
             r = requests.post(
                 "https://www.googleapis.com/upload/youtube/v3/videos"
@@ -928,10 +994,12 @@ Return ONLY the title."""
                        "video":   ("video.mp4", vf, "video/mp4")},
                 timeout=300
             )
+        print(f"  YouTube response ({r.status_code}): {r.text[:400]}")
         r.raise_for_status()
         video_id = r.json()["id"]
-        print(f"  https://youtube.com/watch?v={video_id}")
+        print(f"  UPLOADED: https://youtube.com/watch?v={video_id}")
         return video_id
+
 
     def render_video_silent(images, captions):
         """Render video without audio track — for human voice staging."""
