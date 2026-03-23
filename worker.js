@@ -176,6 +176,9 @@ export default {
         return cors({ status: "rejected", job_id, topic_restored: true });
       } catch (e) { return cors({ error: e.message }, 500); }
     }
+
+    // ── GENERATE TOPIC ────────────────────────────────────────
+    if (url.pathname === "/generate-topic" && request.method === "POST") {
       try {
         const body   = await request.json().catch(() => ({}));
         const result = await callCouncil(env,
