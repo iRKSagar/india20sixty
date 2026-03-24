@@ -84,20 +84,55 @@ export default {
       } catch (e) { return cors({ error: e.message }, 500); }
     }
 
-    // ── REVIEW QUEUE (CBDP) ───────────────────────────────────
+    // ── REVIEW QUEUE ──────────────────────────────────────────
+    // Pulls ALL jobs that are done but not on YouTube:
+    // 1. status=review  — PUBLISH OFF jobs, video saved to R2
+    // 2. status=cbdp    — old: upload failed after render (legacy)
+    // 3. status=failed  — upload failed (YouTube API error) but video exists
     if (url.pathname === "/review") {
       try {
-        const rows = await sbGet(env,
-          "jobs?status=eq.review&order=updated_at.desc" +
-          "&select=id,topic,cluster,script_package,video_r2_url,council_score,updated_at");
         const r2Base = (env.R2_BASE_URL || "").replace(/\/$/, "");
-        // Attach full public URL so dashboard can play video directly
-        const enriched = rows.map(j => ({
-          ...j,
-          video_public_url: j.video_r2_url && r2Base
-            ? r2Base + "/" + j.video_r2_url
-            : null
-        }));
+        const fields = "id,topic,cluster,script_package,video_r2_url,council_score,updated_at,status,error";
+
+        // Fetch status=review and status=cbdp
+        const [reviewRows, cbdpRows] = await Promise.all([
+          sbGet(env, `jobs?status=eq.review&order=updated_at.desc&select=${fields}`),
+          sbGet(env, `jobs?status=eq.cbdp&order=updated_at.desc&select=${fields}`),
+        ]);
+
+        // Fetch failed jobs that have a video_r2_url (rendered but upload failed)
+        const failedRows = await sbGet(env,
+          `jobs?status=eq.failed&video_r2_url=not.is.null&order=updated_at.desc&limit=20&select=${fields}`
+        ).catch(() => []);
+
+        // Merge and deduplicate by id
+        const seen = new Set();
+        const all  = [...reviewRows, ...cbdpRows, ...failedRows].filter(j => {
+          if (seen.has(j.id)) return false;
+          seen.add(j.id);
+          return true;
+        });
+
+        // Enrich with full public URL and readable status label
+        const enriched = all.map(j => {
+          const hasVideo  = !!(j.video_r2_url && r2Base);
+          const videoUrl  = hasVideo ? r2Base + "/" + j.video_r2_url : null;
+          const errorSnip = (j.error || "").slice(0, 80);
+          const reason    = j.status === "review"
+            ? "Publish was OFF when rendered"
+            : j.status === "cbdp"
+              ? "Upload failed — video ready"
+              : errorSnip.includes("400") || errorSnip.includes("youtube")
+                ? "YouTube upload error — video ready"
+                : "Render complete — not published";
+          return {
+            ...j,
+            video_public_url: videoUrl,
+            review_reason:    reason,
+            has_video:        hasVideo,
+          };
+        });
+
         return cors(enriched);
       } catch (e) { return cors({ error: e.message }, 500); }
     }
@@ -1856,10 +1891,12 @@ async function loadCBDP(){
 function renderReviewGrid(){
   var el=document.getElementById('cbdp-grid'); if(!el)return;
   if(!allReview||!allReview.length){
-    el.innerHTML='<div class="empty" style="grid-column:1/-1"><span class="empty-icon">\uD83C\uDFAC</span>'
-      +'No videos awaiting review.<br>'
-      +'<span style="color:var(--muted)">Switch PUBLISH OFF to queue rendered videos here for review before publishing.</span>'
-      +'</div>';
+    el.innerHTML='<div class="empty" style="grid-column:1/-1">'
+      +'<span class="empty-icon">\uD83C\uDFAC</span>'
+      +'No videos in review queue.<br>'
+      +'<span style="color:var(--muted);font-size:.8rem">'
+      +'Videos land here when PUBLISH is OFF, or when YouTube upload fails after a successful render.'
+      +'</span></div>';
     return;
   }
   try{
@@ -1868,36 +1905,43 @@ function renderReviewGrid(){
       var scr=(j.script_package&&j.script_package.text)||'';
       var title=(j.script_package&&j.script_package.title)||j.topic||'Untitled';
       var age=j.updated_at?ago(j.updated_at)+' ago':'';
-      var videoUrl=j.video_public_url||(R2_BASE_URL&&j.video_r2_url?R2_BASE_URL+'/'+j.video_r2_url:'');
+      var reason=j.review_reason||'Ready for review';
+      var hasVideo=!!(j.has_video&&j.video_public_url);
+      var videoUrl=j.video_public_url||'';
+      var statusColor=j.status==='review'?'var(--accent)':'var(--yellow)';
+      var statusLabel=j.status==='review'?'REVIEW':'CBDP';
       return '<div class="staged-card" style="cursor:default">'
         +'<div class="staged-head">'
-        +'<div class="staged-topic">'+(title||'Untitled')+'</div>'
+        +'<div class="staged-topic" style="font-size:.85rem">'+(title||'Untitled')+'</div>'
         +'<div class="staged-meta">'
-        +'<span style="font-size:.68rem;color:'+cat.color+'">'+cat.emoji+' '+cat.label+'</span>'
+        +'<span style="font-size:.65rem;color:'+cat.color+'">'+cat.emoji+' '+cat.label+'</span>'
         +'<span class="score-pill '+scClass(j.council_score||0)+'">'+(j.council_score||0)+'</span>'
+        +'<span style="font-size:.6rem;font-weight:600;color:'+statusColor+'">'+statusLabel+'</span>'
         +'<span style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">'+age+'</span>'
         +'</div></div>'
-        +(videoUrl
-          ?'<video src="'+videoUrl+'" controls preload="metadata" '
-           +'style="width:100%;max-height:220px;background:#000;display:block"></video>'
-           +'<div style="text-align:center;padding:5px 0;border-bottom:1px solid var(--border)">'
-           +'<a href="'+videoUrl+'" target="_blank" '
-           +'style="font-family:var(--mono);font-size:.62rem;color:var(--accent);text-decoration:none">'
-           +'\u25B6 Watch in new tab</a></div>'
-          :'<div style="background:var(--surface2);height:80px;display:flex;align-items:center;'
-           +'justify-content:center;font-size:.72rem;color:var(--muted);flex-direction:column;gap:4px">'
-           +'\uD83D\uDCF9 Video not available'
-           +(R2_BASE_URL?'':'<br><span style="font-size:.6rem">R2_BASE_URL not set in Cloudflare</span>')
+        +'<div style="padding:5px 12px;background:var(--surface2);font-family:var(--mono);font-size:.6rem;color:var(--muted);border-bottom:0.5px solid var(--border)">'+reason+'</div>'
+        +(hasVideo
+          ?'<video src="'+videoUrl+'" controls preload="metadata" style="width:100%;max-height:220px;background:#000;display:block"></video>'
+           +'<div style="text-align:center;padding:4px 0;border-bottom:0.5px solid var(--border)">'
+           +'<a href="'+videoUrl+'" target="_blank" style="font-family:var(--mono);font-size:.62rem;color:var(--accent);text-decoration:none">\u25B6 Open in new tab</a>'
+           +'</div>'
+          :'<div style="background:var(--surface2);height:64px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px">'
+           +'<span style="font-size:.72rem;color:var(--muted)">\uD83D\uDCF9 No video file saved</span>'
+           +'<span style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">This job failed before R2 save — reject and re-run</span>'
            +'</div>')
-        +'<div class="staged-body" style="font-size:.72rem;line-height:1.6">'+scr.slice(0,150)+(scr.length>150?'\u2026':'')+'</div>'
+        +'<div class="staged-body" style="font-size:.72rem;line-height:1.6;color:var(--text-muted)">'
+        +(scr?scr.slice(0,140)+(scr.length>140?'\u2026':''):'<span style="color:var(--muted)">No script saved</span>')
+        +'</div>'
         +'<div class="staged-foot" style="gap:6px">'
-        +'<button class="btn btn-primary" style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="publishCBDP(this.dataset.jid,this)">\uD83D\uDE80 Publish</button>'
-        +'<button class="btn btn-red"     style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="rejectCBDP(this.dataset.jid,this)">\u2715 Reject</button>'
+        +(hasVideo
+          ?'<button class="btn btn-primary" style="flex:2;font-size:.72rem" data-jid="'+j.id+'" onclick="publishCBDP(this.dataset.jid,this)">\uD83D\uDE80 Publish to YouTube</button>'
+          :'<button class="btn" style="flex:2;font-size:.72rem;opacity:.4;cursor:not-allowed" disabled>\uD83D\uDE80 No video — reject &amp; retry</button>')
+        +'<button class="btn btn-red" style="flex:1;font-size:.72rem" data-jid="'+j.id+'" onclick="rejectCBDP(this.dataset.jid,this)">\u2715 Reject</button>'
         +'</div></div>';
     }).join('');
   }catch(err){
     console.error('renderReviewGrid error:',err);
-    el.innerHTML='<div class="empty" style="grid-column:1/-1"><span class="empty-icon">\u26A0</span>Render error: '+err.message+'</div>';
+    el.innerHTML='<div class="empty" style="grid-column:1/-1"><span class="empty-icon">\u26A0</span>Error: '+err.message+'</div>';
   }
 }
 
