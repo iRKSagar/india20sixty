@@ -180,8 +180,10 @@ def trigger(data: dict):
     job_id      = data.get("job_id") or str(uuid.uuid4())
     topic       = data.get("topic", "Future India")
     webhook_url = data.get("webhook_url", "")
-    print(f"Trigger: {job_id} | {topic}")
-    run_pipeline.spawn(job_id=job_id, topic=topic, webhook_url=webhook_url)
+    image_urls  = data.get("image_urls") or []   # pre-selected images from library
+    print(f"Trigger: {job_id} | {topic} | images: {'library' if image_urls else 'generate'}")
+    run_pipeline.spawn(job_id=job_id, topic=topic, webhook_url=webhook_url,
+                       image_urls=image_urls)
     return {"status": "started", "job_id": job_id, "topic": topic}
 
 
@@ -221,7 +223,8 @@ def health():
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=2.0, memory=2048, timeout=600)
-def run_pipeline(job_id: str, topic: str, webhook_url: str = ""):
+def run_pipeline(job_id: str, topic: str, webhook_url: str = "",
+                 image_urls: list = None):
 
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -819,9 +822,71 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 time.sleep(5)
         raise Exception("All models failed")
 
-    def generate_all_images(fact_package=None):
+    def save_image_to_r2(local_path, topic_slug, idx):
+        """Save a generated image to R2 for future reuse. Non-fatal if fails."""
+        try:
+            key = f"images/{topic_slug}/{job_id}_{idx}.png"
+            public_url = upload_to_r2(local_path, key)
+            print(f"  Saved to R2: {key}")
+            # Record in image_cache table for dashboard browsing
+            requests.post(
+                f"{SUPABASE_URL}/rest/v1/image_cache",
+                headers={"apikey": SUPABASE_ANON_KEY,
+                         "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                         "Content-Type": "application/json",
+                         "Prefer": "return=minimal"},
+                json={"job_id": job_id, "topic": topic,
+                      "r2_key": key, "public_url": public_url,
+                      "scene_idx": idx,
+                      "created_at": datetime.utcnow().isoformat()},
+                timeout=5
+            )
+            return public_url
+        except Exception as e:
+            print(f"  R2 image save failed (non-fatal): {e}")
+            return None
+
+    def download_image_from_url(url, output_path):
+        """Download an image from a URL (R2 or any public URL) to local path."""
+        r = requests.get(url, timeout=60, stream=True)
+        r.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+        size = os.path.getsize(output_path)
+        print(f"  Downloaded: {size//1024}KB from {url[:60]}")
+        return output_path
+
+    def generate_all_images(fact_package=None, preselected_urls=None):
+        """
+        Generate 3 images via Leonardo OR use pre-selected images from R2.
+        If preselected_urls is provided (list of 3 public URLs), downloads
+        them directly and skips Leonardo entirely.
+        """
+        # ── PRE-SELECTED IMAGES (from Image Library) ──────────────
+        if preselected_urls and len(preselected_urls) >= 3:
+            print("\n[Images — using library selection]")
+            image_paths = []
+            for i, url in enumerate(preselected_urls[:3]):
+                path = f"{TMP_DIR}/{job_id}_{i}.png"
+                print(f"\n[Image {i+1}/3 — from library]")
+                try:
+                    download_image_from_url(url, path)
+                    image_paths.append(path)
+                except Exception as e:
+                    print(f"  Download failed: {e}, using fallback")
+                    subprocess.run([
+                        "ffmpeg", "-y", "-f", "lavfi",
+                        "-i", f"color=c=0x0d1117:s={IMG_WIDTH}x{IMG_HEIGHT}:d=1",
+                        "-frames:v", "1", path
+                    ], capture_output=True, timeout=15)
+                    image_paths.append(path)
+            return image_paths
+
+        # ── GENERATE VIA LEONARDO ─────────────────────────────────
         print("\n[Scene Prompts]")
         scene_prompts = generate_scene_prompts(fact_package)
+        topic_slug    = re.sub(r'[^a-z0-9]+', '-', topic.lower())[:40]
         image_paths   = []
         for i, sp in enumerate(scene_prompts):
             update_status("images")
@@ -831,6 +896,8 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                 time.sleep(8)
             try:
                 generate_image(sp, path)
+                # Save to R2 for future reuse in Image Library
+                save_image_to_r2(path, topic_slug, i)
                 image_paths.append(path)
             except Exception as e:
                 print(f"  Failed: {e}")
@@ -1604,8 +1671,9 @@ Return ONLY the title text, nothing else."""
         # 4b. Visual Director — assigns motion, grade, transition per scene
         shot_list = visual_director(script, script_lines)
 
-        # 5. Images
-        images = generate_all_images(fact_package)
+        # 5. Images — use pre-selected from library or generate via Leonardo
+        images = generate_all_images(fact_package,
+                                     preselected_urls=image_urls or None)
         log_to_db(f"Images: {len(images)}")
 
         # ══ BRANCH ON VOICE MODE ══════════════════════════════════
