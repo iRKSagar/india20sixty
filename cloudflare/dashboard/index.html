@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>India20Sixty — Mission Control</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="topbar">
+  <div>
+    <div class="logo-name">&#127470;&#127475; India<span>20Sixty</span></div>
+    <div class="logo-sub">Mission Control V2</div>
+  </div>
+  <nav class="topbar-nav">
+    <button class="nav-btn active" onclick="showPage('home',this)">Home</button>
+    <button class="nav-btn"        onclick="showPage('staging',this)">&#127908; Staging <span id="stg-cnt" style="font-family:var(--mono);font-size:.58rem;background:rgba(0,230,118,.15);color:var(--green);padding:1px 5px;border-radius:3px;margin-left:2px">0</span></button>
+    <button class="nav-btn"        onclick="showPage('review',this)">&#128250; Review <span id="rev-cnt" style="font-family:var(--mono);font-size:.58rem;background:rgba(255,215,64,.15);color:var(--yellow);padding:1px 5px;border-radius:3px;margin-left:2px">0</span></button>
+    <button class="nav-btn"        onclick="showPage('library',this)">&#128444; Library</button>
+    <button class="nav-btn"        onclick="showPage('calendar',this)">&#128197; Calendar</button>
+    <button class="nav-btn"        onclick="showPage('analytics',this)">Analytics</button>
+    <button class="nav-btn"        onclick="showPage('topics',this)">Topics</button>
+  </nav>
+  <div style="display:flex;align-items:center;gap:10px">
+    <div class="toggle-group">
+      <span class="toggle-lbl" id="vm-lbl" style="color:var(--accent)">&#129302; AI VOICE</span>
+      <div class="toggle-switch" id="vm-tog" onclick="toggleVoiceMode()" style="background:var(--accent)">
+        <div class="toggle-knob" id="vm-knob"></div>
+      </div>
+    </div>
+    <div class="toggle-group">
+      <span class="toggle-lbl" id="pub-lbl" style="color:var(--red)">PUBLISH OFF</span>
+      <div class="toggle-switch" id="pub-tog" onclick="togglePublish()" style="background:var(--red)">
+        <div class="toggle-knob" id="pub-knob"></div>
+      </div>
+    </div>
+    <div class="live-dot"></div><span class="live-lbl">Live</span>
+  </div>
+</div>
+<div class="pages">
+
+<!-- HOME -->
+<div class="page active" id="page-home">
+  <div class="stats">
+    <div class="stat s1"><div class="stat-val" id="s-total">-</div><div class="stat-lbl">Total Jobs</div></div>
+    <div class="stat s2"><div class="stat-val" id="s-running">-</div><div class="stat-lbl">Running</div></div>
+    <div class="stat s3"><div class="stat-val" id="s-complete">-</div><div class="stat-lbl">Complete</div></div>
+    <div class="stat s4"><div class="stat-val" id="s-failed">-</div><div class="stat-lbl">Failed</div></div>
+    <div class="stat s5"><div class="stat-val" id="s-topics">-</div><div class="stat-lbl">Topics Ready</div></div>
+  </div>
+  <div class="sched-panel">
+    <span style="font-family:var(--mono);font-size:.68rem;color:var(--muted)">Videos/day:</span>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-ghost vpd-btn" id="vpd-1" onclick="setVPD(1)">1</button>
+      <button class="btn btn-ghost vpd-btn" id="vpd-2" onclick="setVPD(2)">2</button>
+      <button class="btn btn-ghost vpd-btn" id="vpd-3" onclick="setVPD(3)">3</button>
+    </div>
+    <span style="font-family:var(--mono);font-size:.68rem;color:var(--accent)" id="sched-times"></span>
+    <span style="font-family:var(--mono);font-size:.65rem;color:var(--muted)" id="sched-desc"></span>
+  </div>
+  <div class="cat-strip" id="cat-strip">
+    <div class="cat-pill" data-cat="all" onclick="filterByCat('all',this)" style="border-color:var(--accent);color:var(--accent)">All</div>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary"  id="bc" onclick="doCreateJob()">&#9654; Create Video</button>
+    <button class="btn btn-ghost"    id="bg" onclick="doGenerateTopic()">&#10022; Generate Topic</button>
+    <button class="btn btn-purple"   id="br" onclick="openReplenishModal()">&#8635; Replenish Queue</button>
+    <button class="btn btn-red"      id="bk" onclick="doKillIncomplete()">&#9940; Kill Incomplete</button>
+    <button class="btn btn-ghost"    id="bf" onclick="doRestoreFailed()">&#8617; Restore Failed</button>
+    <button class="btn btn-orange"   id="bt" onclick="doTestRender()">&#9741; Test Render</button>
+  </div>
+  <div id="debug-home"></div>
+  <div class="two-col">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Jobs</span><span class="panel-sub" id="last-ref"></span></div>
+        <div class="tabs">
+          <button class="tab active" data-tab="all"      onclick="switchTab('all')">All <span class="tab-count tc-all" id="tc-all">0</span></button>
+          <button class="tab"        data-tab="running"  onclick="switchTab('running')">Running <span class="tab-count tc-run" id="tc-run">0</span></button>
+          <button class="tab"        data-tab="complete" onclick="switchTab('complete')">Complete <span class="tab-count tc-ok" id="tc-ok">0</span></button>
+          <button class="tab"        data-tab="failed"   onclick="switchTab('failed')">Failed <span class="tab-count tc-fail" id="tc-fail">0</span></button>
+        </div>
+        <div id="job-list"></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Queue</span></div>
+        <div id="queue-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- STAGING -->
+<div class="page" id="page-staging">
+  <div id="staging-banner" class="debug-box" style="display:none"></div>
+  <div class="tabs" style="margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 12px">
+    <button class="tab active" id="stab-staged" onclick="switchStagingTab('staged')">&#127908; Awaiting Voice <span class="tab-count tc-run" id="stc-staged">0</span></button>
+    <button class="tab"        id="stab-cbdp"   onclick="switchStagingTab('cbdp')">&#9888; CBDP <span class="tab-count tc-fail" id="stc-cbdp">0</span></button>
+  </div>
+  <div id="stab-panel-staged">
+    <div class="staged-grid" id="staged-grid"></div>
+  </div>
+  <div id="stab-panel-cbdp" style="display:none">
+    <div style="font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-bottom:12px;padding:10px 14px;background:rgba(255,82,82,.06);border:1px solid rgba(255,82,82,.15);border-radius:8px">
+      &#9888; These videos rendered and voiced OK but failed at YouTube upload. Click Retry Upload to re-attempt without re-rendering.
+    </div>
+    <div class="staged-grid" id="staging-cbdp-grid"></div>
+  </div>
+</div>
+
+<!-- CALENDAR -->
+<div class="page" id="page-calendar">
+  <div class="cal-nav">
+    <button class="btn btn-ghost" onclick="calPrev()">&#8592;</button>
+    <span class="cal-month" id="cal-lbl"></span>
+    <button class="btn btn-ghost" onclick="calNext()">&#8594;</button>
+    <button class="btn btn-ghost" onclick="calToday()" style="margin-left:6px">Today</button>
+  </div>
+  <div class="panel" style="padding:12px">
+    <div class="cal-hdr">
+      <div>SUN</div><div>MON</div><div>TUE</div><div>WED</div><div>THU</div><div>FRI</div><div>SAT</div>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+  </div>
+</div>
+
+<!-- ANALYTICS -->
+<div class="page" id="page-analytics">
+  <div class="actions" style="margin-bottom:18px">
+    <button class="btn btn-ghost" onclick="doSyncAnalytics()">&#8635; Sync YouTube</button>
+  </div>
+  <div class="analytics-hero">
+    <div class="hero-card"><div class="hero-val hv-views" id="a-views">-</div><div class="hero-lbl">Views</div></div>
+    <div class="hero-card"><div class="hero-val hv-likes" id="a-likes">-</div><div class="hero-lbl">Likes</div></div>
+    <div class="hero-card"><div class="hero-val hv-comments" id="a-comments">-</div><div class="hero-lbl">Comments</div></div>
+    <div class="hero-card"><div class="hero-val hv-score" id="a-avg">-</div><div class="hero-lbl">Avg Score</div></div>
+  </div>
+  <div class="two-col">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Videos</span><span class="panel-sub" id="a-count"></span></div>
+        <div id="video-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;padding:12px"></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Top Performers</span></div>
+        <div class="perf-row" style="opacity:.4;font-family:var(--mono);font-size:.6rem"><div>TOPIC</div><div style="text-align:right">VIEWS</div><div style="text-align:right">LIKES</div><div style="text-align:right">SCORE</div></div>
+        <div id="perf-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Needs Attention</span></div>
+        <div class="perf-row" style="opacity:.4;font-family:var(--mono);font-size:.6rem"><div>TOPIC</div><div style="text-align:right">VIEWS</div><div style="text-align:right">LIKES</div><div style="text-align:right">SCORE</div></div>
+        <div id="flop-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOPICS -->
+<div class="page" id="page-topics">
+  <div class="actions" style="margin-bottom:14px">
+    <button class="btn btn-ghost"   id="bt-all"   onclick="filterTopics('all')">All</button>
+    <button class="btn btn-primary" id="bt-ready" onclick="filterTopics('ready')">Ready</button>
+    <button class="btn btn-ghost"   id="bt-used"  onclick="filterTopics('used')">Used</button>
+    <button class="btn btn-purple"  onclick="openReplenishModal()">&#8635; Replenish</button>
+  </div>
+  <div class="cat-strip" id="topic-cat-strip">
+    <div class="cat-pill" data-cat="all" onclick="filterTopicsByCat('all',this)" style="border-color:var(--accent);color:var(--accent)">All</div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span class="panel-title">Topics</span><span class="panel-sub" id="topics-count">-</span></div>
+    <div id="topics-list"></div>
+  </div>
+</div>
+
+<!-- IMAGE LIBRARY PAGE -->
+<div class="page" id="page-library">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1rem;font-weight:700;color:var(--text)">Image Library
+        <span id="lib-count" style="font-family:var(--mono);font-size:.7rem;background:rgba(0,229,255,.12);color:var(--accent);padding:2px 8px;border-radius:4px;margin-left:6px">0</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-top:2px">Select 3 images then create a video — no Leonardo credits needed</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="lib-sel-count" style="font-family:var(--mono);font-size:.7rem;color:var(--yellow)">0 / 3 selected</span>
+      <label class="btn btn-ghost" style="cursor:pointer" title="Upload images from your computer">
+        &#8679; Upload
+        <input type="file" id="lib-upload-input" accept="image/*" multiple style="display:none" onchange="uploadLibImages(this)">
+      </label>
+      <button class="btn btn-primary" id="lib-create-btn" onclick="createVideoFromLibrary()" disabled style="opacity:.4">&#9654; Create Video</button>
+      <button class="btn btn-ghost" onclick="loadLibrary()">&#8635; Refresh</button>
+    </div>
+  </div>
+  <div id="lib-filter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+  <div id="lib-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px"></div>
+</div>
+
+<!-- REVIEW PAGE -->
+<div class="page" id="page-review">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+    <div>
+      <div style="font-size:1rem;font-weight:700;color:var(--text)">Review Queue <span id="cbdp-count" style="font-family:var(--mono);font-size:.7rem;background:rgba(255,215,64,.12);color:var(--yellow);padding:2px 8px;border-radius:4px;margin-left:6px">0</span></div>
+      <div style="font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-top:2px">Completed But Didn't Publish — watch each video then decide</div>
+    </div>
+  </div>
+  <div id="cbdp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px"></div>
+</div>
+
+</div><!-- /pages -->
+
+<!-- REPLENISH MODAL -->
+<div class="modal-overlay hidden" id="rep-modal">
+  <div class="modal">
+    <div class="modal-title">Replenish Topic Queue</div>
+    <div class="modal-sub">Select categories to scout real news from</div>
+    <div class="modal-cats" id="modal-cats"></div>
+    <div style="margin-bottom:14px">
+      <div style="font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-bottom:5px">Target count</div>
+      <input type="range" id="tgt-slider" min="5" max="30" value="12" oninput="document.getElementById('tgt-val').textContent=this.value" style="width:100%">
+      <div style="font-family:var(--mono);font-size:.68rem;color:var(--accent);margin-top:3px"><span id="tgt-val">12</span> topics</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeReplenishModal()">Cancel</button>
+      <button class="btn btn-purple" onclick="doReplenish()">&#8635; Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- STUDIO OVERLAY -->
+<div class="studio-overlay hidden" id="studio">
+  <div class="studio-top">
+    <div>
+      <div style="font-size:.95rem;font-weight:700;color:var(--text)" id="stu-title">Studio</div>
+      <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)" id="stu-id"></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" onclick="previewMix()" title="Play video from start">&#9654; Preview</button>
+      <button class="btn btn-ghost" onclick="closeStudio()">&#10005; Close</button>
+    </div>
+  </div>
+  <div class="studio-body">
+    <div class="studio-video">
+      <video id="stu-vid" controls style="width:100%;height:100%;max-height:calc(100vh - 56px)"></video>
+      <div id="stu-vid-err" style="display:none;width:100%;height:200px;align-items:center;justify-content:center;flex-direction:column;gap:8px;background:var(--surface2)">
+        <span style="font-size:2rem">\uD83D\uDCF9</span>
+        <span style="font-size:.78rem;color:var(--muted)">Video not available</span>
+        <span style="font-family:var(--mono);font-size:.6rem;color:var(--muted)">Check R2 public access is enabled</span>
+      </div>
+    </div>
+    <div class="studio-panel">
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#128196; Script</div>
+        <div class="script-box" id="stu-script">Loading...</div>
+      </div>
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#127908; Voice Recording</div>
+        <div class="rec-row">
+          <button class="rec-btn rec-record" id="rec-rec" onclick="startRec()" title="Record">&#9210;</button>
+          <button class="rec-btn rec-stop"   id="rec-stp" onclick="stopRec()"  title="Stop" disabled>&#9209;</button>
+          <button class="rec-btn rec-play"   id="rec-ply" onclick="playRec()"  title="Play" disabled>&#9654;</button>
+          <button class="rec-btn rec-reset"  id="rec-rst" onclick="resetRec()" title="Reset" disabled>&#8634;</button>
+          <span class="rec-status" id="rec-status">Ready</span>
+        </div>
+        <canvas class="waveform" id="waveform"></canvas>
+        <div style="display:flex;gap:8px;margin-top:8px;font-family:var(--mono);font-size:.65rem;color:var(--muted)">
+          <span>Duration: <b id="rec-dur" style="color:var(--text)">0:00</b></span>
+          <span style="margin-left:auto">Offset: <input type="number" id="voice-off" value="0" min="-2000" max="2000" step="100" style="width:58px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:.65rem;padding:2px 4px"> ms</span>
+        </div>
+      </div>
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#127917; Voice Character</div>
+        <div class="char-grid">
+          <div class="char-btn active" onclick="setChar(this,'natural')">&#128528; Natural</div>
+          <div class="char-btn"        onclick="setChar(this,'woman')">&#128105; Woman</div>
+          <div class="char-btn"        onclick="setChar(this,'man')">&#128104; Man</div>
+          <div class="char-btn"        onclick="setChar(this,'elder')">&#129490; Elder</div>
+          <div class="char-btn"        onclick="setChar(this,'child')">&#128102; Child</div>
+          <div class="char-btn"        onclick="setChar(this,'radio')">&#128251; Radio</div>
+        </div>
+        <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:6px" id="char-desc">No pitch shift</div>
+      </div>
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#127925; Music</div>
+        <div id="music-list"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-family:var(--mono);font-size:.65rem;color:var(--muted)">
+          <span>Vol:</span>
+          <input type="range" id="mus-vol" min="0" max="20" value="8" oninput="document.getElementById('mus-vol-v').textContent=this.value+'%'" style="flex:1">
+          <span id="mus-vol-v">8%</span>
+        </div>
+      </div>
+      <div class="pub-ctrl">
+        <div class="studio-sec-title">&#128197; Schedule &amp; Publish</div>
+        <input type="datetime-local" id="pub-at" class="dt-input">
+        <div style="display:flex;gap:7px">
+          <button class="btn btn-primary" style="flex:1" id="pub-now" onclick="publishNow()">&#128640; Publish Now</button>
+          <button class="btn btn-purple"  style="flex:1" id="pub-sch" onclick="publishScheduled()">&#128197; Schedule</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-align:center;margin-top:6px" id="pub-status"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="./app.js"></script>
+</body>
+</html>
