@@ -111,6 +111,9 @@ body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear
 .toggle-lbl{font-family:var(--mono);font-size:.65rem}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center}
 .modal-overlay.hidden{display:none}
+.stage-opt{border:1.5px solid var(--border);border-radius:10px;padding:12px 8px;text-align:center;cursor:pointer;transition:all .15s;background:var(--surface)}
+.stage-opt:hover{border-color:var(--accent);background:rgba(0,229,255,.06)}
+.stage-opt.active{border-color:var(--accent);background:rgba(0,229,255,.12);color:var(--accent)}
 .modal{background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:24px;width:400px;max-width:90vw}
 .modal-title{font-size:.95rem;font-weight:700;margin-bottom:5px}
 .modal-sub{font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-bottom:18px}
@@ -188,15 +191,9 @@ body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear
   </nav>
   <div style="display:flex;align-items:center;gap:10px">
     <div class="toggle-group">
-      <span class="toggle-lbl" id="vm-lbl" style="color:var(--accent)">&#129302; AI VOICE</span>
-      <div class="toggle-switch" id="vm-tog" onclick="toggleVoiceMode()" style="background:var(--accent)">
-        <div class="toggle-knob" id="vm-knob"></div>
-      </div>
-    </div>
-    <div class="toggle-group">
-      <span class="toggle-lbl" id="pub-lbl" style="color:var(--red)">PUBLISH OFF</span>
-      <div class="toggle-switch" id="pub-tog" onclick="togglePublish()" style="background:var(--red)">
-        <div class="toggle-knob" id="pub-knob"></div>
+      <span class="toggle-lbl" id="mode-lbl" style="color:var(--accent)">&#9889; FULL AUTO</span>
+      <div class="toggle-switch" id="mode-tog" onclick="toggleMode()" style="background:var(--accent)">
+        <div class="toggle-knob" id="mode-knob"></div>
       </div>
     </div>
     <div class="live-dot"></div><span class="live-lbl">Live</span>
@@ -376,6 +373,55 @@ body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear
 </div>
 
 </div><!-- /pages -->
+
+<!-- STAGE MODE CREATE MODAL -->
+<div class="modal-overlay hidden" id="stage-modal">
+  <div class="modal" style="width:480px;max-width:95vw">
+    <div class="modal-title">&#127775; Create Video — Stage Mode</div>
+    <div class="modal-sub">Choose your settings for this video</div>
+
+    <div style="margin:16px 0 8px;font-family:var(--mono);font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Image Source</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+      <div class="stage-opt active" id="img-opt-library" onclick="selectImgSrc('library',this)">
+        <div style="font-size:1.2rem">&#128444;</div>
+        <div style="font-size:.8rem;font-weight:600;margin-top:4px">Library</div>
+        <div style="font-size:.65rem;color:var(--muted);margin-top:2px">Pick from R2</div>
+      </div>
+      <div class="stage-opt" id="img-opt-generate" onclick="selectImgSrc('generate',this)">
+        <div style="font-size:1.2rem">&#129513;</div>
+        <div style="font-size:.8rem;font-weight:600;margin-top:4px">Generate</div>
+        <div style="font-size:.65rem;color:var(--muted);margin-top:2px">Free → paid</div>
+      </div>
+      <div class="stage-opt" id="img-opt-upload" onclick="selectImgSrc('upload',this)">
+        <div style="font-size:1.2rem">&#8679;</div>
+        <div style="font-size:.8rem;font-weight:600;margin-top:4px">Upload</div>
+        <div style="font-size:.65rem;color:var(--muted);margin-top:2px">Your own files</div>
+      </div>
+    </div>
+
+    <div style="margin:0 0 8px;font-family:var(--mono);font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Voice</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+      <div class="stage-opt active" id="voice-opt-ai" onclick="selectVoiceSrc('ai',this)">
+        <div style="font-size:1.2rem">&#129302;</div>
+        <div style="font-size:.8rem;font-weight:600;margin-top:4px">AI Voice</div>
+        <div style="font-size:.65rem;color:var(--muted);margin-top:2px">ElevenLabs auto</div>
+      </div>
+      <div class="stage-opt" id="voice-opt-human" onclick="selectVoiceSrc('human',this)">
+        <div style="font-size:1.2rem">&#127908;</div>
+        <div style="font-size:.8rem;font-weight:600;margin-top:4px">Record</div>
+        <div style="font-size:.65rem;color:var(--muted);margin-top:2px">Your voice</div>
+      </div>
+    </div>
+
+    <div style="margin:0 0 8px;font-family:var(--mono);font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Category</div>
+    <div id="stage-cat-strip" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px"></div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeStageModal()">Cancel</button>
+      <button class="btn btn-primary" id="stage-go-btn" onclick="doStageCreate()">&#9654; Create Video</button>
+    </div>
+  </div>
+</div>
 
 <!-- REPLENISH MODAL -->
 <div class="modal-overlay hidden" id="rep-modal">

@@ -1,6 +1,6 @@
 var API_BASE = 'https://india20sixty.tommyhillary1.workers.dev';
 // ── CONFIG — loaded from /config endpoint ──────────────────────
-var R2_BASE_URL = '';
+var R2_BASE_URL = 'https://pub-e5ed97c9fd6a4c3f80fffa5e84da8fef.r2.dev';
 fetch(API_BASE + '/config').then(function(r){return r.json();}).then(function(d){
   R2_BASE_URL=d.r2_base_url||'';
 }).catch(function(){});
@@ -243,49 +243,143 @@ async function doSyncAnalytics(){
   catch(e){alert(e.message);}
 }
 
-// ── VOICE MODE TOGGLE ─────────────────────────────────────────
-async function loadVoiceMode(){
+// ── MODE TOGGLE (Full Auto / Stage) ──────────────────────────
+var currentMode = 'auto'; // 'auto' or 'stage'
+var stageImgSrc = 'library';
+var stageVoiceSrc = 'ai';
+var stageCategory = null;
+
+async function loadMode(){
   try{
-    var r=await fetch(API_BASE + '/voice-mode'); var d=await r.json();
-    currentVoiceMode=d.voice_mode||'ai'; setVoiceModeUI(currentVoiceMode);
+    var r=await fetch(API_BASE + '/config'); var d=await r.json();
+    currentMode = d.mode || 'auto';
+    setModeUI(currentMode);
   }catch(e){}
-}
-function setVoiceModeUI(mode){
-  var h=mode==='human';
-  var tog=document.getElementById('vm-tog'); var knb=document.getElementById('vm-knob'); var lbl=document.getElementById('vm-lbl');
-  if(tog)tog.style.background=h?'var(--green)':'var(--accent)';
-  if(knb)knb.style.transform=h?'translateX(16px)':'translateX(0)';
-  if(lbl){lbl.textContent=h?'\uD83C\uDFA4 HUMAN VOICE':'\uD83E\uDD16 AI VOICE';lbl.style.color=h?'var(--green)':'var(--accent)';}
-  var stgCnt=document.getElementById('stg-cnt'); if(stgCnt)stgCnt.style.display=h?'':'none';
-  var banner=document.getElementById('staging-banner');
-  if(banner){banner.style.display=h?'none':'block';banner.innerHTML='<span class="dk">\uD83E\uDD16 AI Voice Mode - pipeline auto-completes. Switch to Human Voice to use staging.</span>';}
-}
-async function toggleVoiceMode(){
-  var newMode=currentVoiceMode==='ai'?'human':'ai';
-  try{
-    var r=await fetch(API_BASE + '/voice-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({voice_mode:newMode})});
-    var d=await r.json(); currentVoiceMode=d.voice_mode; setVoiceModeUI(currentVoiceMode);
-    showDebug('debug-home',currentVoiceMode==='human'?'<span class="dg">\uD83C\uDFA4 Human Voice Mode ON</span>':'<span class="dk">\uD83E\uDD16 AI Voice Mode</span>');
-  }catch(e){showDebug('debug-home','<span class="dr">'+e.message+'</span>');}
 }
 
-// ── PUBLISH TOGGLE ────────────────────────────────────────────
-async function loadPublishState(){
+function setModeUI(mode){
+  var tog=document.getElementById('mode-tog');
+  var knb=document.getElementById('mode-knob');
+  var lbl=document.getElementById('mode-lbl');
+  var isAuto = mode === 'auto';
+  if(tog) tog.style.background = isAuto ? 'var(--accent)' : 'var(--purple)';
+  if(knb) knb.style.transform  = isAuto ? 'translateX(0)' : 'translateX(16px)';
+  if(lbl){
+    lbl.textContent = isAuto ? '\u26A1 FULL AUTO' : '\uD83C\uDF9B STAGE MODE';
+    lbl.style.color = isAuto ? 'var(--accent)' : 'var(--purple, #b388ff)';
+  }
+}
+
+async function toggleMode(){
+  var newMode = currentMode === 'auto' ? 'stage' : 'auto';
   try{
-    var r=await fetch(API_BASE + '/publish-state'); var d=await r.json(); setPublishUI(d.publish===true);
-  }catch(e){}
+    var r=await fetch(API_BASE + '/set-mode',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:newMode})});
+    var d=await r.json();
+    currentMode = d.mode || newMode;
+    setModeUI(currentMode);
+    showDebug('debug-home', currentMode==='auto'
+      ? '<span class="dg">\u26A1 Full Auto — pipeline runs end to end without intervention</span>'
+      : '<span class="dk">\uD83C\uDF9B Stage Mode — you control images, voice, and review</span>');
+  }catch(e){ alert('Failed: '+e.message); }
 }
-function setPublishUI(on){
-  var tog=document.getElementById('pub-tog'); var knb=document.getElementById('pub-knob'); var lbl=document.getElementById('pub-lbl');
-  if(tog)tog.style.background=on?'var(--green)':'var(--red)';
-  if(knb)knb.style.transform=on?'translateX(16px)':'translateX(0)';
-  if(lbl){lbl.textContent=on?'PUBLISH ON':'PUBLISH OFF';lbl.style.color=on?'var(--green)':'var(--red)';}
+
+// ── CREATE VIDEO — branches on mode ──────────────────────────
+async function doCreateJob(){
+  if(currentMode === 'stage'){
+    openStageModal();
+    return;
+  }
+  // Full Auto — fire and forget
+  var btn=document.getElementById('bc'); btn.disabled=true; btn.textContent='Creating...';
+  try{
+    var cat=currentCat!=='all'?currentCat:null;
+    var r=await fetch(API_BASE + '/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat})});
+    var d=await r.json();
+    if(d.error)throw new Error(d.error);
+    switchTab('running'); loadJobs(); loadQueue();
+    showDebug('debug-home','<span class="dg">Auto job created: '+d.topic+'</span>');
+  }catch(e){showDebug('debug-home','<span class="dr">'+e.message+'</span>');}
+  finally{btn.disabled=false; btn.innerHTML='&#9654; Create Video';}
 }
-async function togglePublish(){
-  var knb=document.getElementById('pub-knob');
-  var isOn=knb.style.transform==='translateX(16px)'; var newState=!isOn; setPublishUI(newState);
-  try{await fetch(API_BASE + '/publish-state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({publish:newState})});}
-  catch(e){setPublishUI(isOn);alert('Failed: '+e.message);}
+
+// ── STAGE MODAL ───────────────────────────────────────────────
+function openStageModal(){
+  // Populate category strip
+  var strip=document.getElementById('stage-cat-strip');
+  if(strip){
+    strip.innerHTML='<div class="cat-pill" data-cat="all" onclick="setStageCat(this.dataset.cat,this)" style="border-color:var(--accent);color:var(--accent)">All</div>'
+      +Object.keys(CATS).map(function(k){
+        var c=CATS[k];
+        return '<div class="cat-pill" data-cat="'+k+'" onclick="setStageCat(this.dataset.cat,this)">'+c.emoji+' '+c.label+'</div>';
+      }).join('');
+  }
+  stageCategory = null;
+  // Reset selections
+  selectImgSrc('library', document.getElementById('img-opt-library'));
+  selectVoiceSrc('ai', document.getElementById('voice-opt-ai'));
+  document.getElementById('stage-modal').classList.remove('hidden');
+}
+
+function closeStageModal(){
+  document.getElementById('stage-modal').classList.add('hidden');
+}
+
+function selectImgSrc(src, el){
+  stageImgSrc = src;
+  document.querySelectorAll('#stage-modal .stage-opt[id^="img-"]').forEach(function(e){e.classList.remove('active');});
+  if(el) el.classList.add('active');
+}
+
+function selectVoiceSrc(src, el){
+  stageVoiceSrc = src;
+  document.querySelectorAll('#stage-modal .stage-opt[id^="voice-"]').forEach(function(e){e.classList.remove('active');});
+  if(el) el.classList.add('active');
+}
+
+function setStageCat(cat, el){
+  stageCategory = cat === 'all' ? null : cat;
+  document.querySelectorAll('#stage-cat-strip .cat-pill').forEach(function(p){p.style.borderColor='';p.style.color='';});
+  if(el){el.style.borderColor='var(--accent)';el.style.color='var(--accent)';}
+}
+
+async function doStageCreate(){
+  var btn=document.getElementById('stage-go-btn');
+  btn.disabled=true; btn.textContent='Creating...';
+
+  // If library selected, go to library tab to pick images
+  if(stageImgSrc === 'library'){
+    closeStageModal();
+    btn.disabled=false; btn.innerHTML='&#9654; Create Video';
+    showPage('library', document.querySelectorAll('.nav-btn')[3]);
+    showDebug('debug-home','<span class="dk">Select 3 images from the library, then click Create Video</span>');
+    return;
+  }
+
+  // If upload selected, trigger file picker
+  if(stageImgSrc === 'upload'){
+    closeStageModal();
+    btn.disabled=false; btn.innerHTML='&#9654; Create Video';
+    document.getElementById('lib-upload-input').click();
+    return;
+  }
+
+  // Generate mode — create job, pipeline picks images via engine chain
+  try{
+    var body = {
+      category: stageCategory,
+      voice_mode: stageVoiceSrc,
+      image_src: stageImgSrc
+    };
+    var r=await fetch(API_BASE + '/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var d=await r.json();
+    if(d.error)throw new Error(d.error);
+    closeStageModal();
+    switchTab('running'); loadJobs(); loadQueue();
+    showDebug('debug-home','<span class="dg">Stage job created: '+d.topic+'</span>');
+  }catch(e){showDebug('debug-home','<span class="dr">'+e.message+'</span>');}
+  finally{btn.disabled=false; btn.innerHTML='&#9654; Create Video';}
 }
 
 // ── SCHEDULE ──────────────────────────────────────────────────
@@ -874,6 +968,6 @@ async function createVideoFromLibrary(){
 
 // ── INIT ─────────────────────────────────────────────────────
 buildCatStrips();
-function loadAll(){loadJobs();loadQueue();loadAnalytics();loadPublishState();loadSchedule();loadVoiceMode();loadStaging();loadCBDP();loadCalendar();}
+function loadAll(){loadJobs();loadQueue();loadAnalytics();loadMode();loadSchedule();loadStaging();loadCBDP();loadCalendar();}
 loadAll();
 setInterval(function(){loadJobs();loadQueue();loadStaging();loadCBDP();if(currentPage==='analytics')loadAnalytics();if(currentPage==='calendar')renderCalendar();},6000);
