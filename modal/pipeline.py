@@ -797,38 +797,323 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                     raise
         raise Exception("Timeout")
 
-    def generate_image(scene_prompt, output_path):
+    # ══════════════════════════════════════════════════════════════
+    # IMAGE ENGINE — 6-tier fallback chain
+    # Tier 1 (Free AI):   Pollinations.ai  — no key, pure AI
+    # Tier 2 (Free AI):   Hugging Face     — free API key, Flux model
+    # Tier 3 (Free stock):Pixabay          — free photo search
+    # Tier 4 (Cheap AI):  Together AI      — ~$0.01/image
+    # Tier 5 (Cheap AI):  Replicate        — ~$0.003/image
+    # Tier 6 (Paid AI):   Leonardo         — credits, best quality
+    # Every successful image is saved to R2 for future library reuse.
+    # ══════════════════════════════════════════════════════════════
+
+    HF_API_KEY        = os.environ.get("HF_API_KEY", "")
+    TOGETHER_API_KEY  = os.environ.get("TOGETHER_API_KEY", "")
+    REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")
+    PIXABAY_API_KEY   = os.environ.get("PIXABAY_API_KEY", "")
+
+    def _extract_keywords(prompt, n=4):
+        """Pull n meaningful keywords from a prompt for stock search."""
+        skip = {'cinematic','ultra','realistic','dramatic','hyperrealistic',
+                'photorealistic','epic','wide','shot','award','winning','arri',
+                'alexa','grain','film','8k','4k','high','contrast','indian',
+                'india','futuristic','vibrant','moody','golden','hour','aerial',
+                'stunning','beautiful','detailed','sharp','focus','bokeh',
+                'lighting','dark','bright','color','colorful','create','image',
+                'prompt','scene','showing','featuring','depicting','must','look'}
+        words = re.sub(r'[^a-zA-Z\s]', '', prompt).lower().split()
+        return [w for w in words if len(w) > 3 and w not in skip][:n]
+
+    # ── TIER 1: Pollinations.ai (free, no key) ────────────────────
+    def try_pollinations(prompt, output_path):
+        try:
+            import urllib.parse
+            # Pollinations generates 1024x1792 portrait by default
+            safe_prompt = urllib.parse.quote(prompt[:400])
+            url = (f"https://image.pollinations.ai/prompt/{safe_prompt}"
+                   f"?width={IMG_WIDTH}&height={IMG_HEIGHT}"
+                   f"&model=flux&nologo=true&seed={random.randint(1,99999)}")
+            print(f"  Pollinations: requesting...")
+            r = requests.get(url, timeout=60, stream=True)
+            r.raise_for_status()
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+            size = os.path.getsize(output_path)
+            if size < 50_000:
+                print(f"  Pollinations: image too small ({size}B), skipping")
+                return False
+            print(f"  Pollinations: OK ({size//1024}KB)")
+            return True
+        except Exception as e:
+            print(f"  Pollinations failed: {e}")
+            return False
+
+    # ── TIER 2: Hugging Face Inference API (free tier) ────────────
+    def try_huggingface(prompt, output_path):
+        if not HF_API_KEY:
+            return False
+        try:
+            # Use FLUX.1-schnell — fast, high quality, free tier
+            models = [
+                "black-forest-labs/FLUX.1-schnell",
+                "stabilityai/stable-diffusion-xl-base-1.0",
+            ]
+            for model in models:
+                try:
+                    r = requests.post(
+                        f"https://api-inference.huggingface.co/models/{model}",
+                        headers={"Authorization": f"Bearer {HF_API_KEY}"},
+                        json={"inputs": prompt[:500],
+                              "parameters": {"width": IMG_WIDTH,
+                                             "height": IMG_HEIGHT}},
+                        timeout=60
+                    )
+                    if r.status_code == 503:
+                        print(f"  HuggingFace {model}: model loading, skipping")
+                        continue
+                    if r.status_code != 200:
+                        print(f"  HuggingFace {model}: {r.status_code}")
+                        continue
+                    with open(output_path, "wb") as f:
+                        f.write(r.content)
+                    size = os.path.getsize(output_path)
+                    if size < 50_000:
+                        continue
+                    print(f"  HuggingFace {model}: OK ({size//1024}KB)")
+                    return True
+                except Exception as e:
+                    print(f"  HuggingFace {model}: {e}")
+                    continue
+            return False
+        except Exception as e:
+            print(f"  HuggingFace failed: {e}")
+            return False
+
+    # ── TIER 3: Pixabay (free stock photos) ───────────────────────
+    def try_pixabay(prompt, output_path):
+        if not PIXABAY_API_KEY:
+            return False
+        try:
+            keywords = _extract_keywords(prompt)
+            query = ' '.join(keywords) if keywords else 'technology india'
+            print(f"  Pixabay: '{query}'")
+            r = requests.get(
+                "https://pixabay.com/api/",
+                params={"key": PIXABAY_API_KEY, "q": query,
+                        "image_type": "photo", "orientation": "vertical",
+                        "min_width": 800, "min_height": 1200,
+                        "safesearch": "true", "per_page": 5},
+                timeout=15
+            )
+            r.raise_for_status()
+            hits = r.json().get("hits", [])
+            if not hits:
+                print(f"  Pixabay: no results")
+                return False
+            img_url = hits[0].get("largeImageURL") or hits[0].get("webformatURL")
+            if not img_url:
+                return False
+            img_r = requests.get(img_url, timeout=30, stream=True)
+            img_r.raise_for_status()
+            with open(output_path, "wb") as f:
+                for chunk in img_r.iter_content(8192):
+                    f.write(chunk)
+            size = os.path.getsize(output_path)
+            if size < 50_000:
+                return False
+            print(f"  Pixabay: OK ({size//1024}KB)")
+            return True
+        except Exception as e:
+            print(f"  Pixabay failed: {e}")
+            return False
+
+    # ── TIER 4: Together AI (cheap ~$0.01/image) ──────────────────
+    def try_together(prompt, output_path):
+        if not TOGETHER_API_KEY:
+            return False
+        try:
+            r = requests.post(
+                "https://api.together.xyz/v1/images/generations",
+                headers={"Authorization": f"Bearer {TOGETHER_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model":  "black-forest-labs/FLUX.1-schnell-Free",
+                      "prompt": prompt[:500],
+                      "width":  IMG_WIDTH, "height": IMG_HEIGHT,
+                      "steps":  4, "n": 1},
+                timeout=60
+            )
+            print(f"  Together: {r.status_code}")
+            if r.status_code != 200:
+                return False
+            data = r.json()
+            img_url = data.get("data", [{}])[0].get("url")
+            if not img_url:
+                b64 = data.get("data", [{}])[0].get("b64_json")
+                if b64:
+                    import base64
+                    with open(output_path, "wb") as f:
+                        f.write(base64.b64decode(b64))
+                    size = os.path.getsize(output_path)
+                    print(f"  Together: OK b64 ({size//1024}KB)")
+                    return size > 50_000
+                return False
+            img_r = requests.get(img_url, timeout=30, stream=True)
+            img_r.raise_for_status()
+            with open(output_path, "wb") as f:
+                for chunk in img_r.iter_content(8192):
+                    f.write(chunk)
+            size = os.path.getsize(output_path)
+            print(f"  Together: OK ({size//1024}KB)")
+            return size > 50_000
+        except Exception as e:
+            print(f"  Together failed: {e}")
+            return False
+
+    # ── TIER 5: Replicate (cheap ~$0.003/image) ───────────────────
+    def try_replicate(prompt, output_path):
+        if not REPLICATE_API_KEY:
+            return False
+        try:
+            # Use FLUX Schnell on Replicate
+            r = requests.post(
+                "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
+                headers={"Authorization": f"Token {REPLICATE_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"input": {"prompt": prompt[:500],
+                                "aspect_ratio": "9:16",
+                                "output_format": "png",
+                                "num_outputs": 1}},
+                timeout=30
+            )
+            if r.status_code not in (200, 201):
+                print(f"  Replicate: {r.status_code}")
+                return False
+            pred = r.json()
+            pred_id = pred.get("id")
+            if not pred_id:
+                return False
+            # Poll for result
+            for _ in range(30):
+                time.sleep(2)
+                poll = requests.get(
+                    f"https://api.replicate.com/v1/predictions/{pred_id}",
+                    headers={"Authorization": f"Token {REPLICATE_API_KEY}"},
+                    timeout=10
+                )
+                data = poll.json()
+                status = data.get("status")
+                if status == "succeeded":
+                    urls = data.get("output", [])
+                    if not urls:
+                        return False
+                    img_r = requests.get(urls[0], timeout=30, stream=True)
+                    img_r.raise_for_status()
+                    with open(output_path, "wb") as f:
+                        for chunk in img_r.iter_content(8192):
+                            f.write(chunk)
+                    size = os.path.getsize(output_path)
+                    print(f"  Replicate: OK ({size//1024}KB)")
+                    return size > 50_000
+                elif status in ("failed", "canceled"):
+                    print(f"  Replicate prediction {status}")
+                    return False
+            print("  Replicate: timeout")
+            return False
+        except Exception as e:
+            print(f"  Replicate failed: {e}")
+            return False
+
+    # ── TIER 6: Leonardo AI (paid, best quality) ──────────────────
+    def try_leonardo(prompt, output_path):
         for model_id in LEONARDO_MODELS:
             try:
                 r = requests.post(
                     "https://cloud.leonardo.ai/api/rest/v1/generations",
                     headers={"Authorization": f"Bearer {LEONARDO_API_KEY}",
                              "Content-Type": "application/json"},
-                    json={"prompt": scene_prompt, "modelId": model_id,
+                    json={"prompt": prompt, "modelId": model_id,
                           "width": IMG_WIDTH, "height": IMG_HEIGHT,
                           "num_images": 1, "presetStyle": "CINEMATIC"},
                     timeout=30
                 )
+                if r.status_code == 402:
+                    print("  Leonardo: credits exhausted")
+                    return False
                 if r.status_code != 200:
-                    raise Exception(f"{r.status_code}")
+                    print(f"  Leonardo: {r.status_code}")
+                    time.sleep(5)
+                    continue
                 data = r.json()
                 if "sdGenerationJob" not in data:
-                    raise Exception("No job")
+                    continue
                 gen_id = data["sdGenerationJob"]["generationId"]
-                print(f"  Gen: {gen_id}")
-                return poll_for_image(gen_id, output_path)
+                print(f"  Leonardo gen: {gen_id}")
+                poll_for_image(gen_id, output_path)
+                size = os.path.getsize(output_path)
+                print(f"  Leonardo: OK ({size//1024}KB)")
+                return True
             except Exception as e:
-                print(f"  Model failed: {str(e)[:80]}")
+                if "credits_exhausted" in str(e):
+                    return False
+                print(f"  Leonardo model failed: {str(e)[:60]}")
                 time.sleep(5)
-        raise Exception("All models failed")
+        return False
+
+    # ── R2 LIBRARY fallback ───────────────────────────────────────
+    def try_r2_library(prompt, output_path, exclude_keys=None):
+        try:
+            words = _extract_keywords(prompt)
+            rows = []
+            for term in words[:2]:
+                r = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/image_cache"
+                    f"?topic=ilike.*{term}*&select=r2_key,public_url,topic"
+                    f"&limit=5&order=created_at.desc",
+                    headers={"apikey": SUPABASE_ANON_KEY,
+                             "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    rows.extend(r.json())
+            if not rows:
+                r = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/image_cache"
+                    f"?select=r2_key,public_url,topic&limit=10&order=created_at.desc",
+                    headers={"apikey": SUPABASE_ANON_KEY,
+                             "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    rows = r.json()
+            seen, unique = set(), []
+            for row in rows:
+                k = row.get("r2_key", "")
+                if k and k not in seen and k not in (exclude_keys or []):
+                    seen.add(k); unique.append(row)
+            if not unique:
+                return False
+            chosen  = unique[0]
+            img_url = chosen.get("public_url") or \
+                      f"{R2_BASE_URL.rstrip('/')}/{chosen['r2_key']}"
+            print(f"  R2 Library: '{chosen.get('topic','?')[:40]}'")
+            img_r = requests.get(img_url, timeout=30, stream=True)
+            img_r.raise_for_status()
+            with open(output_path, "wb") as f:
+                for chunk in img_r.iter_content(8192):
+                    f.write(chunk)
+            size = os.path.getsize(output_path)
+            return size > 10_000
+        except Exception as e:
+            print(f"  R2 Library failed: {e}")
+            return False
 
     def save_image_to_r2(local_path, topic_slug, idx):
-        """Save a generated image to R2 for future reuse. Non-fatal if fails."""
+        """Save generated image to R2 for future library reuse."""
         try:
-            key = f"images/{topic_slug}/{job_id}_{idx}.png"
+            key        = f"images/{topic_slug}/{job_id}_{idx}.png"
             public_url = upload_to_r2(local_path, key)
-            print(f"  Saved to R2: {key}")
-            # Record in image_cache table for dashboard browsing
             requests.post(
                 f"{SUPABASE_URL}/rest/v1/image_cache",
                 headers={"apikey": SUPABASE_ANON_KEY,
@@ -841,75 +1126,105 @@ Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
                       "created_at": datetime.utcnow().isoformat()},
                 timeout=5
             )
-            return public_url
+            print(f"  Saved to R2: {key}")
+            return key, public_url
         except Exception as e:
-            print(f"  R2 image save failed (non-fatal): {e}")
-            return None
+            print(f"  R2 save failed (non-fatal): {e}")
+            return None, None
 
-    def download_image_from_url(url, output_path):
-        """Download an image from a URL (R2 or any public URL) to local path."""
-        r = requests.get(url, timeout=60, stream=True)
-        r.raise_for_status()
-        with open(output_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-        size = os.path.getsize(output_path)
-        print(f"  Downloaded: {size//1024}KB from {url[:60]}")
-        return output_path
+    def generate_image(prompt, output_path, exclude_r2_keys=None):
+        """
+        6-tier fallback chain. Tries engines in order, stops at first success.
+        Tier 1: Pollinations.ai (free AI, no key)
+        Tier 2: Hugging Face   (free AI, free key)
+        Tier 3: Pixabay        (free stock, free key)
+        Tier 4: Together AI    (cheap AI, ~$0.01)
+        Tier 5: Replicate      (cheap AI, ~$0.003)
+        Tier 6: Leonardo       (paid AI, best quality)
+        Fallback: R2 Library   (your saved images)
+        """
+        TIERS = [
+            ("Pollinations",  try_pollinations),
+            ("HuggingFace",   try_huggingface),
+            ("Pixabay",       try_pixabay),
+            ("Together",      try_together),
+            ("Replicate",     try_replicate),
+            ("Leonardo",      try_leonardo),
+        ]
+        for name, fn in TIERS:
+            print(f"  [Tier: {name}]")
+            try:
+                if fn(prompt, output_path):
+                    print(f"  ✓ {name} succeeded")
+                    return True
+            except Exception as e:
+                print(f"  {name} exception: {e}")
+        # Final fallback: R2 Library
+        print(f"  [Tier: R2 Library fallback]")
+        if try_r2_library(prompt, output_path, exclude_r2_keys):
+            print(f"  ✓ R2 Library succeeded")
+            return True
+        print(f"  ✗ All engines failed")
+        return False
 
     def generate_all_images(fact_package=None, preselected_urls=None):
-        """
-        Generate 3 images via Leonardo OR use pre-selected images from R2.
-        If preselected_urls is provided (list of 3 public URLs), downloads
-        them directly and skips Leonardo entirely.
-        """
-        # ── PRE-SELECTED IMAGES (from Image Library) ──────────────
+        """Generate 3 images using the 6-tier fallback chain."""
+        # ── Pre-selected from library ──────────────────────────────
         if preselected_urls and len(preselected_urls) >= 3:
-            print("\n[Images — using library selection]")
+            print("\n[Images — library selection]")
             image_paths = []
             for i, url in enumerate(preselected_urls[:3]):
                 path = f"{TMP_DIR}/{job_id}_{i}.png"
-                print(f"\n[Image {i+1}/3 — from library]")
                 try:
-                    download_image_from_url(url, path)
+                    r = requests.get(url, timeout=60, stream=True)
+                    r.raise_for_status()
+                    with open(path, "wb") as f:
+                        for chunk in r.iter_content(8192):
+                            f.write(chunk)
                     image_paths.append(path)
+                    print(f"  Downloaded library image {i+1}: {os.path.getsize(path)//1024}KB")
                 except Exception as e:
-                    print(f"  Download failed: {e}, using fallback")
-                    subprocess.run([
-                        "ffmpeg", "-y", "-f", "lavfi",
+                    print(f"  Library download failed: {e}")
+                    subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
                         "-i", f"color=c=0x0d1117:s={IMG_WIDTH}x{IMG_HEIGHT}:d=1",
-                        "-frames:v", "1", path
-                    ], capture_output=True, timeout=15)
+                        "-frames:v", "1", path], capture_output=True, timeout=15)
                     image_paths.append(path)
             return image_paths
 
-        # ── GENERATE VIA LEONARDO ─────────────────────────────────
+        # ── Engine chain ───────────────────────────────────────────
         print("\n[Scene Prompts]")
         scene_prompts = generate_scene_prompts(fact_package)
         topic_slug    = re.sub(r'[^a-z0-9]+', '-', topic.lower())[:40]
         image_paths   = []
-        for i, sp in enumerate(scene_prompts):
+        used_r2_keys  = []
+
+        for i, prompt in enumerate(scene_prompts):
             update_status("images")
-            print(f"\n[Image {i+1}/3]")
+            print(f"\n[Image {i+1}/3] {prompt[:60]}...")
             path = f"{TMP_DIR}/{job_id}_{i}.png"
             if i > 0:
-                time.sleep(8)
-            try:
-                generate_image(sp, path)
-                # Save to R2 for future reuse in Image Library
-                save_image_to_r2(path, topic_slug, i)
+                time.sleep(2)
+
+            success = generate_image(prompt, path, exclude_r2_keys=used_r2_keys)
+
+            if success:
+                # Save to R2 library for future reuse
+                key, _ = save_image_to_r2(path, topic_slug, i)
+                if key:
+                    used_r2_keys.append(key)
                 image_paths.append(path)
-            except Exception as e:
-                print(f"  Failed: {e}")
+            else:
+                # Last resort: copy previous or black frame
                 if image_paths:
                     shutil.copy(image_paths[-1], path)
+                    print(f"  Using previous image as last resort")
                 else:
-                    subprocess.run([
-                        "ffmpeg", "-y", "-f", "lavfi",
+                    subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
                         "-i", f"color=c=0x0d1117:s={IMG_WIDTH}x{IMG_HEIGHT}:d=1",
-                        "-frames:v", "1", path
-                    ], capture_output=True, timeout=15)
+                        "-frames:v", "1", path], capture_output=True, timeout=15)
+                    print(f"  Using black frame as last resort")
                 image_paths.append(path)
+
         return image_paths
 
     # ── PHASE 7: VOICE ────────────────────────────────────────────
@@ -1305,41 +1620,44 @@ Return ONLY the title text, nothing else."""
     def upload_to_youtube(video_path, title, script, fact_package=None):
         update_status("upload")
         print("\n[Upload]")
+
+        # ── OAuth token refresh ───────────────────────────────────
         r = requests.post(
             "https://oauth2.googleapis.com/token",
-            data={"client_id": YOUTUBE_CLIENT_ID,
+            data={"client_id":     YOUTUBE_CLIENT_ID,
                   "client_secret": YOUTUBE_CLIENT_SECRET,
                   "refresh_token": YOUTUBE_REFRESH_TOKEN,
-                  "grant_type": "refresh_token"},
+                  "grant_type":    "refresh_token"},
             timeout=10
         )
-        r.raise_for_status()
-        token = r.json()["access_token"]
+        print(f"  OAuth response ({r.status_code}): {r.text[:200]}")
+        if not r.ok:
+            raise Exception(f"YouTube OAuth failed {r.status_code}: {r.text[:200]}")
+        token = r.json().get("access_token")
+        if not token:
+            raise Exception(f"No access_token in OAuth response: {r.text[:200]}")
 
-        # Build source credit — sanitize it too
+        # ── Build sanitized metadata ───────────────────────────────
         source_raw = ""
         if fact_package and fact_package.get("found"):
             src = fact_package.get("source", "")
             if src:
                 source_raw = f"\nSource: {src}\n"
 
-        # Sanitize script for description — remove all problem chars
         script_safe = sanitize_for_youtube(script or "")
         source_safe = sanitize_for_youtube(source_raw)
-
         description = (
             f"{script_safe}\n\n{source_safe}"
             "India20Sixty - India's near future, explained.\n\n"
             "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
         )
 
-        # Sanitize title — remove emoji too (some titles get emoji from GPT)
         safe_title = sanitize_for_youtube(title or topic[:80])[:100]
         if not safe_title.strip():
-            safe_title = f"India Future Tech - {topic[:60]}"
+            safe_title = f"India Future Tech - {sanitize_for_youtube(topic[:60])}"
 
         print(f"  Title ({len(safe_title)}): {safe_title}")
-        print(f"  Desc ({len(description)} chars): {description[:100]}...")
+        print(f"  Desc ({len(description)} chars): {description[:120]}...")
 
         metadata = {
             "snippet": {
@@ -1355,16 +1673,39 @@ Return ONLY the title text, nothing else."""
             }
         }
 
-        print(f"  Uploading {os.path.getsize(video_path)//1024}KB...")
+        # ── Upload via multipart/related (required by YouTube API) ─
+        # YouTube requires multipart/related — NOT multipart/form-data
+        # Manually construct the body with a boundary
+        boundary  = "india20sixty_upload_boundary"
+        meta_json = json.dumps(metadata).encode("utf-8")
+
         with open(video_path, "rb") as vf:
-            r = requests.post(
-                "https://www.googleapis.com/upload/youtube/v3/videos"
-                "?uploadType=multipart&part=snippet,status",
-                headers={"Authorization": f"Bearer {token}"},
-                files={"snippet": (None, json.dumps(metadata), "application/json"),
-                       "video":   ("video.mp4", vf, "video/mp4")},
-                timeout=300
-            )
+            video_bytes = vf.read()
+
+        body = (
+            f"--{boundary}\r\n"
+            f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        ).encode("utf-8")
+        body += meta_json
+        body += (
+            f"\r\n--{boundary}\r\n"
+            f"Content-Type: video/mp4\r\n\r\n"
+        ).encode("utf-8")
+        body += video_bytes
+        body += f"\r\n--{boundary}--".encode("utf-8")
+
+        print(f"  Uploading {len(video_bytes)//1024}KB...")
+        r = requests.post(
+            "https://www.googleapis.com/upload/youtube/v3/videos"
+            "?uploadType=multipart&part=snippet,status",
+            headers={
+                "Authorization":  f"Bearer {token}",
+                "Content-Type":   f"multipart/related; boundary={boundary}",
+                "Content-Length": str(len(body)),
+            },
+            data=body,
+            timeout=300
+        )
         print(f"  YouTube response ({r.status_code}): {r.text[:400]}")
         r.raise_for_status()
         video_id = r.json()["id"]
@@ -2080,9 +2421,313 @@ def retry_upload(data: dict):
         return {"status": "error", "message": msg}
 
 
+
 # ==========================================
-# LOCAL TEST
+# ADD VOICE TO SILENT VIDEO + PUBLISH
 # ==========================================
+
+@app.function(image=image, secrets=secrets, cpu=2.0, memory=2048, timeout=300)
+@modal.fastapi_endpoint(method="POST")
+def add_voice_and_publish(data: dict):
+    """
+    Takes an existing silent staged video from R2,
+    generates ElevenLabs AI voice from the script,
+    mixes voice + video, uploads to YouTube.
+    
+    data = { job_id: str }
+    """
+    import re as _re
+
+    job_id = data.get("job_id")
+    if not job_id:
+        return {"status": "error", "message": "Missing job_id"}
+
+    SUPABASE_URL          = os.environ["SUPABASE_URL"]
+    SUPABASE_ANON_KEY     = os.environ["SUPABASE_ANON_KEY"]
+    ELEVENLABS_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
+    VOICE_ID              = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
+    YOUTUBE_CLIENT_ID     = os.environ.get("YOUTUBE_CLIENT_ID")
+    YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
+    YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+    R2_BASE_URL           = os.environ.get("R2_BASE_URL", "").rstrip("/")
+    TEST_MODE             = os.environ.get("TEST_MODE", "true").lower() == "true"
+
+    Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
+
+    def sb_patch(ep, payload):
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/{ep}",
+            headers={"apikey": SUPABASE_ANON_KEY,
+                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                     "Content-Type": "application/json",
+                     "Prefer": "return=minimal"},
+            json=payload, timeout=10
+        )
+
+    def log(msg):
+        print(f"[add_voice] {msg}")
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/render_logs",
+            headers={"apikey": SUPABASE_ANON_KEY,
+                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                     "Content-Type": "application/json",
+                     "Prefer": "return=minimal"},
+            json={"job_id": job_id, "message": msg,
+                  "created_at": datetime.utcnow().isoformat()},
+            timeout=5
+        )
+
+    try:
+        # ── Fetch job ──────────────────────────────────────────────
+        rows = requests.get(
+            f"{SUPABASE_URL}/rest/v1/jobs?id=eq.{job_id}"
+            "&select=id,topic,status,script_package,video_r2_url,video_r2_key,council_score,cluster",
+            headers={"apikey": SUPABASE_ANON_KEY,
+                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+            timeout=10
+        ).json()
+
+        if not rows:
+            return {"status": "error", "message": "Job not found"}
+
+        job        = rows[0]
+        topic      = job.get("topic", "India Future Tech")
+        script_pkg = job.get("script_package") or {}
+        script     = script_pkg.get("text", "")
+        fact_pkg   = script_pkg.get("fact_anchor", {})
+        title      = script_pkg.get("title", topic[:80])
+        video_url  = job.get("video_r2_url", "")
+
+        if not script:
+            return {"status": "error", "message": "No script in job — cannot generate voice"}
+        if not video_url:
+            return {"status": "error", "message": "No video_r2_url — no silent video to add voice to"}
+
+        # Mark as processing
+        sb_patch(f"jobs?id=eq.{job_id}", {
+            "status": "voice",
+            "error": None,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+        log("Starting voice generation for staged video")
+
+        # ── Generate ElevenLabs voice ──────────────────────────────
+        # Apply pronunciation fixes
+        PRONUNCIATION_FIXES = [
+            ("ISRO",        "I.S.R.O."),
+            ("ISRO's",      "I.S.R.O.'s"),
+            ("NASA",        "N.A.S.A."),
+            ("DRDO",        "D.R.D.O."),
+            ("AI",          "A.I."),
+            ("Chandrayaan", "Chandra-yaan"),
+            ("\u20b9",      "rupees "),
+            ("₹",          "rupees "),
+            ("crore",       "crore"),
+        ]
+        clean_script = script
+        # Strip emotion tags
+        clean_script = _re.sub(
+            r'</?(?:excited|happy|sad|whisper|angry)[^>]*>', '', clean_script)
+        for wrong, right in PRONUNCIATION_FIXES:
+            clean_script = clean_script.replace(wrong, right)
+
+        speech_text = clean_script.replace("...", "<break time='0.5s'/>")
+        log(f"Generating voice: {len(speech_text)} chars")
+
+        r = requests.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
+            headers={"xi-api-key": ELEVENLABS_API_KEY,
+                     "Content-Type": "application/json"},
+            json={
+                "text": speech_text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": 0.42,
+                    "similarity_boost": 0.85,
+                    "style": 0.35,
+                    "use_speaker_boost": True
+                }
+            },
+            timeout=60
+        )
+        r.raise_for_status()
+
+        raw_audio  = f"{TMP_DIR}/{job_id}_voice_raw.mp3"
+        voice_path = f"{TMP_DIR}/{job_id}_voice.mp3"
+        with open(raw_audio, "wb") as f:
+            f.write(r.content)
+
+        # Normalize audio
+        subprocess.run([
+            "ffmpeg", "-y", "-i", raw_audio,
+            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+            "-ar", "44100", "-ac", "1", voice_path
+        ], capture_output=True, timeout=30)
+
+        # Get voice duration
+        probe = subprocess.run([
+            "ffprobe", "-v", "error", "-show_entries",
+            "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+            voice_path
+        ], capture_output=True, text=True, timeout=10)
+        audio_dur = float(probe.stdout.strip() or "15")
+        log(f"Voice: {audio_dur:.1f}s")
+
+        # ── Download silent video from R2 ─────────────────────────
+        # Build full URL if needed
+        if video_url.startswith("http"):
+            full_video_url = video_url
+        else:
+            full_video_url = f"{R2_BASE_URL}/{video_url}"
+
+        silent_video = f"{TMP_DIR}/{job_id}_silent.mp4"
+        log(f"Downloading silent video: {full_video_url[:60]}")
+        r = requests.get(full_video_url, timeout=60, stream=True)
+        r.raise_for_status()
+        with open(silent_video, "wb") as f:
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+        log(f"Silent video: {os.path.getsize(silent_video)//1024}KB")
+
+        # ── Mix voice into video ───────────────────────────────────
+        final_video = f"{TMP_DIR}/{job_id}_final.mp4"
+
+        # Mux: loop video to match audio duration, add voice track
+        result = subprocess.run([
+            "ffmpeg", "-y",
+            "-stream_loop", "-1", "-i", silent_video,
+            "-i", voice_path,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "128k",
+            "-t", str(audio_dur),
+            "-movflags", "+faststart",
+            final_video
+        ], capture_output=True, timeout=120)
+
+        if result.returncode != 0:
+            log(f"Mix error: {result.stderr.decode()[:200]}")
+            raise Exception("ffmpeg mix failed")
+
+        log(f"Final video: {os.path.getsize(final_video)//1024}KB")
+
+        # ── Upload to YouTube ──────────────────────────────────────
+        if TEST_MODE:
+            log("TEST_MODE=true — skipping YouTube upload")
+            sb_patch(f"jobs?id=eq.{job_id}", {
+                "status": "complete",
+                "updated_at": datetime.utcnow().isoformat()
+            })
+            return {"status": "test_complete", "job_id": job_id}
+
+        # Get OAuth token
+        r = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={"client_id": YOUTUBE_CLIENT_ID,
+                  "client_secret": YOUTUBE_CLIENT_SECRET,
+                  "refresh_token": YOUTUBE_REFRESH_TOKEN,
+                  "grant_type": "refresh_token"},
+            timeout=10
+        )
+        print(f"OAuth: {r.status_code}: {r.text[:100]}")
+        if not r.ok:
+            raise Exception(f"OAuth failed: {r.text[:100]}")
+        token = r.json().get("access_token")
+
+        # Sanitize title + description
+        def sanitize(text):
+            if not text:
+                return ""
+            text = text.replace('\u2019', "'").replace('\u2018', "'")
+            text = text.replace('\u201c', '"').replace('\u201d', '"')
+            text = text.replace('\u2013', '-').replace('\u2014', '-')
+            text = text.replace('\u2026', '...').replace('\u00a0', ' ')
+            text = text.replace('\u20b9', 'Rs.').replace('₹', 'Rs.')
+            text = _re.sub(r'</?(?:excited|happy|sad|whisper|angry)[^>]*>', '', text)
+            text = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+            text = _re.sub(r'[\u200b-\u200f\u202a-\u202e\ufeff]', '', text)
+            text = _re.sub(u'[\U0001F000-\U0001FFFF]', '', text)
+            text = _re.sub(r'[\u2600-\u26FF\u2700-\u27BF]', '', text)
+            text = _re.sub(r'[\u0900-\u0D7F]', '', text)
+            return text.strip()
+
+        safe_title = sanitize(title)[:100] or f"India Future: {sanitize(topic[:60])}"
+        safe_desc  = sanitize(script)[:4500]
+        description = (
+            f"{safe_desc}\n\n"
+            "India20Sixty - India's near future, explained.\n\n"
+            "#IndiaFuture #FutureTech #India #Shorts #ISRO #Technology"
+        )
+
+        metadata = {
+            "snippet": {
+                "title": safe_title,
+                "description": description[:5000],
+                "tags": ["Future India", "India", "ISRO", "Technology", "Shorts"],
+                "categoryId": "28"
+            },
+            "status": {
+                "privacyStatus": "public",
+                "selfDeclaredMadeForKids": False
+            }
+        }
+
+        boundary  = "india20sixty_boundary"
+        meta_json = json.dumps(metadata).encode("utf-8")
+        with open(final_video, "rb") as vf:
+            video_bytes = vf.read()
+
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+                ).encode() + meta_json
+        body += (f"\r\n--{boundary}\r\nContent-Type: video/mp4\r\n\r\n").encode()
+        body += video_bytes
+        body += f"\r\n--{boundary}--".encode()
+
+        log(f"Uploading {len(video_bytes)//1024}KB to YouTube...")
+        r = requests.post(
+            "https://www.googleapis.com/upload/youtube/v3/videos"
+            "?uploadType=multipart&part=snippet,status",
+            headers={
+                "Authorization":  f"Bearer {token}",
+                "Content-Type":   f"multipart/related; boundary={boundary}",
+                "Content-Length": str(len(body)),
+            },
+            data=body,
+            timeout=300
+        )
+        print(f"YouTube response ({r.status_code}): {r.text[:400]}")
+        r.raise_for_status()
+        youtube_id = r.json()["id"]
+        log(f"UPLOADED: https://youtube.com/watch?v={youtube_id}")
+
+        # Update job
+        sb_patch(f"jobs?id=eq.{job_id}", {
+            "status":     "complete",
+            "youtube_id": youtube_id,
+            "error":      None,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+
+        # Cleanup
+        for f in [raw_audio, voice_path, silent_video, final_video]:
+            try: os.remove(f)
+            except: pass
+
+        return {"status": "published", "job_id": job_id, "youtube_id": youtube_id}
+
+    except Exception as e:
+        msg = str(e)[:400]
+        log(f"ERROR: {msg}")
+        sb_patch(f"jobs?id=eq.{job_id}", {
+            "status": "failed",
+            "error":  msg,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+        return {"status": "error", "message": msg}
+
+
+
 
 @app.local_entrypoint()
 def main():

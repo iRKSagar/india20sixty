@@ -5,7 +5,19 @@
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return cors(null, 204);
+
+    // ── CORS preflight ────────────────────────────────────────
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin":  "*",
+          "Access-Control-Allow-Headers": "Content-Type,Authorization",
+          "Access-Control-Allow-Methods": "GET,POST,OPTIONS,PATCH,DELETE",
+          "Access-Control-Max-Age":       "86400",
+        }
+      });
+    }
 
     // ── CONFIG ────────────────────────────────────────────────
     if (url.pathname === "/config") {
@@ -47,7 +59,7 @@ export default {
 
     // ── HEALTH ────────────────────────────────────────────────
     if (url.pathname === "/health") {
-      return cors({ status: "ok", version: "v2.0",
+      return cors({ status: "ok", version: "v3.0",
         time: new Date().toISOString() });
     }
 
@@ -171,6 +183,25 @@ export default {
         });
 
         return cors(enriched);
+      } catch (e) { return cors({ error: e.message }, 500); }
+    }
+
+    // ── ADD VOICE TO STAGED VIDEO + PUBLISH ──────────────────
+    if (url.pathname === "/add-voice-and-publish" && request.method === "POST") {
+      try {
+        const { job_id } = await request.json();
+        if (!job_id) return cors({ error: "Missing job_id" }, 400);
+        const baseUrl = (env.RENDER_PIPELINE_URL || "").replace(/\/[^/]+$/, "");
+        const endpoint = baseUrl + "/add-voice-and-publish";
+        await sbPatch(env, `jobs?id=eq.${job_id}`,
+          { status: "voice", error: null, updated_at: new Date().toISOString() });
+        ctx.waitUntil(fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ job_id }),
+          signal: AbortSignal.timeout(60000)
+        }).catch(e => console.error("add-voice-and-publish:", e.message)));
+        return cors({ status: "started", job_id });
       } catch (e) { return cors({ error: e.message }, 500); }
     }
 
