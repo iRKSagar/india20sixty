@@ -1,788 +1,709 @@
-"""
-India20Sixty — Topic Council Worker v2.0
-=========================================
-Real-news-first pipeline. Every topic is anchored to an actual
-headline from Google News RSS or PIB before entering the queue.
-
-Endpoints:
-  GET  /health          — status + queue depth
-  POST /replenish       — full scout→council→save pipeline
-  POST /full-pipeline   — evaluate single topic (called by Cloudflare)
-  GET  /queue-status    — how many approved topics remain
-"""
-
-from flask import Flask, request, jsonify
-import os
-import json
-import requests
-import re
-import time
-import xml.etree.ElementTree as ET
-from datetime import datetime
-
-app = Flask(__name__)
-
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-SUPABASE_URL   = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY   = os.environ.get("SUPABASE_ANON_KEY")
-
-CHANNEL_BRIEF = """
-INDIA20SIXTY — India's future through technology and innovation.
-
-IDENTITY: Every video covers something real happening in India right now —
-a funded startup, a government program, a scientific breakthrough, a new gadget,
-a policy that changes how Indians will live in the next 5-10 years.
-
-ALLOWED TOPICS — must fit one of these:
-- AI, machine learning, robotics, automation
-- Space tech, ISRO missions, satellites, defence tech
-- Healthcare innovation, medical AI, biotech, pharma
-- EVs, renewable energy, solar, clean tech, batteries
-- Gadgets, consumer electronics, chips, semiconductors
-- Smart cities, infrastructure, 5G, connectivity
-- Agritech, food technology, precision farming
-- Edtech, skill development, digital literacy
-- Startups, deep tech, R&D, IIT/IIM innovations
-- Fintech, UPI, digital payments, blockchain applications
-- Manufacturing tech, Industry 4.0, Make in India
-
-HARD RULES:
-- Every topic must have ONE real fact anchor — a number, a funding amount, a timeline, a stat
-- No sports, no entertainment, no politics, no religion
-- No vague "India is growing" topics — must be specific and real
-- Timeframe: next 5-10 years — never "by 2060"
-"""
-
-# ==========================================
-# REAL NEWS SOURCES
-# ==========================================
-
-WHITELIST_KEYWORDS = [
-    # AI & Machine Learning
-    "ai", "artificial intelligence", "machine learning", "deep learning",
-    "neural", "llm", "generative", "chatbot", "automation", "robot",
-    # Space & Defence Tech
-    "isro", "space", "satellite", "rocket", "chandrayaan", "gaganyaan",
-    "drdo", "defence technology", "missile", "aerospace",
-    # Healthcare & Biotech
-    "health", "medical", "hospital", "doctor", "cancer", "diagnosis",
-    "biotech", "pharma", "drug", "vaccine", "genomics", "telemedicine",
-    # Energy & Climate Tech
-    "solar", "renewable", "energy", "wind power", "green", "ev", "electric vehicle",
-    "battery", "hydrogen", "climate", "emission", "clean energy",
-    # Infrastructure & Smart Cities
-    "smart city", "infrastructure", "metro", "highway", "bullet train",
-    "hyperloop", "5g", "6g", "broadband", "internet", "connectivity",
-    # Gadgets & Consumer Tech
-    "gadget", "device", "smartphone", "chip", "semiconductor", "processor",
-    "wearable", "drone", "iot", "sensor", "display", "camera tech",
-    # Agriculture & Food Tech
-    "agri", "farm", "crop", "irrigation", "food tech", "precision farming",
-    "vertical farm", "hydroponics", "seed", "fertilizer tech",
-    # Education & Skill Tech
-    "edtech", "education technology", "skill", "learning", "coding",
-    "online education", "upskilling", "digital literacy",
-    # Startup & Innovation Ecosystem
-    "startup", "unicorn", "funding", "venture", "innovation", "incubator",
-    "deep tech", "r&d", "research", "iit", "iim", "patent",
-    # Manufacturing & Industry
-    "manufacturing", "factory", "3d print", "semiconductor fab",
-    "make in india", "industry 4.0", "supply chain tech",
-    # Fintech
-    "fintech", "upi", "digital payment", "blockchain", "crypto tech",
-    "neobank", "insurtech", "digital rupee",
-]
-
-BLACKLIST_KEYWORDS = [
-    # Sports — all of them
-    "cricket", "hockey", "football", "soccer", "tennis", "badminton",
-    "kabaddi", "basketball", "volleyball", "wrestling", "boxing",
-    "olympic", "commonwealth games", "cwg", "asian games", "ipl",
-    "bcci", "fifa", "icc", "match", "tournament", "trophy", "league",
-    "player", "batsman", "bowler", "goalkeeper", "wicket", "century",
-    # Entertainment
-    "bollywood", "movie", "film", "actor", "actress", "celebrity",
-    "singer", "musician", "album", "song", "concert", "award show",
-    "oscar", "filmfare", "box office", "ott release", "web series",
-    # Politics
-    "election", "vote", "polling", "political party", "minister",
-    "parliament", "lok sabha", "rajya sabha", "cm ", "chief minister",
-    "governor", "mla", "mp ", "manifesto", "rally",
-    # Religion & Culture (non-tech)
-    "temple", "mosque", "church", "gurudwara", "diwali", "eid",
-    "holi", "navratri", "puja", "pilgrimage", "yatra",
-    # Crime & Disasters
-    "murder", "rape", "crime", "theft", "fraud", "scam", "arrested",
-    "flood", "earthquake", "cyclone", "landslide", "accident", "crash",
-    # Pure Finance (no tech angle)
-    "sensex", "nifty", "stock market", "share price", "ipo listing",
-    "inflation rate", "gdp growth", "rbi rate", "repo rate",
-    # Celebrity/Influencer
-    "viral video", "meme", "influencer", "youtuber", "instagram reel",
-    "tiktok", "reels trend",
-]
-
-def is_allowed_topic(topic_text, headline_text=""):
-    """Whitelist check — must match tech/future/innovation."""
-    combined = (topic_text + " " + headline_text).lower()
-    return any(kw in combined for kw in WHITELIST_KEYWORDS)
-
-def is_banned_topic(topic_text, headline_text=""):
-    """Blacklist check — hard block regardless of whitelist."""
-    combined = (topic_text + " " + headline_text).lower()
-    return any(kw in combined for kw in BLACKLIST_KEYWORDS)
-    """Google News RSS — free, no API key, real headlines."""
-    try:
-        encoded = requests.utils.quote(query)
-        url     = (f"https://news.google.com/rss/search"
-                   f"?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en")
-        r = requests.get(url, timeout=10,
-                         headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        root  = ET.fromstring(r.content)
-        items = root.findall(".//item")[:max_items]
-        results = []
-        for item in items:
-            title   = item.findtext("title", "").strip()
-            source  = item.findtext("source", "Google News").strip()
-            pubdate = item.findtext("pubDate", "")[:16]
-            if title:
-                results.append({
-                    "headline": title,
-                    "source":   source,
-                    "date":     pubdate,
-                    "origin":   "google_news"
-                })
-        return results
-    except Exception as e:
-        print(f"Google News [{query[:30]}]: {e}")
-        return []
-
-
-def fetch_pib(max_items=10):
-    """PIB — official Indian government press releases, free RSS."""
-    try:
-        url = "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3"
-        r   = requests.get(url, timeout=10,
-                           headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        root  = ET.fromstring(r.content)
-        items = root.findall(".//item")[:max_items]
-        results = []
-        for item in items:
-            title = item.findtext("title", "").strip()
-            if title:
-                results.append({
-                    "headline": title,
-                    "source":   "PIB — Government of India",
-                    "date":     item.findtext("pubDate", "")[:16],
-                    "origin":   "pib"
-                })
-        return results
-    except Exception as e:
-        print(f"PIB fetch: {e}")
-        return []
-
-
-def fetch_isro_news(max_items=5):
-    """ISRO news via Google News RSS."""
-    return fetch_google_news("ISRO India space 2025", max_items)
-
-
-def collect_all_headlines():
-    """Pull headlines from all sources and deduplicate."""
-    print("SCOUT: Collecting real headlines...")
-
-    # Tech and innovation focused queries only
-    queries = [
-        "India AI artificial intelligence startup 2025",
-        "ISRO India space technology mission",
-        "India electric vehicle EV technology",
-        "India renewable energy solar startup",
-        "India healthcare medical AI technology",
-        "India semiconductor chip manufacturing",
-        "India fintech UPI digital payment innovation",
-        "India drone robotics automation startup",
-        "India 5G smart city infrastructure",
-        "India deep tech startup funding 2025",
-    ]
-
-    all_headlines = []
-
-    # Google News — parallel queries
-    for q in queries[:5]:  # limit to 5 to stay fast
-        all_headlines += fetch_google_news(q, max_items=5)
-        time.sleep(0.3)
-
-    # PIB official releases
-    all_headlines += fetch_pib(max_items=15)
-
-    # ISRO specific
-    all_headlines += fetch_isro_news(max_items=5)
-
-    # Deduplicate by headline text
-    seen, unique = set(), []
-    for h in all_headlines:
-        key = h["headline"].lower().strip()
-        if key not in seen and len(h["headline"]) > 20:
-            seen.add(key)
-            unique.append(h)
-
-    print(f"SCOUT: {len(unique)} unique headlines collected")
-    return unique
-
-
-# ==========================================
-# TOPIC EXTRACTION FROM HEADLINES
-# ==========================================
-
-def extract_topics_from_headlines(headlines):
-    """
-    Use GPT to turn real headlines into India20Sixty video topics.
-    Each topic is anchored to a real headline.
-    """
-    if not headlines:
-        return []
-
-    headlines_text = "\n".join(
-        f"{i+1}. [{h['origin']}] {h['headline']} — {h['source']}"
-        for i, h in enumerate(headlines[:30])
-    )
-
-    prompt = f"""You are the topic director for India20Sixty, an Indian YouTube Shorts channel about India's real near future.
-
-CHANNEL BRIEF:
-{CHANNEL_BRIEF}
-
-REAL HEADLINES FROM TODAY:
-{headlines_text}
-
-Your job: Turn these real headlines into compelling YouTube Short topics.
-
-Rules:
-- Each topic MUST be derived from a real headline above
-- Topic should be the STORY ANGLE, not just a headline rewrite
-- Make it emotionally compelling — what does this mean for regular Indians?
-- Include the real anchor (stat, source, fact) from the headline
-- Avoid politics, religion, or controversy
-- Generate 8-12 topics from the most interesting headlines
-
-Return ONLY valid JSON array:
-[
-  {{
-    "topic": "compelling video title/topic",
-    "source_headline": "exact headline from the list",
-    "source_name": "source organization",
-    "key_fact": "the specific number, stat, or fact from the headline",
-    "story_angle": "what makes this emotionally compelling for Indian viewers",
-    "category": "Space|AI|Healthcare|Infrastructure|Energy|Education|Economy"
-  }}
-]"""
-
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.7, "max_tokens": 1500},
-            timeout=30
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"].strip()
-        start   = content.find('[')
-        end     = content.rfind(']') + 1
-        topics  = json.loads(content[start:end])
-        print(f"EXTRACT: {len(topics)} topics from headlines")
-        return topics
-    except Exception as e:
-        print(f"Topic extraction failed: {e}")
-        return []
-
-
-# ==========================================
-# TOPIC COUNCIL
-# ==========================================
-
-def council_evaluate(topic_data, perf_context=None):
-    """
-    Score a topic on virality, factual strength, visual potential.
-    Returns score + recommendation + improved angle.
-    """
-    topic        = topic_data.get("topic", "")
-    key_fact     = topic_data.get("key_fact", "")
-    story_angle  = topic_data.get("story_angle", "")
-    source       = topic_data.get("source_name", "")
-
-    perf_prompt = ""
-    if perf_context and perf_context.get("total_videos"):
-        avg  = perf_context.get("avg_score", 0)
-        tops = perf_context.get("top_performers", [])
-        perf_prompt = f"\nChannel avg score: {avg:,} | "
-        if tops:
-            perf_prompt += f"Top topics: {', '.join(t.get('topic','')[:30] for t in tops[:2])}"
-
-    prompt = f"""You are the INDIA20SIXTY TOPIC COUNCIL.
-
-Evaluate this real-news-anchored topic for a 25-second YouTube Short.
-
-TOPIC: "{topic}"
-KEY FACT: "{key_fact}"
-SOURCE: "{source}"
-STORY ANGLE: "{story_angle}"
-
-CHANNEL BRIEF:
-{CHANNEL_BRIEF}
-{perf_prompt}
-
-Score 0-100 on each dimension:
-1. VIRALITY — Will Indians share this? Does the fact surprise them?
-2. FACTUAL_STRENGTH — Is the anchor fact specific and credible?
-3. VISUAL_POTENTIAL — Can AI generate compelling images for this?
-4. EMOTIONAL_HOOK — Does this create pride, wonder, or urgency?
-5. SAFETY — Platform-safe, no politics/religion controversy?
-
-Return ONLY valid JSON:
-{{
-  "virality":          {{"score": 85, "reason": "..."}},
-  "factual_strength":  {{"score": 90, "reason": "..."}},
-  "visual_potential":  {{"score": 80, "reason": "..."}},
-  "emotional_hook":    {{"score": 85, "reason": "..."}},
-  "safety":            {{"score": 95, "flags": "none"}},
-  "council_score":     87,
-  "recommendation":    "APPROVE",
-  "improved_topic":    "better angle if applicable, else same",
-  "hook_suggestion":   "suggested opening line for the script"
-}}"""
-
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.3, "max_tokens": 500},
-            timeout=30
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"].strip()
-        start   = content.find('{')
-        end     = content.rfind('}') + 1
-        ev      = json.loads(content[start:end])
-
-        score    = ev.get("council_score", 0)
-        approved = (
-            ev.get("recommendation") == "APPROVE"
-            and score >= 70
-            and ev.get("safety", {}).get("score", 0) >= 80
-        )
-
-        return {
-            "topic":         ev.get("improved_topic", topic),
-            "original_topic": topic,
-            "council_score": score,
-            "approved":      approved,
-            "evaluation":    ev,
-            "fact_package": {
-                "found":     True,
-                "headline":  topic_data.get("source_headline", ""),
-                "source":    source,
-                "key_fact":  key_fact,
-                "relevance": story_angle
-            }
-        }
-    except Exception as e:
-        print(f"Council eval failed for '{topic[:40]}': {e}")
-        return {
-            "topic":         topic,
-            "council_score": 0,
-            "approved":      False,
-            "evaluation":    {},
-            "fact_package":  {"found": False}
-        }
-
-
-# ==========================================
-# SCRIPT ARCHITECT (pre-generates script package)
-# ==========================================
-
-BLUEPRINTS = {
-    "real_news":      ["SHOCKING FACT HOOK", "CONTEXT", "WHAT THIS MEANS", "NEAR FUTURE", "YOUR VERDICT"],
-    "already_happening": ["REVEAL", "PROOF", "SCALE", "IMPACT", "DEBATE"],
-    "india_leads":    ["BOLD CLAIM", "EVIDENCE", "COMPARISON", "PRIDE MOMENT", "QUESTION"],
-}
-
-def architect_script(topic, council_result):
-    """
-    Pre-generate a script package using the fact anchor.
-    Saved with the topic so pipeline can use it directly.
-    """
-    fact_pkg = council_result.get("fact_package", {})
-    key_fact = fact_pkg.get("key_fact", "")
-    source   = fact_pkg.get("source", "")
-    hook_sug = council_result.get("evaluation", {}).get("hook_suggestion", "")
-
-    fact_section = f"""
-REAL FACT ANCHOR — MUST be used in the script:
-Fact: {key_fact}
-Source: {source}
-Hook suggestion: {hook_sug}""" if key_fact else ""
-
-    prompt = f"""You are a passionate Indian storyteller for India20Sixty YouTube Shorts.
-
-Topic: {topic}
-{fact_section}
-
-Write a 25-second flowing narration — NOT bullet points.
-Sound like an excited young Indian talking to friends.
-
-Rules:
-- Open with the real fact to shock and hook
-- Build the story around real information, not invented claims  
-- 70% English + 30% Hinglish naturally mixed
-- Use "..." for dramatic pauses
-- Do NOT say "by 2060" — say "already happening", "in 5 years", "by 2030"
-- 8 flowing sentences that build on each other
-- End with a debate-sparking question
-
-Return ONLY valid JSON:
-{{
-  "title": "SEO title under 60 chars with emoji",
-  "hook": "first 3 seconds — the scroll-stopper",
-  "script_lines": ["line1", "line2", "line3", "line4", "line5", "line6", "line7", "line8"],
-  "full_script": "all lines as one flowing paragraph",
-  "cta": "comment/share call to action",
-  "hashtags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
-  "estimated_duration_sec": 25
-}}"""
-
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.85, "max_tokens": 600},
-            timeout=30
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"].strip()
-        start   = content.find('{')
-        end     = content.rfind('}') + 1
-        pkg     = json.loads(content[start:end])
-        return pkg
-    except Exception as e:
-        print(f"Script architect failed: {e}")
-        return {
-            "title":                f"{topic} 🇮🇳",
-            "hook":                 f"Yeh suno — {key_fact or topic}",
-            "script_lines":         [f"Yeh suno — {topic}.",
-                                     "Yeh already ho raha hai India mein.",
-                                     "Sirf 5 saalon mein sab kuch badal jayega.",
-                                     key_fact or "Real change aa rahi hai.",
-                                     "Duniya dekh rahi hai, India lead kar raha hai.",
-                                     "Yeh sirf shuruaat hai.",
-                                     "Hamare engineers aur scientists iss par kaam kar rahe hain.",
-                                     "Kya aap ready hain? Comment karo."],
-            "full_script":          f"Yeh suno — {topic}. Already ho raha hai. {key_fact}",
-            "cta":                  "Comment karo! 👇",
-            "hashtags":             ["IndiaFuture", "FutureTech", "India", "Shorts"],
-            "estimated_duration_sec": 25
-        }
-
-
-# ==========================================
-# SAVE TO SUPABASE
-# ==========================================
-
-def sb_get(endpoint):
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/{endpoint}",
-        headers={"apikey": SUPABASE_KEY,
-                 "Authorization": f"Bearer {SUPABASE_KEY}"},
-        timeout=10
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-def sb_insert(table, data):
-    r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/{table}",
-        headers={"apikey": SUPABASE_KEY,
-                 "Authorization": f"Bearer {SUPABASE_KEY}",
-                 "Content-Type": "application/json",
-                 "Prefer": "return=representation"},
-        json=data, timeout=10
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-def sb_patch(endpoint, data):
-    r = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/{endpoint}",
-        headers={"apikey": SUPABASE_KEY,
-                 "Authorization": f"Bearer {SUPABASE_KEY}",
-                 "Content-Type": "application/json",
-                 "Prefer": "return=minimal"},
-        json=data, timeout=10
-    )
-    return r.ok
-
-
-def get_queue_depth():
-    try:
-        rows = sb_get("topics?used=eq.false&council_score=gte.70&select=id")
-        return len(rows)
-    except Exception:
-        return 0
-
-
-def get_performance_context():
-    try:
-        rows = sb_get("system_state?id=eq.main&select=council_context")
-        if rows and rows[0].get("council_context"):
-            return json.loads(rows[0]["council_context"])
-    except Exception:
-        pass
-    return {}
-
-
-def save_topic(topic, source_data, council_score, script_package, fact_package):
-    data = {
-        "cluster":        fact_package.get("category", "AI_Future"),
-        "topic":          topic,
-        "used":           False,
-        "council_score":  council_score,
-        "script_package": {
-            **script_package,
-            "fact_anchor": fact_package
-        },
-        "source":         "real_news_v2",
+// ============================================================
+// India20Sixty — Cloudflare Worker v5.0
+// Priority A: Space/ISRO bias in pickTopic()
+// New: /longform/* routes for long-form video pipeline
+// New: /settings priority_a toggle
+// New: last_cluster tracking to prevent cluster repetition
+// ============================================================
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS,PATCH,DELETE",
+        "Access-Control-Max-Age": "86400",
+      }});
     }
-    try:
-        result = sb_insert("topics", data)
-        print(f"  Saved: {topic[:50]} (score {council_score})")
-        return result[0] if result else None
-    except Exception as e:
-        print(f"  Save failed: {e}")
-        return None
 
+    if (url.pathname === "/config") {
+      try {
+        const rows = await sbGet(env, "system_state?id=eq.main&select=mode,voice_mode,publish");
+        const s = rows[0] || {};
+        return cors({ r2_base_url: (env.R2_BASE_URL||"").replace(/\/$/,""), mode: s.mode||"auto", version:"v5.0" });
+      } catch(e) { return cors({ r2_base_url:(env.R2_BASE_URL||"").replace(/\/$/,""), mode:"auto", version:"v5.0" }); }
+    }
 
-# ==========================================
-# FULL REPLENISHMENT PIPELINE
-# ==========================================
+    if (url.pathname === "/health") return cors({ status:"ok", version:"v5.0", time:new Date().toISOString() });
 
-def run_replenishment(target=12):
-    print(f"\n{'='*60}")
-    print(f"REPLENISHMENT v2.0 — real news first — target: {target}")
-    print(f"{'='*60}\n")
+    if (url.pathname === "/" || url.pathname === "/dashboard") {
+      const dashUrl = (env.DASHBOARD_URL||"").trim();
+      if (!dashUrl) return new Response("DASHBOARD_URL not set",{status:500});
+      return Response.redirect(dashUrl, 302);
+    }
 
-    perf_context = get_performance_context()
-    if perf_context.get("total_videos"):
-        print(f"Performance context: {perf_context['total_videos']} videos, "
-              f"avg score {perf_context.get('avg_score',0):,}")
+    if (url.pathname === "/jobs") {
+      try { return cors(await sbGet(env,"jobs?order=created_at.desc&limit=50")); }
+      catch(e) { return cors({error:e.message},500); }
+    }
 
-    # Phase 1: Collect real headlines
-    headlines = collect_all_headlines()
-    if not headlines:
-        print("No headlines collected — aborting")
-        return []
+    if (url.pathname === "/topics") {
+      try { return cors(await sbGet(env,"topics?order=council_score.desc&limit=100")); }
+      catch(e) { return cors({error:e.message},500); }
+    }
 
-    # Phase 2: Extract topics from headlines
-    raw_topics = extract_topics_from_headlines(headlines)
-    if not raw_topics:
-        print("No topics extracted — aborting")
-        return []
+    if (url.pathname === "/analytics") {
+      try {
+        const analytics = await sbGet(env,"analytics?order=score.desc&limit=50");
+        const jobs = await sbGet(env,"jobs?status=eq.complete&select=id,topic,council_score,youtube_id,cluster,created_at");
+        return cors({analytics,jobs});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    print(f"\nCOUNCIL: Evaluating {len(raw_topics)} real-news topics...")
+    if (url.pathname === "/run" && request.method === "POST") {
+      try {
+        const body = await request.json().catch(()=>({}));
+        const t = await pickTopic(env, body.category||null);
+        const job = await createJob(t, env);
+        await upsertState(env, { last_cluster: t.category });
+        ctx.waitUntil(triggerRender(job, env));
+        return cors({ status:"job_created", job_id:job.id, topic:t.topic, category:t.category });
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    # Phase 3: Whitelist + Blacklist filter + Council evaluation
-    approved = []
-    for i, t in enumerate(raw_topics):
-        topic_str   = t.get("topic", "")
-        headline    = t.get("source_headline", "")
+    if (url.pathname === "/run-topic" && request.method === "POST") {
+      try {
+        const body = await request.json().catch(()=>({}));
+        if (!body.topic_id) return cors({error:"Missing topic_id"},400);
+        const topics = await sbGet(env,"topics?id=eq."+body.topic_id+"&select=*");
+        if (!topics.length) return cors({error:"Topic not found"},404);
+        const t = topics[0];
+        if (t.used) return cors({error:"Topic already used"},400);
+        await sbPatch(env,"topics?id=eq."+body.topic_id,{used:true,used_at:new Date().toISOString()});
+        const job = await sbInsert(env,"jobs",{
+          topic:t.topic, cluster:t.cluster||"AI", status:"pending",
+          script_package:t.script_package||null, council_score:t.council_score||0, retries:0,
+          created_at:new Date().toISOString(), updated_at:new Date().toISOString()
+        });
+        ctx.waitUntil(triggerRender(job, env));
+        return cors({status:"job_created",job_id:job.id,topic:t.topic,category:t.cluster});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-        # Blacklist — hard block first
-        if is_banned_topic(topic_str, headline):
-            print(f"  [{i+1}] BLACKLISTED: {topic_str[:55]}")
-            continue
+    if (url.pathname === "/set-mode" && request.method === "POST") {
+      try {
+        const {mode} = await request.json();
+        const validMode = ["auto","stage"].includes(mode)?mode:"auto";
+        const updates = {mode:validMode, updated_at:new Date().toISOString()};
+        if (validMode==="auto") { updates.publish=true; updates.voice_mode="ai"; } else { updates.publish=false; }
+        await upsertState(env, updates);
+        return cors({mode:validMode});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-        # Whitelist — must match allowed categories
-        if not is_allowed_topic(topic_str, headline):
-            print(f"  [{i+1}] NOT RELEVANT: {topic_str[:55]}")
-            continue
-        topic_str = t.get("topic", "")
-        print(f"  [{i+1}/{len(raw_topics)}] {topic_str[:55]}...")
-        result = council_evaluate(t, perf_context)
-        score  = result["council_score"]
-        status = "APPROVED" if result["approved"] else "REJECTED"
-        print(f"    {status} | score={score} | fact={t.get('key_fact','')[:40]}")
-        if result["approved"]:
-            approved.append({**t, **result})
-        time.sleep(0.5)
+    if (url.pathname === "/settings" && request.method === "GET") {
+      try {
+        const rows = await sbGet(env,"system_state?id=eq.main&select=mode,voice_mode,publish,videos_per_day,subscribe_cta,long_form,cross_post,priority_a");
+        const s = rows[0]||{};
+        return cors({
+          mode:           s.mode||"auto",
+          voice_mode:     s.voice_mode||"ai",
+          publish:        s.publish===true,
+          videos_per_day: s.videos_per_day||1,
+          subscribe_cta:  s.subscribe_cta===true,
+          long_form:      s.long_form===true,
+          cross_post:     s.cross_post===true,
+          priority_a:     s.priority_a===true,
+        });
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    print(f"\nCOUNCIL: {len(approved)}/{len(raw_topics)} approved")
+    if (url.pathname === "/settings" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const allowed = ["mode","voice_mode","publish","videos_per_day","subscribe_cta","long_form","cross_post","priority_a"];
+        const updates = {};
+        for (const k of allowed) { if (k in body) updates[k]=body[k]; }
+        if (!Object.keys(updates).length) return cors({error:"No valid settings"},400);
+        if (updates.mode==="auto") { updates.publish=true; updates.voice_mode="ai"; }
+        await upsertState(env, updates);
+        return cors({status:"updated", updated:Object.keys(updates)});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    # Phase 4: Generate script packages + save
-    saved = []
-    for result in approved[:target]:
-        topic_str    = result["topic"]
-        council_score = result["council_score"]
-        fact_pkg     = result.get("fact_package", {})
-        fact_pkg["category"] = result.get("category", "AI_Future")
+    if (url.pathname === "/review") {
+      try {
+        const r2Base = (env.R2_BASE_URL||"").replace(/\/$/,"");
+        const fields = "id,topic,cluster,script_package,video_r2_url,council_score,updated_at,status,error";
+        const [rev,cbdp,staged] = await Promise.all([
+          sbGet(env,"jobs?status=eq.review&order=updated_at.desc&select="+fields),
+          sbGet(env,"jobs?status=eq.cbdp&order=updated_at.desc&select="+fields),
+          sbGet(env,"jobs?status=eq.staged&order=updated_at.desc&select="+fields),
+        ]);
+        const failed = await sbGet(env,"jobs?status=eq.failed&video_r2_url=not.is.null&order=updated_at.desc&limit=20&select="+fields).catch(()=>[]);
+        const seen = new Set();
+        const all = [...staged,...rev,...cbdp,...failed].filter(j=>{ if(seen.has(j.id))return false; seen.add(j.id); return true; });
+        return cors(all.map(j=>{
+          const raw=j.video_r2_url||"";
+          const videoUrl=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null);
+          const reason=j.status==="staged"?"Silent video — needs AI voice":j.status==="review"?"Publish was OFF":j.status==="cbdp"?"Upload failed":"Not published";
+          return {...j, video_public_url:videoUrl, review_reason:reason, has_video:!!videoUrl};
+        }));
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-        print(f"\nARCHITECT: {topic_str[:55]}...")
-        script_pkg = architect_script(topic_str, result)
-        print(f"  Title: {script_pkg.get('title','')[:55]}")
-        print(f"  Hook:  {script_pkg.get('hook','')[:60]}")
+    if (url.pathname === "/add-voice-and-publish" && request.method === "POST") {
+      try {
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const baseUrl = (env.RENDER_PIPELINE_URL||"").replace(/\/[^/]+$/,"");
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"voice",error:null,updated_at:new Date().toISOString()});
+        ctx.waitUntil(fetch(baseUrl+"/add-voice-and-publish",{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({job_id}),signal:AbortSignal.timeout(60000)
+        }).catch(e=>console.error("add-voice:",e.message)));
+        return cors({status:"started",job_id});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-        record = save_topic(
-            topic_str,
-            result.get("source_headline", ""),
-            council_score,
-            script_pkg,
-            fact_pkg
-        )
-        if record:
-            saved.append(record)
-        time.sleep(0.5)
+    if (url.pathname === "/publish-job" && request.method === "POST") {
+      try {
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs = await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,video_r2_url,script_package,cluster");
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const job = jobs[0];
+        if (!job.video_r2_url) return cors({error:"No video file"},400);
+        const mixerUrl = env.MIXER_URL||"";
+        if (!mixerUrl) return cors({error:"MIXER_URL not configured"},500);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const raw=job.video_r2_url||"";
+        const videoUrl=raw.startsWith("http")?raw:r2Base+"/"+raw;
+        const title=(job.script_package&&job.script_package.title)||job.topic;
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"upload",updated_at:new Date().toISOString()});
+        const r=await fetch(mixerUrl,{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({job_id,video_url:videoUrl,voice_url:null,music_track:null,publish_at:null,upload_only:true,title})});
+        if (!r.ok) throw new Error("Mixer returned "+r.status);
+        return cors({status:"publishing",job_id});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    print(f"\nREPLENISHMENT COMPLETE: {len(saved)} fact-anchored topics saved")
-    return saved
-
-
-# ==========================================
-# FLASK ROUTES
-# ==========================================
-
-@app.route("/health")
-def health():
-    depth = get_queue_depth()
-    return jsonify({
-        "status":       "topic-council-worker v2.0 running",
-        "version":      "2.0-real-news",
-        "queue_depth":  depth,
-        "needs_refill": depth < 5,
-        "sources":      ["google_news_rss", "pib_gov_in"]
-    })
-
-
-@app.route("/queue-status")
-def queue_status():
-    try:
-        rows = sb_get(
-            "topics?used=eq.false&order=council_score.desc"
-            "&select=id,topic,council_score,source"
-        )
-        return jsonify({
-            "approved_topics": len(rows),
-            "topics":          rows[:10]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/replenish", methods=["POST"])
-def replenish():
-    data   = request.json or {}
-    target = data.get("target", 12)
-
-    depth = get_queue_depth()
-    print(f"REPLENISH called. Queue: {depth} | Target: {target}")
-
-    if depth >= target:
-        return jsonify({
-            "status":  "queue_sufficient",
-            "message": f"Already have {depth} topics",
-            "depth":   depth
-        })
-
-    needed = max(target - depth, 5)
-    saved  = run_replenishment(target=needed)
-
-    return jsonify({
-        "status":      "replenished",
-        "added":       len(saved),
-        "queue_depth": get_queue_depth(),
-        "topics":      [s.get("topic", "") for s in saved if s]
-    })
-
-
-@app.route("/full-pipeline", methods=["POST"])
-def full_pipeline():
-    """Called by Cloudflare worker for on-demand topic evaluation."""
-    data   = request.json or {}
-    topic  = data.get("topic", "Future of AI in India")
-    source = data.get("source", "manual")
-
-    # For manual topics, try to find a real headline first
-    headlines = fetch_google_news(f"{topic} India", max_items=5)
-
-    if headlines:
-        raw_topics = extract_topics_from_headlines(headlines)
-        # Find closest match or use the first one
-        topic_data = next(
-            (t for t in raw_topics
-             if topic.lower()[:20] in t.get("topic","").lower()),
-            raw_topics[0] if raw_topics else None
-        )
-    else:
-        topic_data = None
-
-    if not topic_data:
-        # No real headline found — evaluate as-is with lower factual score
-        topic_data = {
-            "topic":           topic,
-            "source_headline": "",
-            "source_name":     "manual",
-            "key_fact":        "",
-            "story_angle":     "manually submitted topic",
-            "category":        "AI_Future"
+    if (url.pathname === "/reject-job" && request.method === "POST") {
+      try {
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs = await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,cluster,council_score,script_package");
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const job=jobs[0];
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"failed",error:"Rejected in review",updated_at:new Date().toISOString()});
+        if (job.topic) {
+          try {
+            const ex=await sbGet(env,"topics?topic=eq."+encodeURIComponent(job.topic)+"&select=id,used");
+            if (ex.length>0) { await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null}); }
+            else { await sbInsert(env,"topics",{topic:job.topic,cluster:job.cluster||"AI",council_score:job.council_score||75,script_package:job.script_package||null,used:false,source:"restored_from_review",created_at:new Date().toISOString()}); }
+          } catch(e) {}
         }
+        return cors({status:"rejected",job_id,topic_restored:true});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    perf_context = get_performance_context()
-    result       = council_evaluate(topic_data, perf_context)
+    if (url.pathname === "/upload-image" && request.method === "POST") {
+      try {
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const topic=url.searchParams.get("topic")||"uploaded";
+        const filename=url.searchParams.get("filename")||("img_"+Date.now()+".png");
+        const topicSlug=topic.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40);
+        const key="images/"+topicSlug+"/"+filename;
+        const blob=await request.arrayBuffer();
+        await env.R2.put(key,blob,{httpMetadata:{contentType:request.headers.get("content-type")||"image/png"}});
+        const publicUrl=r2Base+"/"+key;
+        await sbInsert(env,"image_cache",{topic,r2_key:key,public_url:publicUrl,scene_idx:0,created_at:new Date().toISOString()}).catch(()=>{});
+        return cors({status:"uploaded",key,url:publicUrl});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    if result["approved"]:
-        script_pkg = architect_script(result["topic"], result)
-        result["script"] = script_pkg
+    if (url.pathname === "/image-library") {
+      try {
+        if (!env.R2) return cors({error:"R2 not bound",images:[]});
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const listed=await env.R2.list({prefix:"images/",limit:500});
+        const images=(listed.objects||[]).filter(o=>o.key.match(/\.(png|jpg|jpeg)$/i)).sort((a,b)=>new Date(b.uploaded)-new Date(a.uploaded)).map(o=>({
+          key:o.key,url:r2Base+"/"+o.key,size:o.size,uploaded:o.uploaded,
+          topic:o.key.split("/")[1]?.replace(/-/g," ")||"unknown",
+          scene_idx:parseInt((o.key.split("_").pop()||"0").replace(/\D/g,""))||0,
+        }));
+        return cors({images,total:images.length});
+      } catch(e) {
+        try {
+          const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+          const rows=await sbGet(env,"image_cache?order=created_at.desc&limit=200&select=*");
+          return cors({images:rows.map(r=>({key:r.r2_key,url:r.public_url||(r2Base+"/"+r.r2_key),topic:r.topic,scene_idx:r.scene_idx||0,uploaded:r.created_at})),source:"supabase"});
+        } catch(e2) { return cors({error:e2.message,images:[]}); }
+      }
+    }
 
-        if source == "manual":
-            save_topic(
-                result["topic"],
-                topic_data.get("source_headline", ""),
-                result["council_score"],
-                script_pkg,
-                result.get("fact_package", {"found": False})
-            )
+    if (url.pathname === "/run-with-images" && request.method === "POST") {
+      try {
+        const body=await request.json().catch(()=>({}));
+        if (!body.image_urls||body.image_urls.length<3) return cors({error:"Need 3 image URLs"},400);
+        const t=await pickTopic(env,body.category||null);
+        const job=await createJob(t,env);
+        ctx.waitUntil(triggerRender(job,env,body.image_urls));
+        return cors({status:"job_created",job_id:job.id,topic:t.topic});
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
-    return jsonify({
-        "status":     "approved" if result["approved"] else "rejected",
-        "topic":      result["topic"],
-        "evaluation": result.get("evaluation", {}),
-        "script":     result.get("script"),
-        "fact_found": result.get("fact_package", {}).get("found", False),
-        "source":     source
-    })
+    if (url.pathname === "/generate-topic" && request.method === "POST") {
+      try {
+        const body=await request.json().catch(()=>({}));
+        return cors(await callCouncil(env,body.topic||"Future of AI in India","manual",body.category));
+      } catch(e) { return cors({error:e.message},500); }
+    }
 
+    if (url.pathname === "/replenish" && request.method === "POST") {
+      const body=await request.json().catch(()=>({}));
+      ctx.waitUntil(triggerReplenish(env,body.target||12,body.categories||null));
+      return cors({status:"replenish_triggered",categories:body.categories,target:body.target||12});
+    }
 
-@app.route("/")
-def home():
-    return jsonify({"status": "topic-council-worker v2.0 running"})
+    if (url.pathname === "/publish-state") {
+      if (request.method==="GET") { try { const r=await sbGet(env,"system_state?id=eq.main&select=publish"); return cors({publish:r[0]?.publish===true}); } catch(e){return cors({publish:false});} }
+      if (request.method==="POST") { try { const {publish}=await request.json(); await upsertState(env,{publish:!!publish}); return cors({publish:!!publish}); } catch(e){return cors({error:e.message},500);} }
+    }
 
+    if (url.pathname === "/voice-mode") {
+      if (request.method==="GET") { try { const r=await sbGet(env,"system_state?id=eq.main&select=voice_mode"); return cors({voice_mode:r[0]?.voice_mode||"ai"}); } catch(e){return cors({voice_mode:"ai"});} }
+      if (request.method==="POST") { try { const {voice_mode}=await request.json(); const m=["ai","human"].includes(voice_mode)?voice_mode:"ai"; await upsertState(env,{voice_mode:m}); return cors({voice_mode:m}); } catch(e){return cors({error:e.message},500);} }
+    }
 
-if __name__ == "__main__":
-    import sys
+    if (url.pathname === "/set-schedule" && request.method === "POST") {
+      try { const {videos_per_day}=await request.json(); const vpd=Math.min(3,Math.max(1,parseInt(videos_per_day)||1)); await upsertState(env,{videos_per_day:vpd}); return cors({videos_per_day:vpd}); }
+      catch(e){return cors({error:e.message},500);}
+    }
+    if (url.pathname === "/get-schedule") {
+      try { const r=await sbGet(env,"system_state?id=eq.main&select=videos_per_day"); return cors({videos_per_day:r[0]?.videos_per_day||1}); }
+      catch(e){return cors({videos_per_day:1});}
+    }
 
-    if len(sys.argv) > 1 and sys.argv[1] == "replenish":
-        target  = int(sys.argv[2]) if len(sys.argv) > 2 else 12
-        results = run_replenishment(target=target)
-        print(f"\nDone: {len(results)} topics added")
-    else:
-        port = int(os.environ.get("PORT", 10001))
-        app.run(host="0.0.0.0", port=port, threaded=True)
+    if (url.pathname === "/kill-incomplete" && request.method === "POST") {
+      try {
+        const stuck=await sbGet(env,"jobs?status=in.(pending,processing,images,voice,render,upload)&select=id,topic,cluster");
+        let restored=0;
+        for (const j of stuck) {
+          await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"manually_killed",updated_at:new Date().toISOString()});
+          if (j.topic) { try { const ex=await sbGet(env,"topics?topic=eq."+encodeURIComponent(j.topic)+"&select=id,used"); if(ex.length>0&&ex[0].used){await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null});restored++;} } catch(e){} }
+        }
+        return cors({killed:stuck.length,topics_restored:restored});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/restore-failed" && request.method === "POST") {
+      try {
+        const failed=await sbGet(env,"jobs?status=eq.failed&select=id,topic,council_score,script_package,cluster");
+        let restored=0,already=0;
+        for (const j of failed) {
+          if (!j.topic) continue;
+          try {
+            const ex=await sbGet(env,"topics?topic=eq."+encodeURIComponent(j.topic)+"&select=id,used");
+            if (ex.length>0) { if(ex[0].used){await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null});restored++;}else{already++;} }
+            else { await sbInsert(env,"topics",{cluster:j.cluster||"AI",topic:j.topic,used:false,council_score:j.council_score||75,script_package:j.script_package||null,source:"restored_from_failed",created_at:new Date().toISOString()});restored++; }
+          } catch(e) {}
+        }
+        return cors({restored,already_in_queue:already,total_failed:failed.length});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/test-render") {
+      const healthUrl=env.MODAL_HEALTH_URL||"NOT_SET";
+      try { const r=await fetch(healthUrl,{signal:AbortSignal.timeout(15000)}); const t=await r.text(); return cors({url:healthUrl,status:r.status,response:t.slice(0,400),ok:r.ok}); }
+      catch(e){return cors({url:healthUrl,error:e.message,ok:false});}
+    }
+
+    if (url.pathname === "/webhook" && request.method === "POST") {
+      try {
+        const data=await request.json();
+        const {job_id,status,youtube_id,error,script}=data;
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const u={status:status||"unknown",updated_at:new Date().toISOString()};
+        if (youtube_id) u.youtube_id=youtube_id;
+        if (error) u.error=error;
+        if (script) u.script_package={text:script};
+        await sbPatch(env,"jobs?id=eq."+job_id,u);
+        if (status==="complete"&&youtube_id&&youtube_id!=="TEST_MODE") ctx.waitUntil(createAnalyticsRecord(job_id,youtube_id,env));
+        return cors({received:true,job_id,status});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/sync-analytics" && request.method === "POST") { ctx.waitUntil(syncYouTubeAnalytics(env)); return cors({status:"sync_started"}); }
+
+    if (url.pathname === "/staging") {
+      try {
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const staged=await sbGet(env,"jobs?status=eq.staged&order=created_at.asc&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score");
+        return cors(staged.map(j=>{ const raw=j.video_r2_url||""; const v=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null); return {...j,video_public_url:v}; }));
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/cbdp") {
+      try { return cors(await sbGet(env,"jobs?status=eq.cbdp&order=created_at.desc&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score,error")); }
+      catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/retry-upload" && request.method === "POST") {
+      try {
+        const {job_id}=await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const retryUrl=env.RETRY_UPLOAD_URL||"";
+        if (!retryUrl) return cors({error:"RETRY_UPLOAD_URL not set"},500);
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"upload",error:null,updated_at:new Date().toISOString()});
+        ctx.waitUntil(fetch(retryUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({job_id})}).catch(e=>console.error("retry:",e.message)));
+        return cors({status:"retry_triggered",job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/upload-voice" && request.method === "POST") {
+      try {
+        const jobId=url.searchParams.get("job_id");
+        if (!jobId) return cors({error:"Missing job_id"},400);
+        const blob=await request.arrayBuffer();
+        const r2Key="voices/"+jobId+"/voice.webm";
+        if (env.R2) await env.R2.put(r2Key,blob,{httpMetadata:{contentType:"audio/webm"}});
+        await sbPatch(env,"jobs?id=eq."+jobId,{voice_r2_url:r2Key,updated_at:new Date().toISOString()});
+        return cors({status:"uploaded",r2_key:r2Key,job_id:jobId});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/music-library") {
+      return cors({tracks:[
+        {id:"epic_01",label:"Epic Rise",category:"Epic",duration:45},
+        {id:"hopeful_01",label:"Hopeful Morning",category:"Hopeful",duration:52},
+        {id:"tech_01",label:"Digital Pulse",category:"Tech",duration:38},
+        {id:"emotional_01",label:"Stirring Moment",category:"Emotional",duration:60},
+        {id:"neutral_01",label:"Subtle Background",category:"Neutral",duration:44},
+      ]});
+    }
+
+    if (url.pathname === "/mix" && request.method === "POST") {
+      try {
+        const body=await request.json();
+        const {job_id,music_track,music_volume,publish_at,voice_offset_ms}=body;
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs=await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,video_r2_url,voice_r2_url");
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const job=jobs[0];
+        if (!job.voice_r2_url) return cors({error:"No voice recording"},400);
+        const mixerUrl=env.MIXER_URL||"";
+        if (!mixerUrl) return cors({error:"MIXER_URL not set"},500);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const toUrl=v=>!v?null:v.startsWith("http")?v:r2Base+"/"+v;
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"mixing",updated_at:new Date().toISOString()});
+        const r=await fetch(mixerUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({job_id,video_url:toUrl(job.video_r2_url),voice_url:toUrl(job.voice_r2_url),music_track:music_track||"neutral_01",music_volume:music_volume||0.08,publish_at:publish_at||null,voice_offset_ms:voice_offset_ms||0})});
+        if (!r.ok) throw new Error("Mixer returned "+r.status);
+        return cors({status:"mixing_started",job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/mark-cbdp" && request.method === "POST") {
+      try {
+        const failed=await sbGet(env,"jobs?status=eq.failed&select=id,error,script_package");
+        const kw=["400","401","403","youtube","upload","quota","invaliddescription","bad request"];
+        let marked=0;
+        for (const j of failed) { if (kw.some(k=>(j.error||"").toLowerCase().includes(k))&&j.script_package) { await sbPatch(env,"jobs?id=eq."+j.id,{status:"cbdp",updated_at:new Date().toISOString()}); marked++; } }
+        return cors({marked,total_failed:failed.length});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/calendar") {
+      try { return cors(await sbGet(env,"jobs?status=in.(staged,mixing,complete)&order=scheduled_at.asc.nullslast,created_at.desc&select=id,topic,cluster,status,youtube_id,scheduled_at,created_at")); }
+      catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/service-health") {
+      try {
+        const results={};
+        try { const r=await fetch(env.MODAL_HEALTH_URL||"",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.modal={ok:r.ok,version:d.version||"?"}; } catch(e){results.modal={ok:false,error:e.message};}
+        try { const r=await fetch((env.TOPIC_COUNCIL_URL||"")+"/health",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.topic_council={ok:r.ok,queue_depth:d.queue_depth||0}; } catch(e){results.topic_council={ok:false,error:e.message};}
+        try { const t=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=cluster"); results.topics_ready=t.length; results.space_ready=t.filter(x=>x.cluster==="Space").length; } catch(e){}
+        try { const j=await sbGet(env,"jobs?order=created_at.desc&limit=100&select=status,created_at"); const today=new Date(); today.setHours(0,0,0,0); const tj=j.filter(x=>new Date(x.created_at)>=today); results.jobs_today=tj.length; results.running=j.filter(x=>["pending","processing","images","voice","render","upload"].includes(x.status)).length; results.complete_today=tj.filter(x=>x.status==="complete").length; } catch(e){}
+        results.time=new Date().toISOString();
+        return cors(results);
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/create-manual-job" && request.method === "POST") {
+      try {
+        const {topic,script,cluster}=await request.json().catch(()=>({}));
+        if (!topic||!script) return cors({error:"Missing topic or script"},400);
+        const words=script.trim().split(/\s+/).filter(Boolean);
+        if (words.length>70) return cors({error:"Script too long: "+words.length+" words (max 65)"},400);
+        const safeCluster=(cluster&&ALL_CATS.includes(cluster))?cluster:"AI";
+        const job=await sbInsert(env,"jobs",{topic:topic.trim().slice(0,200),cluster:safeCluster,status:"manual_pending",script_package:{text:script.trim(),source:"manual",word_count:words.length,generated_at:new Date().toISOString()},council_score:75,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});
+        return cors({status:"created",job_id:job.id,topic:job.topic,word_count:words.length});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/upload-manual-video" && request.method === "POST") {
+      try {
+        const jobId=url.searchParams.get("job_id");
+        if (!jobId) return cors({error:"Missing job_id"},400);
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const blob=await request.arrayBuffer();
+        if (blob.byteLength<10000) return cors({error:"File too small"},400);
+        const r2Key="manual/"+jobId+"/video.mp4";
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        await env.R2.put(r2Key,blob,{httpMetadata:{contentType:"video/mp4"}});
+        const publicUrl=r2Base+"/"+r2Key;
+        await sbPatch(env,"jobs?id=eq."+jobId,{video_r2_url:publicUrl,status:"staged",updated_at:new Date().toISOString()});
+        return cors({status:"uploaded",r2_key:r2Key,url:publicUrl,job_id:jobId,size_kb:Math.round(blob.byteLength/1024)});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/manual-jobs") {
+      try {
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const fields="id,topic,cluster,status,script_package,video_r2_url,created_at,updated_at,youtube_id";
+        const [p,s,a,c,f]=await Promise.all([
+          sbGet(env,"jobs?status=eq.manual_pending&order=created_at.desc&limit=30&select="+fields),
+          sbGet(env,"jobs?status=eq.staged&order=created_at.desc&limit=30&select="+fields),
+          sbGet(env,"jobs?status=in.(voice,upload,mixing)&order=created_at.desc&limit=20&select="+fields),
+          sbGet(env,"jobs?status=eq.complete&order=created_at.desc&limit=20&select="+fields),
+          sbGet(env,"jobs?status=eq.failed&order=created_at.desc&limit=10&select="+fields),
+        ]);
+        const all=[...p,...s,...a,...c,...f].filter(j=>j.script_package&&j.script_package.source==="manual");
+        const seen=new Set();
+        return cors(all.filter(j=>{if(seen.has(j.id))return false;seen.add(j.id);return true;}).map(j=>{
+          const raw=j.video_r2_url||""; const v=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null);
+          return {...j,video_public_url:v,has_video:!!v};
+        }));
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // LONG-FORM ROUTES
+    // ══════════════════════════════════════════════════════════
+
+    if (url.pathname === "/longform/create" && request.method === "POST") {
+      try {
+        const {topic,cluster,target_duration}=await request.json().catch(()=>({}));
+        if (!topic) return cors({error:"Missing topic"},400);
+        const safeCluster=(cluster&&ALL_CATS.includes(cluster))?cluster:"Space";
+        const durSecs=Math.min(720,Math.max(180,(parseInt(target_duration)||420)));
+        const job=await sbInsert(env,"longform_jobs",{
+          topic:topic.trim().slice(0,300),cluster:safeCluster,
+          status:"scripting",target_duration:durSecs,
+          created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
+        });
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-script",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs})}).catch(e=>console.error("lf script:",e.message)));
+        return cors({status:"created",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/jobs") {
+      try { return cors(await sbGet(env,"longform_jobs?order=created_at.desc&limit=30")); }
+      catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname.match(/^\/longform\/[a-f0-9-]{36}$/) && request.method === "GET") {
+      try {
+        const jobId=url.pathname.split("/longform/")[1];
+        const [jobs,segments]=await Promise.all([
+          sbGet(env,"longform_jobs?id=eq."+jobId),
+          sbGet(env,"longform_segments?job_id=eq."+jobId+"&order=segment_idx.asc"),
+        ]);
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const enrichedSegs=segments.map(s=>({
+          ...s,
+          media:(s.media||[]).map(m=>({...m,public_url:m.r2_url?(m.r2_url.startsWith("http")?m.r2_url:r2Base+"/"+m.r2_url):null})),
+          voice_public_url:s.voice_r2_url?(s.voice_r2_url.startsWith("http")?s.voice_r2_url:r2Base+"/"+s.voice_r2_url):null,
+        }));
+        return cors({...jobs[0],segments:enrichedSegs});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/script" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx,script}=await request.json();
+        if (!job_id||segment_idx==null||!script) return cors({error:"Missing fields"},400);
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{script,updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,job_id);
+        return cors({status:"updated",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/upload-media" && request.method === "POST") {
+      try {
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const jobId=url.searchParams.get("job_id");
+        const segIdx=url.searchParams.get("segment_idx");
+        const mediaIdx=url.searchParams.get("media_idx")||"0";
+        const mediaType=url.searchParams.get("media_type")||"image";
+        if (!jobId||segIdx==null) return cors({error:"Missing job_id or segment_idx"},400);
+        const ext=mediaType==="video"?"mp4":"png";
+        const r2Key="longform/"+jobId+"/seg"+segIdx+"_media"+mediaIdx+"."+ext;
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const blob=await request.arrayBuffer();
+        const ct=request.headers.get("content-type")||(mediaType==="video"?"video/mp4":"image/png");
+        await env.R2.put(r2Key,blob,{httpMetadata:{contentType:ct}});
+        const publicUrl=r2Base+"/"+r2Key;
+        const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx+"&select=id,media,script");
+        if (!segs.length) return cors({error:"Segment not found"},404);
+        const media=segs[0].media||[];
+        const idx=parseInt(mediaIdx);
+        while (media.length<=idx) media.push(null);
+        media[idx]={type:mediaType,r2_url:r2Key,public_url:publicUrl,order:idx};
+        const filtered=media.filter(Boolean);
+        const newStatus=filtered.length>0?(segs[0].script?"has_media":"has_media_no_script"):segs[0].status;
+        await sbPatch(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx,{media:filtered,status:newStatus,updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,jobId);
+        return cors({status:"uploaded",r2_key:r2Key,public_url:publicUrl,segment_idx:parseInt(segIdx),media_idx:idx,type:mediaType});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/upload-voice" && request.method === "POST") {
+      try {
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const jobId=url.searchParams.get("job_id");
+        const segIdx=url.searchParams.get("segment_idx");
+        if (!jobId||segIdx==null) return cors({error:"Missing job_id or segment_idx"},400);
+        const r2Key="longform/"+jobId+"/seg"+segIdx+"_voice.webm";
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const blob=await request.arrayBuffer();
+        await env.R2.put(r2Key,blob,{httpMetadata:{contentType:"audio/webm"}});
+        const publicUrl=r2Base+"/"+r2Key;
+        await sbPatch(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx,{voice_r2_url:r2Key,voice_source:"human",status:"ready",updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,jobId);
+        return cors({status:"uploaded",r2_key:r2Key,public_url:publicUrl,segment_idx:parseInt(segIdx)});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/generate-voice" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx}=await request.json();
+        if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
+        const segs=await sbGet(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx+"&select=id,script");
+        if (!segs.length) return cors({error:"Segment not found"},404);
+        if (!segs[0].script) return cors({error:"No script for this segment"},400);
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_voice",updated_at:new Date().toISOString()});
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-voice",job_id,segment_idx})}).catch(e=>console.error("seg voice:",e.message)));
+        return cors({status:"generating",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/generate-images" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx}=await request.json();
+        if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_images",updated_at:new Date().toISOString()});
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-images",job_id,segment_idx})}).catch(e=>console.error("seg img:",e.message)));
+        return cors({status:"generating",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/render" && request.method === "POST") {
+      try {
+        const {job_id,publish_at}=await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const segments=await sbGet(env,"longform_segments?job_id=eq."+job_id+"&select=segment_idx,status");
+        const notReady=segments.filter(s=>s.status!=="ready");
+        if (notReady.length>0) return cors({error:"Not all segments ready",not_ready:notReady.map(s=>s.segment_idx)},400);
+        await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"rendering",updated_at:new Date().toISOString()});
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (!lfUrl) return cors({error:"LONGFORM_PIPELINE_URL not set"},500);
+        ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"render-full",job_id,publish_at:publish_at||null})}).catch(e=>console.error("lf render:",e.message)));
+        return cors({status:"rendering",job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/webhook" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx,event,payload}=await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        if (event==="segment_voice_ready"&&segment_idx!=null) { await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{voice_r2_url:payload.voice_r2_url,voice_source:"ai",status:"ready",updated_at:new Date().toISOString()}); await _updateLongformStatus(env,job_id); }
+        if (event==="segment_images_ready"&&segment_idx!=null) { await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{media:payload.media,status:"has_media",updated_at:new Date().toISOString()}); await _updateLongformStatus(env,job_id); }
+        if (event==="render_complete") { await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"complete",youtube_id:payload.youtube_id||null,video_r2_url:payload.video_r2_url||null,updated_at:new Date().toISOString()}); }
+        if (event==="render_failed") { await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"failed",error:payload.error||"render failed",updated_at:new Date().toISOString()}); }
+        if (event==="script_ready") {
+          for (const seg of (payload.segments||[])) {
+            await sbInsert(env,"longform_segments",{job_id,segment_idx:seg.segment_idx,segment_type:seg.type,script:seg.script,duration_target:seg.duration_target,image_prompts:seg.image_prompts||[],media:[],voice_r2_url:null,voice_source:null,status:"has_script",created_at:new Date().toISOString()}).catch(()=>{});
+          }
+          await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"media_collecting",updated_at:new Date().toISOString()});
+        }
+        return cors({received:true});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    return cors({error:"route_not_found"},404);
+  },
+
+  async scheduled(event, env, ctx) {
+    const cron=event.cron;
+    if (cron==="* * * * *") {
+      await processQueue(env,ctx);
+      if (env.MODAL_HEALTH_URL) fetch(env.MODAL_HEALTH_URL).catch(()=>{});
+      if (env.TOPIC_COUNCIL_URL) fetch(env.TOPIC_COUNCIL_URL+"/health").catch(()=>{});
+    }
+    if (cron==="30 0,6,12 * * *") {
+      try {
+        const rows=await sbGet(env,"system_state?id=eq.main&select=videos_per_day,last_cluster");
+        const vpd=rows[0]?.videos_per_day||1; const last=rows[0]?.last_cluster||"";
+        const utcH=new Date().getUTCHours();
+        const fire=vpd===3||(vpd===2&&(utcH===0||utcH===12))||(vpd===1&&utcH===6);
+        if (fire) {
+          const t=await pickTopic(env,null,last);
+          const j=await createJob(t,env);
+          await upsertState(env,{last_cluster:t.category});
+          ctx.waitUntil(triggerRender(j,env));
+          console.log("Scheduled:",j.id,t.topic,t.category);
+        }
+      } catch(e){console.error("Scheduled:",e.message);}
+    }
+    if (cron==="30 20 * * *") {
+      ctx.waitUntil(syncYouTubeAnalytics(env));
+      try { const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id"); if(av.length<5)ctx.waitUntil(triggerReplenish(env,12,null)); } catch(e){}
+    }
+  }
+};
+
+// ── HELPERS ───────────────────────────────────────────────────
+const CATEGORIES={AI:{label:"AI & ML",color:"#00e5ff",emoji:"\uD83E\uDD16"},Space:{label:"Space & Defence",color:"#b388ff",emoji:"\uD83D\uDE80"},Gadgets:{label:"Gadgets & Tech",color:"#ffd740",emoji:"\uD83D\uDCF1"},DeepTech:{label:"Deep Tech",color:"#ff6b35",emoji:"\uD83D\uDD2C"},GreenTech:{label:"Green & Energy",color:"#00e676",emoji:"\u26A1"},Startups:{label:"Startups",color:"#ff6b9d",emoji:"\uD83D\uDCA1"}};
+const ALL_CATS=Object.keys(CATEGORIES);
+function sbh(env){return{apikey:env.SUPABASE_ANON_KEY,Authorization:"Bearer "+(env.SUPABASE_SERVICE_ROLE_KEY||env.SUPABASE_ANON_KEY),"Content-Type":"application/json"};}
+async function sbGet(env,ep){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{headers:sbh(env)});if(!r.ok)throw new Error("GET "+r.status+" "+ep);return r.json();}
+async function sbInsert(env,table,data){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+table,{method:"POST",headers:{...sbh(env),Prefer:"return=representation"},body:JSON.stringify(data)});if(!r.ok){const b=await r.text();throw new Error("INSERT "+r.status+" "+b.slice(0,200));}return(await r.json())[0];}
+async function sbPatch(env,ep,data){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{method:"PATCH",headers:{...sbh(env),Prefer:"return=minimal"},body:JSON.stringify(data)});return r.ok;}
+async function upsertState(env,data){try{const rows=await sbGet(env,"system_state?id=eq.main&select=id");if(rows.length>0){await sbPatch(env,"system_state?id=eq.main",{...data,updated_at:new Date().toISOString()});}else{await sbInsert(env,"system_state",{id:"main",...data});}}catch(e){console.error("upsertState:",e.message);}}
+function cors(data,status){return new Response(JSON.stringify(data,null,2),{status:status||200,headers:{"content-type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"*","Access-Control-Allow-Methods":"GET,POST,OPTIONS,PATCH"}});}
+
+// ── PRIORITY A TOPIC SELECTION ────────────────────────────────
+async function pickTopic(env, preferCategory, lastCluster) {
+  let priorityA=false;
+  try{const rows=await sbGet(env,"system_state?id=eq.main&select=priority_a");priorityA=rows[0]?.priority_a===true;}catch(e){}
+  if (preferCategory&&ALL_CATS.includes(preferCategory)) { const t=await _fetchBestTopic(env,preferCategory); if(t)return t; }
+  // Priority A: Space first — but skip if last job was also Space (avoid channel being 100% Space)
+  if (priorityA&&lastCluster!=="Space") {
+    const spaceTopics=await sbGet(env,"topics?used=eq.false&council_score=gte.70&cluster=eq.Space&order=council_score.desc&limit=1");
+    if (spaceTopics.length>0) {
+      const t=spaceTopics[0];
+      await sbPatch(env,"topics?id=eq."+t.id,{used:true,used_at:new Date().toISOString()});
+      console.log("Priority A → Space:",t.topic);
+      return {topic:t.topic,script_package:t.script_package,council_score:t.council_score,category:"Space",source:"priority_a"};
+    }
+  }
+  const best=await _fetchBestTopic(env,null);
+  if (best) return best;
+  const pool=["India AI healthcare revolution","ISRO next space mission","India EV revolution","AI chips made in India","India solar energy breakthrough"];
+  return {topic:pool[Math.floor(Math.random()*pool.length)],script_package:null,council_score:0,category:"AI",source:"fallback"};
+}
+async function _fetchBestTopic(env,cluster){
+  let ep="topics?used=eq.false&council_score=gte.70&order=council_score.desc&limit=1";
+  if(cluster)ep+="&cluster=eq."+cluster;
+  const t=await sbGet(env,ep);if(!t.length)return null;
+  await sbPatch(env,"topics?id=eq."+t[0].id,{used:true,used_at:new Date().toISOString()});
+  return {topic:t[0].topic,script_package:t[0].script_package,council_score:t[0].council_score,category:t[0].cluster||"AI",source:"db_approved"};
+}
+async function callCouncil(env,topic,source,category){if(!env.TOPIC_COUNCIL_URL)throw new Error("TOPIC_COUNCIL_URL not set");const r=await fetch(env.TOPIC_COUNCIL_URL+"/full-pipeline",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({topic,source,category})});if(!r.ok)throw new Error("Council returned "+r.status);return r.json();}
+async function triggerReplenish(env,target,categories){if(!env.TOPIC_COUNCIL_URL)return;try{await fetch(env.TOPIC_COUNCIL_URL+"/replenish",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({target,categories:categories||ALL_CATS})});}catch(e){console.error("Replenish:",e.message);}}
+async function createJob(t,env){return await sbInsert(env,"jobs",{topic:t.topic,cluster:t.category||"AI",status:"pending",script_package:t.script_package||null,council_score:t.council_score||0,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});}
+async function processQueue(env,ctx){const ago=new Date(Date.now()-15*60000).toISOString();try{for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=lt.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"pending",retries:(j.retries||0)+1,updated_at:new Date().toISOString()});for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=gte.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"max_retries_exceeded",updated_at:new Date().toISOString()});const pending=await sbGet(env,"jobs?status=eq.pending&order=created_at.asc&limit=1");if(!pending.length)return;await sbPatch(env,"jobs?id=eq."+pending[0].id,{status:"processing",started_at:new Date().toISOString(),updated_at:new Date().toISOString()});ctx.waitUntil(triggerRender(pending[0],env));}catch(e){console.error("Queue:",e.message);}}
+async function triggerRender(job,env,image_urls){if(!env.RENDER_PIPELINE_URL){await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:"RENDER_PIPELINE_URL not set",updated_at:new Date().toISOString()});return;}const renderUrl=env.RENDER_PIPELINE_URL.trim().replace(/\/$/,"");try{const body={job_id:job.id,topic:job.topic,script_package:job.script_package,webhook_url:(env.WORKER_URL||"").trim().replace(/\/$/,"")+"/webhook"};if(image_urls&&image_urls.length>=3)body.image_urls=image_urls;const r=await fetch(renderUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});if(!r.ok)throw new Error(r.status+": "+(await r.text()).slice(0,100));}catch(e){console.error("Render trigger:",e.message);await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:e.message,updated_at:new Date().toISOString()});}}
+async function createAnalyticsRecord(job_id,youtube_id,env){try{await sbInsert(env,"analytics",{video_id:job_id,youtube_views:0,youtube_likes:0,comment_count:0,score:0,created_at:new Date().toISOString()});}catch(e){}}
+async function syncYouTubeAnalytics(env){if(!env.YOUTUBE_CLIENT_ID)return;try{const jobs=(await sbGet(env,"jobs?status=eq.complete&youtube_id=not.is.null&order=created_at.desc&limit=50")).filter(j=>j.youtube_id&&j.youtube_id!=="TEST_MODE");if(!jobs.length)return;const tr=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.YOUTUBE_CLIENT_ID,client_secret:env.YOUTUBE_CLIENT_SECRET,refresh_token:env.YOUTUBE_REFRESH_TOKEN,grant_type:"refresh_token"})});if(!tr.ok)return;const token=(await tr.json()).access_token;for(let i=0;i<jobs.length;i+=50){const batch=jobs.slice(i,i+50);const res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+batch.map(j=>j.youtube_id).join(",")+"&access_token="+token);if(!res.ok)continue;for(const item of(await res.json()).items||[]){const s=item.statistics||{};const views=parseInt(s.viewCount||0),likes=parseInt(s.likeCount||0),coms=parseInt(s.commentCount||0),score=views+likes*50+coms*30;const job=batch.find(j=>j.youtube_id===item.id);if(!job)continue;const ex=await sbGet(env,"analytics?video_id=eq."+job.id);if(ex.length>0)await sbPatch(env,"analytics?video_id=eq."+job.id,{youtube_views:views,youtube_likes:likes,comment_count:coms,score,updated_at:new Date().toISOString()});else await sbInsert(env,"analytics",{video_id:job.id,youtube_views:views,youtube_likes:likes,comment_count:coms,score,created_at:new Date().toISOString()});}}}catch(e){console.error("Analytics sync:",e.message);}}
+async function _updateLongformStatus(env,jobId){try{const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&select=status");if(!segs.length)return;const allReady=segs.every(s=>s.status==="ready");const allHaveMedia=segs.every(s=>["has_media","has_media_no_script","ready","generating_voice","generating_images"].includes(s.status));const newStatus=allReady?"ready_to_render":allHaveMedia?"media_collecting":"scripting";await sbPatch(env,"longform_jobs?id=eq."+jobId,{status:newStatus,updated_at:new Date().toISOString()});}catch(e){console.error("_updateLongformStatus:",e.message);}}

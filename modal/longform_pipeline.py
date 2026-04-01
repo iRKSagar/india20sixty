@@ -1,6 +1,5 @@
 import modal
 import os
-import uuid
 import traceback
 import requests
 import subprocess
@@ -9,14 +8,17 @@ from datetime import datetime
 
 # ==========================================
 # MODAL APP — LONGFORM PIPELINE
-# Web endpoints called by api.worker.js.
-# Orchestrates: script → images → voice → render → publish
 #
-# Endpoints:
-#   POST /generate-script         — step 1: create segment scripts
-#   POST /generate-segment-voice  — generate AI voice for one segment
-#   POST /generate-segment-images — generate images for one segment
-#   POST /render-full             — final render + publish
+# ONE web endpoint: /dispatch
+# Action field routes to the right handler.
+# This keeps us under Modal free plan's 8
+# web endpoint limit.
+#
+# api.worker.js sends:
+#   POST /dispatch  { action: "generate-script",         job_id, topic, cluster, target_duration }
+#   POST /dispatch  { action: "generate-segment-voice",  job_id, segment_idx }
+#   POST /dispatch  { action: "generate-segment-images", job_id, segment_idx }
+#   POST /dispatch  { action: "render-full",             job_id, publish_at }
 # ==========================================
 
 app = modal.App("india20sixty-longform")
@@ -28,11 +30,9 @@ image = (
 )
 
 secrets = [modal.Secret.from_name("india20sixty-secrets")]
-
 TMP_DIR = "/tmp/india20sixty-longform"
 
-# Cross-app function references — resolved at runtime via Function.lookup
-# This avoids Modal trying to find .app on imported modules at deploy time.
+# Cross-app function references
 def _lf_script():
     return modal.Function.lookup("india20sixty-longform-scriptwriter", "generate_longform_script")
 
@@ -58,11 +58,9 @@ def _research():
     return modal.Function.lookup("india20sixty-research", "run_research")
 
 
-# ── HELPER ─────────────────────────────────────────────────────
-def _sb(env_key="SUPABASE_URL"):
-    return os.environ[env_key]
+# ── SUPABASE HELPERS ──────────────────────────────────────────
 
-def _sbh():
+def _hdrs():
     return {
         "apikey":        os.environ["SUPABASE_ANON_KEY"],
         "Authorization": f"Bearer {os.environ['SUPABASE_ANON_KEY']}",
@@ -70,30 +68,29 @@ def _sbh():
     }
 
 def sb_get(ep):
-    r = requests.get(f"{_sb()}/rest/v1/{ep}", headers=_sbh(), timeout=10)
+    r = requests.get(f"{os.environ['SUPABASE_URL']}/rest/v1/{ep}", headers=_hdrs(), timeout=10)
     return r.json() if r.ok else []
 
 def sb_patch(ep, data):
-    requests.patch(f"{_sb()}/rest/v1/{ep}", headers={**_sbh(),"Prefer":"return=minimal"},
-                   json=data, timeout=10)
+    requests.patch(f"{os.environ['SUPABASE_URL']}/rest/v1/{ep}",
+                   headers={**_hdrs(), "Prefer": "return=minimal"}, json=data, timeout=10)
 
 def sb_insert(table, data):
-    r = requests.post(f"{_sb()}/rest/v1/{table}",
-                      headers={**_sbh(),"Prefer":"return=representation"},
-                      json=data, timeout=10)
+    r = requests.post(f"{os.environ['SUPABASE_URL']}/rest/v1/{table}",
+                      headers={**_hdrs(), "Prefer": "return=representation"}, json=data, timeout=10)
     if not r.ok: raise Exception(f"INSERT {r.status_code}: {r.text[:200]}")
     return r.json()[0]
 
 def log(job_id, msg):
     print(f"[longform] {msg}")
     try:
-        requests.post(f"{_sb()}/rest/v1/render_logs", headers=_sbh(),
+        requests.post(f"{os.environ['SUPABASE_URL']}/rest/v1/render_logs",
+                      headers=_hdrs(),
                       json={"job_id": job_id, "message": str(msg)[:500]}, timeout=5)
     except Exception:
         pass
 
 def ping_worker(job_id, segment_idx, event, payload):
-    """Send event back to Cloudflare Worker via /longform/webhook."""
     worker_url = os.environ.get("WORKER_URL", "")
     if not worker_url:
         return
@@ -101,7 +98,8 @@ def ping_worker(job_id, segment_idx, event, payload):
         requests.post(
             worker_url.rstrip("/") + "/longform/webhook",
             headers={"Content-Type": "application/json"},
-            json={"job_id": job_id, "segment_idx": segment_idx, "event": event, "payload": payload},
+            json={"job_id": job_id, "segment_idx": segment_idx,
+                  "event": event, "payload": payload},
             timeout=10,
         )
     except Exception as e:
@@ -109,42 +107,63 @@ def ping_worker(job_id, segment_idx, event, payload):
 
 
 # ==========================================
-# ENDPOINT 1: GENERATE SCRIPT
-# Called by Cloudflare when a long-form job is created.
-# Runs research + scriptwriter, creates segment rows.
+# SINGLE DISPATCHER ENDPOINT
+# ==========================================
+
+@app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def dispatch(data: dict):
+    """
+    Single entry point for all longform operations.
+    Spawns the appropriate handler function async.
+    Returns immediately with { status: started }.
+    """
+    action = data.get("action", "")
+    job_id = data.get("job_id", "")
+
+    if not action:
+        return {"status": "error", "message": "Missing action"}
+    if not job_id:
+        return {"status": "error", "message": "Missing job_id"}
+
+    print(f"[dispatch] action={action} job={job_id}")
+
+    if action == "generate-script":
+        _handle_generate_script.spawn(data)
+    elif action == "generate-segment-voice":
+        _handle_segment_voice.spawn(data)
+    elif action == "generate-segment-images":
+        _handle_segment_images.spawn(data)
+    elif action == "render-full":
+        _handle_render_full.spawn(data)
+    else:
+        return {"status": "error", "message": f"Unknown action: {action}"}
+
+    return {"status": "started", "action": action, "job_id": job_id}
+
+
+# ==========================================
+# HANDLER: GENERATE SCRIPT
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=180)
-@modal.fastapi_endpoint(method="POST")
-def generate_script(data: dict):
-    job_id   = data.get("job_id")
+def _handle_generate_script(data: dict):
+    job_id   = data["job_id"]
     topic    = data.get("topic", "Future India")
     cluster  = data.get("cluster", "Space")
     dur_secs = int(data.get("target_duration", 420))
 
-    if not job_id:
-        return {"status": "error", "message": "Missing job_id"}
-
     print(f"\n[LF Generate Script] job={job_id} topic={topic[:60]}")
     sb_patch(f"longform_jobs?id=eq.{job_id}",
              {"status": "scripting", "updated_at": datetime.utcnow().isoformat()})
-
     try:
-        # Research for fact anchor
         fact_package = _research().remote(job_id, topic)
-
-        # Generate structured script
         result = _lf_script().remote(
             job_id=job_id, topic=topic, cluster=cluster,
             target_duration=dur_secs, fact_package=fact_package,
         )
-
-        # Save mood to job
-        sb_patch(f"longform_jobs?id=eq.{job_id}", {
-            "mood": result["mood"], "updated_at": datetime.utcnow().isoformat()
-        })
-
-        # Ping worker to create segment rows
+        sb_patch(f"longform_jobs?id=eq.{job_id}",
+                 {"mood": result["mood"], "updated_at": datetime.utcnow().isoformat()})
         ping_worker(job_id, None, "script_ready", {
             "segments": [{
                 "segment_idx":    s["segment_idx"],
@@ -155,107 +174,84 @@ def generate_script(data: dict):
                 "image_prompts":  s["image_prompts"],
             } for s in result["segments"]],
         })
-
         log(job_id, f"Script done: {len(result['segments'])} segments, mood={result['mood']}")
-        return {"status": "script_ready", "job_id": job_id, "segments": len(result["segments"])}
-
     except Exception as e:
-        msg = str(e)
+        msg = str(e)[:400]
         print(f"  Script failed: {msg}")
         sb_patch(f"longform_jobs?id=eq.{job_id}",
-                 {"status": "failed", "error": msg[:400],
-                  "updated_at": datetime.utcnow().isoformat()})
-        return {"status": "error", "message": msg}
+                 {"status": "failed", "error": msg, "updated_at": datetime.utcnow().isoformat()})
 
 
 # ==========================================
-# ENDPOINT 2: GENERATE SEGMENT AI VOICE
-# Called per segment when AI voice is requested.
+# HANDLER: GENERATE SEGMENT VOICE
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=120)
-@modal.fastapi_endpoint(method="POST")
-def generate_segment_voice(data: dict):
-    job_id      = data.get("job_id")
+def _handle_segment_voice(data: dict):
+    job_id      = data["job_id"]
     segment_idx = data.get("segment_idx")
-
-    if not job_id or segment_idx is None:
-        return {"status": "error", "message": "Missing job_id or segment_idx"}
+    if segment_idx is None:
+        return
 
     print(f"\n[LF Segment Voice] job={job_id} seg={segment_idx}")
-
     try:
-        segs = sb_get(f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}&select=script,duration_target")
+        segs = sb_get(
+            f"longform_segments?job_id=eq.{job_id}"
+            f"&segment_idx=eq.{segment_idx}&select=script,duration_target"
+        )
         if not segs or not segs[0].get("script"):
-            return {"status": "error", "message": "No script for this segment"}
+            print("  No script for this segment")
+            return
 
-        script = segs[0]["script"]
-
-        # Generate voice via voice worker
         voice_result = _voice_gen().remote(
             job_id=f"{job_id}_seg{segment_idx}",
-            reviewed_script=script,
+            reviewed_script=segs[0]["script"],
         )
         audio_path = voice_result["audio_path"]
         audio_dur  = voice_result["duration"]
 
-        # Upload audio to R2
-        r2_key     = f"longform/{job_id}/seg{segment_idx}_voice.mp3"
-        voice_url  = _r2_upload().remote(audio_path, r2_key)
-
+        r2_key    = f"longform/{job_id}/seg{segment_idx}_voice.mp3"
+        voice_url = _r2_upload().remote(audio_path, r2_key)
         try: os.remove(audio_path)
         except Exception: pass
 
-        log(job_id, f"Seg {segment_idx} voice: {audio_dur:.1f}s → {r2_key}")
-
-        # Ping worker
+        log(job_id, f"Seg {segment_idx} voice: {audio_dur:.1f}s")
         ping_worker(job_id, segment_idx, "segment_voice_ready", {
-            "voice_r2_url":  r2_key,
-            "voice_pub_url": voice_url,
-            "duration":      audio_dur,
+            "voice_r2_url": r2_key, "voice_pub_url": voice_url, "duration": audio_dur,
         })
-
-        return {"status": "voice_ready", "job_id": job_id, "segment_idx": segment_idx,
-                "duration": audio_dur, "r2_key": r2_key}
-
     except Exception as e:
         msg = str(e)[:400]
         print(f"  Segment voice failed: {msg}")
-        sb_patch(f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
-                 {"status": "voice_failed", "updated_at": datetime.utcnow().isoformat()})
-        return {"status": "error", "message": msg}
+        sb_patch(
+            f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+            {"status": "voice_failed", "updated_at": datetime.utcnow().isoformat()}
+        )
 
 
 # ==========================================
-# ENDPOINT 3: GENERATE SEGMENT IMAGES
-# Triggers parallel image generation for one segment.
+# HANDLER: GENERATE SEGMENT IMAGES
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=300)
-@modal.fastapi_endpoint(method="POST")
-def generate_segment_images(data: dict):
-    job_id      = data.get("job_id")
+def _handle_segment_images(data: dict):
+    job_id      = data["job_id"]
     segment_idx = data.get("segment_idx")
-
-    if not job_id or segment_idx is None:
-        return {"status": "error", "message": "Missing fields"}
+    if segment_idx is None:
+        return
 
     print(f"\n[LF Segment Images] job={job_id} seg={segment_idx}")
-
     try:
         segs = sb_get(
-            f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}"
-            "&select=script,image_prompts,duration_target"
+            f"longform_segments?job_id=eq.{job_id}"
+            f"&segment_idx=eq.{segment_idx}&select=script,image_prompts"
         )
         if not segs:
-            return {"status": "error", "message": "Segment not found"}
-
-        seg           = segs[0]
-        image_prompts = seg.get("image_prompts") or []
+            return
+        image_prompts = segs[0].get("image_prompts") or []
         if not image_prompts:
-            return {"status": "error", "message": "No image prompts — run script generation first"}
+            print("  No image prompts")
+            return
 
-        # Generate images in parallel
         futures = [
             _image_gen().spawn(
                 prompt=prompt, scene_idx=i,
@@ -265,54 +261,35 @@ def generate_segment_images(data: dict):
         ]
         results = [f.get() for f in futures]
 
-        # Upload successful images to R2
         media = []
         for res in results:
             if res["success"] and res["local_path"]:
-                r2_key    = f"longform/{job_id}/seg{segment_idx}_img{res['scene_idx']}.png"
+                r2_key     = f"longform/{job_id}/seg{segment_idx}_img{res['scene_idx']}.png"
                 public_url = _r2_upload().remote(res["local_path"], r2_key)
-                media.append({
-                    "type":       "image",
-                    "r2_url":     r2_key,
-                    "public_url": public_url,
-                    "order":      res["scene_idx"],
-                })
+                media.append({"type":"image","r2_url":r2_key,"public_url":public_url,"order":res["scene_idx"]})
                 try: os.remove(res["local_path"])
                 except Exception: pass
 
-        log(job_id, f"Seg {segment_idx} images: {len(media)}/{len(image_prompts)} uploaded")
-
-        # Ping worker
+        log(job_id, f"Seg {segment_idx} images: {len(media)}/{len(image_prompts)}")
         ping_worker(job_id, segment_idx, "segment_images_ready", {"media": media})
-
-        return {"status": "images_ready", "job_id": job_id, "segment_idx": segment_idx,
-                "images_count": len(media)}
-
     except Exception as e:
         msg = str(e)[:400]
-        sb_patch(f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
-                 {"status": "image_failed", "updated_at": datetime.utcnow().isoformat()})
-        return {"status": "error", "message": msg}
+        sb_patch(
+            f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+            {"status": "image_failed", "updated_at": datetime.utcnow().isoformat()}
+        )
 
 
 # ==========================================
-# ENDPOINT 4: RENDER FULL VIDEO
-# Called when all segments are ready.
-# Downloads all media + audio, renders, uploads, publishes.
+# HANDLER: RENDER FULL VIDEO
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=4.0, memory=8192, timeout=1800)
-@modal.fastapi_endpoint(method="POST")
-def render_full(data: dict):
-    job_id     = data.get("job_id")
+def _handle_render_full(data: dict):
+    job_id     = data["job_id"]
     publish_at = data.get("publish_at")
-
-    if not job_id:
-        return {"status": "error", "message": "Missing job_id"}
-
-    WORKER_URL  = os.environ.get("WORKER_URL", "")
-    TEST_MODE   = os.environ.get("TEST_MODE", "true").lower() == "true"
-    R2_BASE_URL = os.environ.get("R2_BASE_URL", "").rstrip("/")
+    TEST_MODE  = os.environ.get("TEST_MODE", "true").lower() == "true"
+    R2_BASE    = os.environ.get("R2_BASE_URL", "").rstrip("/")
 
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     print(f"\n[LF Render Full] job={job_id}")
@@ -320,43 +297,35 @@ def render_full(data: dict):
              {"status": "rendering", "updated_at": datetime.utcnow().isoformat()})
 
     try:
-        # Fetch job + segments
         jobs = sb_get(f"longform_jobs?id=eq.{job_id}&select=id,topic,cluster,mood,target_duration")
-        if not jobs:
-            raise Exception("Job not found")
+        if not jobs: raise Exception("Job not found")
         job = jobs[0]
 
         segments_data = sb_get(
             f"longform_segments?job_id=eq.{job_id}&order=segment_idx.asc"
-            "&select=segment_idx,type,label,script,media,voice_r2_url,voice_source,"
+            "&select=segment_idx,type,label,script,media,voice_r2_url,"
             "caption_style,transition_out,duration_target"
         )
-        if not segments_data:
-            raise Exception("No segments found")
+        if not segments_data: raise Exception("No segments found")
 
         mood = job.get("mood", "hopeful_future")
-
-        # Build segments list with downloaded local paths
         render_segments = []
-        for seg in segments_data:
-            seg_idx = seg["segment_idx"]
-            log(job_id, f"Preparing seg {seg_idx}")
 
-            # Download audio
+        for seg in segments_data:
+            seg_idx  = seg["segment_idx"]
             voice_r2 = seg.get("voice_r2_url", "")
             if not voice_r2:
-                raise Exception(f"Segment {seg_idx} has no voice — cannot render")
-            voice_url    = voice_r2 if voice_r2.startswith("http") else f"{R2_BASE_URL}/{voice_r2}"
-            audio_local  = f"{TMP_DIR}/{job_id}_seg{seg_idx}_audio.mp3"
-            _download(voice_url, audio_local)
-            audio_dur    = _get_duration(audio_local)
+                raise Exception(f"Segment {seg_idx} has no voice")
 
-            # Download media (images or video clips)
+            voice_url   = voice_r2 if voice_r2.startswith("http") else f"{R2_BASE}/{voice_r2}"
+            audio_local = f"{TMP_DIR}/{job_id}_seg{seg_idx}_audio.mp3"
+            _download(voice_url, audio_local)
+            audio_dur = _get_duration(audio_local)
+
             media_local = []
             for m in (seg.get("media") or []):
-                url = m.get("public_url") or (f"{R2_BASE_URL}/{m['r2_url']}" if m.get("r2_url") else "")
-                if not url:
-                    continue
+                url = m.get("public_url") or (f"{R2_BASE}/{m['r2_url']}" if m.get("r2_url") else "")
+                if not url: continue
                 ext  = ".mp4" if m.get("type") == "video" else ".png"
                 path = f"{TMP_DIR}/{job_id}_seg{seg_idx}_m{m.get('order',0)}{ext}"
                 _download(url, path)
@@ -374,40 +343,33 @@ def render_full(data: dict):
             })
 
         log(job_id, f"Rendering {len(render_segments)} segments")
-
-        # Render via longform renderer
         final_video = _lf_renderer().remote(
-            job_id=job_id,
-            segments=render_segments,
-            mood=mood,
+            job_id=job_id, segments=render_segments, mood=mood,
         )
-
         log(job_id, f"Rendered: {os.path.getsize(final_video)//1024}KB")
 
         if TEST_MODE:
-            log(job_id, "TEST_MODE — skipping YouTube upload")
+            log(job_id, "TEST_MODE — skipping upload")
             sb_patch(f"longform_jobs?id=eq.{job_id}",
                      {"status": "complete", "updated_at": datetime.utcnow().isoformat()})
             ping_worker(job_id, None, "render_complete",
                         {"youtube_id": "TEST_LONGFORM", "video_r2_url": ""})
-            return {"status": "test_complete", "job_id": job_id}
+            return
 
-        # Upload to YouTube
-        title = _title_gen().remote(
-            job.get("topic","India Future"), "", "Revelation: Nobody Talks About This"
-        )
-        def sanitize_for_youtube(t):
+        title = _title_gen().remote(job.get("topic","India Future"), "")
+
+        def sanitize(t):
             import re
             if not t: return ""
-            for bad,good in [("\u2019","'"),("\u2013","-"),("\u2014","-"),("\u20b9","Rs."),("\u00a0"," ")]:
+            for bad,good in [("\u2019","'"),("\u2013","-"),("\u2014","-"),("\u20b9","Rs.")]:
                 t=t.replace(bad,good)
-            t=re.sub(r"</?(?:excited|happy|sad|whisper|angry)[^>]*>","",t)
             t=re.sub(r"[\U0001F000-\U0001FFFF]","",t)
             t=re.sub(r"[\u0900-\u097F]","",t)
             return t.strip()
+
         full_script = " ".join(s.get("script","") for s in segments_data)
         description = (
-            f"{sanitize_for_youtube(full_script[:3000])}\n\n"
+            f"{sanitize(full_script[:3000])}\n\n"
             "India20Sixty - India's near future, explained in depth.\n\n"
             "#IndiaFuture #FutureTech #India #ISRO #Technology #Documentary"
         )
@@ -417,45 +379,20 @@ def render_full(data: dict):
             publish_at=publish_at,
         )
         log(job_id, f"PUBLISHED: https://youtube.com/watch?v={video_id}")
-
-        sb_patch(f"longform_jobs?id=eq.{job_id}", {
-            "status": "complete", "youtube_id": video_id,
-            "updated_at": datetime.utcnow().isoformat()
-        })
+        sb_patch(f"longform_jobs?id=eq.{job_id}",
+                 {"status":"complete","youtube_id":video_id,"updated_at":datetime.utcnow().isoformat()})
         ping_worker(job_id, None, "render_complete",
                     {"youtube_id": video_id, "video_r2_url": ""})
-
         try: os.remove(final_video)
         except Exception: pass
 
-        return {"status": "complete", "job_id": job_id, "youtube_id": video_id,
-                "url": f"https://youtube.com/watch?v={video_id}"}
-
     except Exception as e:
         msg = str(e)
-        print(f"\nLF RENDER FAILED: {msg}\n{traceback.format_exc()}")
+        print(f"\nRENDER FAILED: {msg}\n{traceback.format_exc()}")
         log(job_id, f"FAILED: {msg[:400]}")
         sb_patch(f"longform_jobs?id=eq.{job_id}",
-                 {"status": "failed", "error": msg[:400],
-                  "updated_at": datetime.utcnow().isoformat()})
+                 {"status":"failed","error":msg[:400],"updated_at":datetime.utcnow().isoformat()})
         ping_worker(job_id, None, "render_failed", {"error": msg[:400]})
-        return {"status": "error", "message": msg}
-
-
-# ==========================================
-# HEALTH
-# ==========================================
-
-@app.function(image=image, secrets=secrets)
-@modal.fastapi_endpoint(method="GET")
-def health():
-    return {
-        "status": "healthy",
-        "service": "india20sixty-longform",
-        "version": "1.0",
-        "endpoints": ["/generate-script", "/generate-segment-voice",
-                      "/generate-segment-images", "/render-full"],
-    }
 
 
 # ==========================================
@@ -466,10 +403,8 @@ def _download(url: str, path: str):
     r = requests.get(url, timeout=120, stream=True)
     r.raise_for_status()
     with open(path, "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
-    print(f"  Downloaded {path}: {os.path.getsize(path)//1024}KB")
-
+        for chunk in r.iter_content(8192): f.write(chunk)
+    print(f"  Downloaded {os.path.basename(path)}: {os.path.getsize(path)//1024}KB")
 
 def _get_duration(path: str) -> float:
     try:
@@ -485,5 +420,5 @@ def _get_duration(path: str) -> float:
 
 @app.local_entrypoint()
 def main():
-    print("longform_pipeline.py health check")
-    print(health.remote())
+    print("longform_pipeline.py — 1 web endpoint: /dispatch")
+    print("Actions: generate-script, generate-segment-voice, generate-segment-images, render-full")
