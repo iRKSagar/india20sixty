@@ -5,7 +5,7 @@
 // ============================================================
 
 var API_BASE = 'https://india20sixty.tommyhillary1.workers.dev';
-var R2_BASE_URL = '';
+var R2_BASE_URL = 'https://pub-e5ed97c9fd6a4c3f80fffa5e84da8fef.r2.dev';
 
 // ── CONSTANTS ─────────────────────────────────────────────────
 var CATS = {
