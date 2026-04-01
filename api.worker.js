@@ -1,1020 +1,783 @@
 // ============================================================
-// India20Sixty — Cloudflare Worker V2
+// India20Sixty — Cloudflare Worker v5.0
+// Priority A: Space/ISRO bias in pickTopic()
+// New: /longform/* routes for long-form video pipeline
+// New: /settings priority_a toggle
+// New: last_cluster tracking to prevent cluster repetition
 // ============================================================
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // ── CORS preflight ────────────────────────────────────────
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin":  "*",
-          "Access-Control-Allow-Headers": "Content-Type,Authorization",
-          "Access-Control-Allow-Methods": "GET,POST,OPTIONS,PATCH,DELETE",
-          "Access-Control-Max-Age":       "86400",
-        }
-      });
+      return new Response(null, { status: 204, headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS,PATCH,DELETE",
+        "Access-Control-Max-Age": "86400",
+      }});
     }
 
-    // ── CONFIG ────────────────────────────────────────────────
     if (url.pathname === "/config") {
       try {
         const rows = await sbGet(env, "system_state?id=eq.main&select=mode,voice_mode,publish");
-        const state = rows[0] || {};
-        return cors({
-          r2_base_url: (env.R2_BASE_URL || "").replace(/\/$/, ""),
-          mode:        state.mode || "auto",
-          version:     "v3.0"
-        });
-      } catch(e) {
-        return cors({
-          r2_base_url: (env.R2_BASE_URL || "").replace(/\/$/, ""),
-          mode: "auto",
-          version: "v3.0"
-        });
-      }
+        const s = rows[0] || {};
+        return cors({ r2_base_url: (env.R2_BASE_URL||"").replace(/\/$/,""), mode: s.mode||"auto", version:"v5.0" });
+      } catch(e) { return cors({ r2_base_url:(env.R2_BASE_URL||"").replace(/\/$/,""), mode:"auto", version:"v5.0" }); }
     }
 
-    // ── SET MODE ──────────────────────────────────────────────
-    if (url.pathname === "/set-mode" && request.method === "POST") {
-      try {
-        const { mode } = await request.json();
-        const validMode = ["auto", "stage"].includes(mode) ? mode : "auto";
-        // In auto mode: publish=true, voice_mode=ai
-        // In stage mode: publish=false (goes to review), voice_mode preserved
-        const updates = { mode: validMode, updated_at: new Date().toISOString() };
-        if (validMode === "auto") {
-          updates.publish   = true;
-          updates.voice_mode = "ai";
-        } else {
-          updates.publish = false;
-        }
-        await upsertState(env, updates);
-        return cors({ mode: validMode });
-      } catch (e) { return cors({ error: e.message }, 500); }
-    }
+    if (url.pathname === "/health") return cors({ status:"ok", version:"v5.0", time:new Date().toISOString() });
 
-    // ── HEALTH ────────────────────────────────────────────────
-    if (url.pathname === "/health") {
-      return cors({ status: "ok", version: "v3.0",
-        time: new Date().toISOString() });
-    }
-
-        // ── DASHBOARD ─────────────────────────────────────────
     if (url.pathname === "/" || url.pathname === "/dashboard") {
-      const dashUrl = (env.DASHBOARD_URL || "").trim();
-      if (!dashUrl) return new Response("DASHBOARD_URL not set", { status: 500 });
+      const dashUrl = (env.DASHBOARD_URL||"").trim();
+      if (!dashUrl) return new Response("DASHBOARD_URL not set",{status:500});
       return Response.redirect(dashUrl, 302);
     }
 
-    // ── JOBS ──────────────────────────────────────────────────
     if (url.pathname === "/jobs") {
-      try { return cors(await sbGet(env, "jobs?order=created_at.desc&limit=50")); }
-      catch (e) { return cors({ error: e.message }, 500); }
+      try { return cors(await sbGet(env,"jobs?order=created_at.desc&limit=50")); }
+      catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── TOPICS ────────────────────────────────────────────────
     if (url.pathname === "/topics") {
-      try { return cors(await sbGet(env, "topics?order=council_score.desc&limit=100")); }
-      catch (e) { return cors({ error: e.message }, 500); }
+      try { return cors(await sbGet(env,"topics?order=council_score.desc&limit=100")); }
+      catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── ANALYTICS ─────────────────────────────────────────────
     if (url.pathname === "/analytics") {
       try {
-        const analytics = await sbGet(env, "analytics?order=score.desc&limit=50");
-        const jobs      = await sbGet(env, "jobs?status=eq.complete&select=id,topic,council_score,youtube_id,cluster,created_at");
-        return cors({ analytics, jobs });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const analytics = await sbGet(env,"analytics?order=score.desc&limit=50");
+        const jobs = await sbGet(env,"jobs?status=eq.complete&select=id,topic,council_score,youtube_id,cluster,created_at");
+        return cors({analytics,jobs});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── RUN VIDEO ─────────────────────────────────────────────
     if (url.pathname === "/run" && request.method === "POST") {
       try {
-        const body  = await request.json().catch(() => ({}));
-        const t     = await pickTopic(env, body.category || null);
-        const job   = await createJob(t, env);
+        const body = await request.json().catch(()=>({}));
+        const t = await pickTopic(env, body.category||null);
+        const job = await createJob(t, env);
+        await upsertState(env, { last_cluster: t.category });
         ctx.waitUntil(triggerRender(job, env));
-        return cors({ status: "job_created", job_id: job.id,
-                      topic: t.topic, category: t.category });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        return cors({ status:"job_created", job_id:job.id, topic:t.topic, category:t.category });
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── RUN SPECIFIC TOPIC ────────────────────────────────────
-    // Called from Topics page "Generate Now" button
     if (url.pathname === "/run-topic" && request.method === "POST") {
       try {
-        const body     = await request.json().catch(() => ({}));
-        const topic_id = body.topic_id;
-        if (!topic_id) return cors({ error: "Missing topic_id" }, 400);
-        // Fetch the specific topic
-        const topics = await sbGet(env, `topics?id=eq.${topic_id}&select=*`);
-        if (!topics.length) return cors({ error: "Topic not found" }, 404);
+        const body = await request.json().catch(()=>({}));
+        if (!body.topic_id) return cors({error:"Missing topic_id"},400);
+        const topics = await sbGet(env,"topics?id=eq."+body.topic_id+"&select=*");
+        if (!topics.length) return cors({error:"Topic not found"},404);
         const t = topics[0];
-        if (t.used) return cors({ error: "Topic already used" }, 400);
-        // Mark used
-        await sbPatch(env, `topics?id=eq.${topic_id}`,
-          { used: true, used_at: new Date().toISOString() });
-        // Create job from this specific topic
-        const job = await sbInsert(env, "jobs", {
-          topic: t.topic, cluster: t.cluster || "AI", status: "pending",
-          script_package: t.script_package || null,
-          council_score: t.council_score || 0,
-          retries: 0,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+        if (t.used) return cors({error:"Topic already used"},400);
+        await sbPatch(env,"topics?id=eq."+body.topic_id,{used:true,used_at:new Date().toISOString()});
+        const job = await sbInsert(env,"jobs",{
+          topic:t.topic, cluster:t.cluster||"AI", status:"pending",
+          script_package:t.script_package||null, council_score:t.council_score||0, retries:0,
+          created_at:new Date().toISOString(), updated_at:new Date().toISOString()
         });
         ctx.waitUntil(triggerRender(job, env));
-        return cors({ status: "job_created", job_id: job.id,
-                      topic: t.topic, category: t.cluster });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        return cors({status:"job_created",job_id:job.id,topic:t.topic,category:t.cluster});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── REVIEW QUEUE ──────────────────────────────────────────
-    // Pulls ALL jobs that are done but not on YouTube:
-    // 1. status=review  — PUBLISH OFF jobs, video saved to R2
-    // 2. status=cbdp    — old: upload failed after render (legacy)
-    // 3. status=failed  — upload failed (YouTube API error) but video exists
+    if (url.pathname === "/set-mode" && request.method === "POST") {
+      try {
+        const {mode} = await request.json();
+        const validMode = ["auto","stage"].includes(mode)?mode:"auto";
+        const updates = {mode:validMode, updated_at:new Date().toISOString()};
+        if (validMode==="auto") { updates.publish=true; updates.voice_mode="ai"; } else { updates.publish=false; }
+        await upsertState(env, updates);
+        return cors({mode:validMode});
+      } catch(e) { return cors({error:e.message},500); }
+    }
+
+    if (url.pathname === "/settings" && request.method === "GET") {
+      try {
+        const rows = await sbGet(env,"system_state?id=eq.main&select=mode,voice_mode,publish,videos_per_day,subscribe_cta,long_form,cross_post,priority_a,image_engine,voice_engine");
+        const s = rows[0]||{};
+        return cors({
+          mode:           s.mode||"auto",
+          voice_mode:     s.voice_mode||"ai",
+          publish:        s.publish===true,
+          videos_per_day: s.videos_per_day||1,
+          subscribe_cta:  s.subscribe_cta===true,
+          long_form:      s.long_form===true,
+          cross_post:     s.cross_post===true,
+          priority_a:     s.priority_a===true,
+          image_engine:   s.image_engine||"inbuilt",
+          voice_engine:   s.voice_engine||"inbuilt",
+        });
+      } catch(e) { return cors({error:e.message},500); }
+    }
+
+    if (url.pathname === "/settings" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const allowed = ["mode","voice_mode","publish","videos_per_day","subscribe_cta","long_form","cross_post","priority_a","image_engine","voice_engine"];
+        const updates = {};
+        for (const k of allowed) { if (k in body) updates[k]=body[k]; }
+        if (!Object.keys(updates).length) return cors({error:"No valid settings"},400);
+        if (updates.mode==="auto") { updates.publish=true; updates.voice_mode="ai"; }
+        await upsertState(env, updates);
+        return cors({status:"updated", updated:Object.keys(updates)});
+      } catch(e) { return cors({error:e.message},500); }
+    }
+
     if (url.pathname === "/review") {
       try {
-        const r2Base = (env.R2_BASE_URL || "").replace(/\/$/, "");
+        const r2Base = (env.R2_BASE_URL||"").replace(/\/$/,"");
         const fields = "id,topic,cluster,script_package,video_r2_url,council_score,updated_at,status,error";
-
-        // Fetch all unfinished jobs that have videos
-        const [reviewRows, cbdpRows, stagedRows] = await Promise.all([
-          sbGet(env, `jobs?status=eq.review&order=updated_at.desc&select=${fields}`),
-          sbGet(env, `jobs?status=eq.cbdp&order=updated_at.desc&select=${fields}`),
-          sbGet(env, `jobs?status=eq.staged&order=updated_at.desc&select=${fields}`),
+        const [rev,cbdp,staged] = await Promise.all([
+          sbGet(env,"jobs?status=eq.review&order=updated_at.desc&select="+fields),
+          sbGet(env,"jobs?status=eq.cbdp&order=updated_at.desc&select="+fields),
+          sbGet(env,"jobs?status=eq.staged&order=updated_at.desc&select="+fields),
         ]);
-
-        // Fetch failed jobs that have a video_r2_url
-        const failedRows = await sbGet(env,
-          `jobs?status=eq.failed&video_r2_url=not.is.null&order=updated_at.desc&limit=20&select=${fields}`
-        ).catch(() => []);
-
-        // Merge and deduplicate by id
+        const failed = await sbGet(env,"jobs?status=eq.failed&video_r2_url=not.is.null&order=updated_at.desc&limit=20&select="+fields).catch(()=>[]);
         const seen = new Set();
-        const all  = [...stagedRows, ...reviewRows, ...cbdpRows, ...failedRows].filter(j => {
-          if (seen.has(j.id)) return false;
-          seen.add(j.id);
-          return true;
-        });
-
-        // Enrich with full public URL
-        const enriched = all.map(j => {
-          const raw = j.video_r2_url || "";
-          // If already a full URL use as-is, otherwise prepend r2Base
-          const videoUrl = raw.startsWith("http")
-            ? raw
-            : (raw && r2Base ? r2Base + "/" + raw : null);
-          const hasVideo = !!videoUrl;
-          const reason = j.status === "staged"
-            ? "Silent video — needs AI voice to publish"
-            : j.status === "review"
-              ? "Publish was OFF when rendered"
-              : j.status === "cbdp"
-                ? "Upload failed — video ready"
-                : "Render complete — not published";
-          return {
-            ...j,
-            video_public_url: videoUrl,
-            review_reason:    reason,
-            has_video:        hasVideo,
-          };
-        });
-
-        return cors(enriched);
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const all = [...staged,...rev,...cbdp,...failed].filter(j=>{ if(seen.has(j.id))return false; seen.add(j.id); return true; });
+        return cors(all.map(j=>{
+          const raw=j.video_r2_url||"";
+          const videoUrl=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null);
+          const reason=j.status==="staged"?"Silent video — needs AI voice":j.status==="review"?"Publish was OFF":j.status==="cbdp"?"Upload failed":"Not published";
+          return {...j, video_public_url:videoUrl, review_reason:reason, has_video:!!videoUrl};
+        }));
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── ADD VOICE TO STAGED VIDEO + PUBLISH ──────────────────
     if (url.pathname === "/add-voice-and-publish" && request.method === "POST") {
       try {
-        const { job_id } = await request.json();
-        if (!job_id) return cors({ error: "Missing job_id" }, 400);
-        const baseUrl = (env.RENDER_PIPELINE_URL || "").replace(/\/[^/]+$/, "");
-        const endpoint = baseUrl + "/add-voice-and-publish";
-        await sbPatch(env, `jobs?id=eq.${job_id}`,
-          { status: "voice", error: null, updated_at: new Date().toISOString() });
-        ctx.waitUntil(fetch(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ job_id }),
-          signal: AbortSignal.timeout(60000)
-        }).catch(e => console.error("add-voice-and-publish:", e.message)));
-        return cors({ status: "started", job_id });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const baseUrl = (env.RENDER_PIPELINE_URL||"").replace(/\/[^/]+$/,"");
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"voice",error:null,updated_at:new Date().toISOString()});
+        ctx.waitUntil(fetch(baseUrl+"/add-voice-and-publish",{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({job_id}),signal:AbortSignal.timeout(60000)
+        }).catch(e=>console.error("add-voice:",e.message)));
+        return cors({status:"started",job_id});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── PUBLISH A CBDP JOB ────────────────────────────────────
     if (url.pathname === "/publish-job" && request.method === "POST") {
       try {
-        const { job_id } = await request.json();
-        if (!job_id) return cors({ error: "Missing job_id" }, 400);
-        // Fetch job to get video URL and script
-        const jobs = await sbGet(env,
-          `jobs?id=eq.${job_id}&select=id,topic,video_r2_url,script_package,cluster`);
-        if (!jobs.length) return cors({ error: "Job not found" }, 404);
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs = await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,video_r2_url,script_package,cluster");
+        if (!jobs.length) return cors({error:"Job not found"},404);
         const job = jobs[0];
-        if (!job.video_r2_url)
-          return cors({ error: "No video file for this job" }, 400);
-
-        // Use mixer.py to upload — it handles YouTube upload
-        const mixerUrl = env.MIXER_URL || "";
-        if (!mixerUrl) return cors({ error: "MIXER_URL not configured" }, 500);
-
-        const r2Base   = (env.R2_BASE_URL || "").replace(/\/$/, "");
-        const raw      = job.video_r2_url || "";
-        const videoUrl = raw.startsWith("http") ? raw : `${r2Base}/${raw}`;
-        const title    = job.script_package?.title || job.topic;
-
-        // Update status to uploading
-        await sbPatch(env, `jobs?id=eq.${job_id}`,
-          { status: "upload", updated_at: new Date().toISOString() });
-
-        // Trigger mixer with no voice (it's already mixed with voice from AI)
-        // We use a special flag to tell mixer to upload-only
-        const r = await fetch(mixerUrl, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            job_id,
-            video_url:    videoUrl,
-            voice_url:    null,        // no voice — video already has audio
-            music_track:  null,        // no music — video already has audio
-            publish_at:   null,
-            upload_only:  true,        // signal to mixer: skip mix, just upload
-            title:        title,
-          })
-        });
-        if (!r.ok) throw new Error(`Mixer returned ${r.status}`);
-        return cors({ status: "publishing", job_id });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        if (!job.video_r2_url) return cors({error:"No video file"},400);
+        const mixerUrl = env.MIXER_URL||"";
+        if (!mixerUrl) return cors({error:"MIXER_URL not configured"},500);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const raw=job.video_r2_url||"";
+        const videoUrl=raw.startsWith("http")?raw:r2Base+"/"+raw;
+        const title=(job.script_package&&job.script_package.title)||job.topic;
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"upload",updated_at:new Date().toISOString()});
+        const r=await fetch(mixerUrl,{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({job_id,video_url:videoUrl,voice_url:null,music_track:null,publish_at:null,upload_only:true,title})});
+        if (!r.ok) throw new Error("Mixer returned "+r.status);
+        return cors({status:"publishing",job_id});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── REJECT A CBDP JOB (send back to queue) ───────────────
     if (url.pathname === "/reject-job" && request.method === "POST") {
       try {
-        const { job_id } = await request.json();
-        if (!job_id) return cors({ error: "Missing job_id" }, 400);
-        // Get job topic to restore it
-        const jobs = await sbGet(env,
-          `jobs?id=eq.${job_id}&select=id,topic,cluster,council_score,script_package`);
-        if (!jobs.length) return cors({ error: "Job not found" }, 404);
-        const job = jobs[0];
-        // Mark job as failed/rejected
-        await sbPatch(env, `jobs?id=eq.${job_id}`,
-          { status: "failed", error: "Rejected in review",
-            updated_at: new Date().toISOString() });
-        // Restore topic to queue if it exists
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs = await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,cluster,council_score,script_package");
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const job=jobs[0];
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"failed",error:"Rejected in review",updated_at:new Date().toISOString()});
         if (job.topic) {
           try {
-            const ex = await sbGet(env,
-              `topics?topic=eq.${encodeURIComponent(job.topic)}&select=id,used`);
-            if (ex.length > 0) {
-              await sbPatch(env, `topics?id=eq.${ex[0].id}`,
-                { used: false, used_at: null });
-            } else {
-              // Re-insert topic so it can be used again
-              await sbInsert(env, "topics", {
-                topic: job.topic, cluster: job.cluster || "AI",
-                council_score: job.council_score || 75,
-                script_package: job.script_package || null,
-                used: false, source: "restored_from_review",
-                created_at: new Date().toISOString()
-              });
-            }
-          } catch(e) { console.error("Topic restore:", e.message); }
+            const ex=await sbGet(env,"topics?topic=eq."+encodeURIComponent(job.topic)+"&select=id,used");
+            if (ex.length>0) { await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null}); }
+            else { await sbInsert(env,"topics",{topic:job.topic,cluster:job.cluster||"AI",council_score:job.council_score||75,script_package:job.script_package||null,used:false,source:"restored_from_review",created_at:new Date().toISOString()}); }
+          } catch(e) {}
         }
-        return cors({ status: "rejected", job_id, topic_restored: true });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        return cors({status:"rejected",job_id,topic_restored:true});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── UPLOAD IMAGE TO LIBRARY ───────────────────────────────
     if (url.pathname === "/upload-image" && request.method === "POST") {
       try {
-        if (!env.R2) return cors({ error: "R2 not bound" }, 500);
-        const r2Base   = (env.R2_BASE_URL || "").replace(/\/$/, "");
-        const topic    = url.searchParams.get("topic") || "uploaded";
-        const filename = url.searchParams.get("filename") || ("img_" + Date.now() + ".png");
-        const topicSlug = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
-        const key      = `images/${topicSlug}/${filename}`;
-        const blob     = await request.arrayBuffer();
-        await env.R2.put(key, blob, {
-          httpMetadata: { contentType: request.headers.get("content-type") || "image/png" }
-        });
-        const publicUrl = r2Base + "/" + key;
-        // Record in image_cache
-        await sbInsert(env, "image_cache", {
-          topic:      topic,
-          r2_key:     key,
-          public_url: publicUrl,
-          scene_idx:  0,
-          created_at: new Date().toISOString()
-        }).catch(() => {});
-        return cors({ status: "uploaded", key, url: publicUrl });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const topic=url.searchParams.get("topic")||"uploaded";
+        const filename=url.searchParams.get("filename")||("img_"+Date.now()+".png");
+        const topicSlug=topic.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40);
+        const key="images/"+topicSlug+"/"+filename;
+        const blob=await request.arrayBuffer();
+        await env.R2.put(key,blob,{httpMetadata:{contentType:request.headers.get("content-type")||"image/png"}});
+        const publicUrl=r2Base+"/"+key;
+        await sbInsert(env,"image_cache",{topic,r2_key:key,public_url:publicUrl,scene_idx:0,created_at:new Date().toISOString()}).catch(()=>{});
+        return cors({status:"uploaded",key,url:publicUrl});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── IMAGE LIBRARY ─────────────────────────────────────────
-    // List all images saved to R2 from past pipeline runs
     if (url.pathname === "/image-library") {
       try {
-        // R2 binding list — works via Cloudflare Worker R2 binding
-        if (!env.R2) return cors({ error: "R2 not bound", images: [] });
-        const r2Base  = (env.R2_BASE_URL || "").replace(/\/$/, "");
-        const listed  = await env.R2.list({ prefix: "images/", limit: 500 });
-        const images  = (listed.objects || [])
-          .filter(o => o.key.match(/\.(png|jpg|jpeg)$/i))
-          .sort((a, b) => new Date(b.uploaded) - new Date(a.uploaded))
-          .map(o => ({
-            key:        o.key,
-            url:        r2Base + "/" + o.key,
-            size:       o.size,
-            uploaded:   o.uploaded,
-            // Parse topic from key: images/{topic-slug}/{job_id}_{idx}.png
-            topic:      o.key.split("/")[1]?.replace(/-/g, " ") || "unknown",
-            scene_idx:  parseInt((o.key.split("_").pop() || "0").replace(/\D/g, "")) || 0,
-          }));
-        return cors({ images, total: images.length, r2_base: r2Base });
-      } catch (e) {
-        // Fallback: query Supabase image_cache table
+        const cluster = url.searchParams.get("cluster") || "";
+        const jobType = url.searchParams.get("job_type") || "";
+        const r2Base  = (env.R2_BASE_URL||"").replace(/\/$/,"");
+
+        // Primary: query image_cache table (has cluster + engine metadata)
         try {
-          const r2Base = (env.R2_BASE_URL || "").replace(/\/$/, "");
-          const rows   = await sbGet(env,
-            "image_cache?order=created_at.desc&limit=200&select=*");
-          const images = rows.map(r => ({
-            key:       r.r2_key,
-            url:       r.public_url || (r2Base + "/" + r.r2_key),
-            topic:     r.topic,
-            scene_idx: r.scene_idx || 0,
-            uploaded:  r.created_at,
-            job_id:    r.job_id,
-          }));
-          return cors({ images, total: images.length, source: "supabase" });
-        } catch (e2) {
-          return cors({ error: e2.message, images: [] });
-        }
-      }
+          let ep = "image_cache?select=*&order=created_at.desc&limit=200";
+          if (cluster) ep += "&cluster=eq." + cluster;
+          if (jobType) ep += "&job_type=eq." + jobType;
+          const rows = await sbGet(env, ep);
+          return cors({
+            images: rows.map(r => ({
+              key:      r.r2_key,
+              url:      r.public_url || (r2Base + "/" + r.r2_key),
+              topic:    r.topic || r.r2_key?.split("/")[2]?.replace(/-/g," ") || "unknown",
+              cluster:  r.cluster || "AI",
+              engine:   r.engine  || "unknown",
+              job_type: r.job_type || "shorts",
+              prompt:   r.prompt  || "",
+              scene_idx:r.scene_idx || 0,
+              uploaded: r.created_at,
+            })),
+            total: rows.length,
+            source: "image_cache",
+          });
+        } catch(e) {}
+
+        // Fallback: scan R2 directly
+        if (!env.R2) return cors({error:"R2 not bound",images:[]});
+        const prefix = cluster ? `images/${cluster}/` : "images/";
+        const listed = await env.R2.list({prefix, limit:500});
+        const images = (listed.objects||[])
+          .filter(o => o.key.match(/\.(png|jpg|jpeg)$/i))
+          .sort((a,b) => new Date(b.uploaded) - new Date(a.uploaded))
+          .map(o => {
+            const parts   = o.key.split("/");
+            const clust   = parts[1] || "AI";
+            const fname   = parts[parts.length-1] || "";
+            const topic   = fname.replace(/[_-]/g," ").replace(/\.(png|jpg)$/i,"");
+            return {
+              key:      o.key,
+              url:      r2Base + "/" + o.key,
+              cluster:  clust,
+              topic,
+              engine:   "unknown",
+              job_type: parts[2] === "longform" ? "longform" : "shorts",
+              uploaded: o.uploaded,
+            };
+          });
+        return cors({images, total:images.length, source:"r2"});
+      } catch(e) { return cors({error:e.message,images:[]}); }
     }
 
-    // ── CREATE VIDEO WITH LIBRARY IMAGES ─────────────────────
     if (url.pathname === "/run-with-images" && request.method === "POST") {
       try {
-        const body       = await request.json().catch(() => ({}));
-        const image_urls = body.image_urls; // array of 3 public R2 URLs
-        const category   = body.category || null;
-        if (!image_urls || image_urls.length < 3)
-          return cors({ error: "Need exactly 3 image URLs" }, 400);
-        const t   = await pickTopic(env, category);
-        const job = await createJob(t, env);
-        // Pass image_urls to Modal trigger
-        ctx.waitUntil(triggerRender(job, env, image_urls));
-        return cors({ status: "job_created", job_id: job.id,
-                      topic: t.topic, images: "library" });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const body=await request.json().catch(()=>({}));
+        if (!body.image_urls||body.image_urls.length<3) return cors({error:"Need 3 image URLs"},400);
+        const t=await pickTopic(env,body.category||null);
+        const job=await createJob(t,env);
+        ctx.waitUntil(triggerRender(job,env,body.image_urls));
+        return cors({status:"job_created",job_id:job.id,topic:t.topic});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── GENERATE TOPIC ────────────────────────────────────────
     if (url.pathname === "/generate-topic" && request.method === "POST") {
       try {
-        const body   = await request.json().catch(() => ({}));
-        const result = await callCouncil(env,
-          body.topic || "Future of AI in India", "manual", body.category);
-        return cors(result);
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const body=await request.json().catch(()=>({}));
+        return cors(await callCouncil(env,body.topic||"Future of AI in India","manual",body.category));
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    // ── REPLENISH ─────────────────────────────────────────────
     if (url.pathname === "/replenish" && request.method === "POST") {
-      const body       = await request.json().catch(() => ({}));
-      const categories = body.categories || null;
-      const target     = body.target || 12;
-      ctx.waitUntil(triggerReplenish(env, target, categories));
-      return cors({ status: "replenish_triggered", categories, target });
+      const body=await request.json().catch(()=>({}));
+      ctx.waitUntil(triggerReplenish(env,body.target||12,body.categories||null));
+      return cors({status:"replenish_triggered",categories:body.categories,target:body.target||12});
     }
 
-    // ── PUBLISH STATE ─────────────────────────────────────────
     if (url.pathname === "/publish-state") {
-      if (request.method === "GET") {
-        try {
-          const rows = await sbGet(env, "system_state?id=eq.main&select=publish");
-          return cors({ publish: rows[0]?.publish === true });
-        } catch (e) { return cors({ publish: false }); }
-      }
-      if (request.method === "POST") {
-        try {
-          const { publish } = await request.json();
-          await upsertState(env, { publish: !!publish });
-          return cors({ publish: !!publish });
-        } catch (e) { return cors({ error: e.message }, 500); }
-      }
+      if (request.method==="GET") { try { const r=await sbGet(env,"system_state?id=eq.main&select=publish"); return cors({publish:r[0]?.publish===true}); } catch(e){return cors({publish:false});} }
+      if (request.method==="POST") { try { const {publish}=await request.json(); await upsertState(env,{publish:!!publish}); return cors({publish:!!publish}); } catch(e){return cors({error:e.message},500);} }
     }
 
-    // ── VOICE MODE ────────────────────────────────────────────
     if (url.pathname === "/voice-mode") {
-      if (request.method === "GET") {
-        try {
-          const rows = await sbGet(env, "system_state?id=eq.main&select=voice_mode");
-          return cors({ voice_mode: rows[0]?.voice_mode || "ai" });
-        } catch (e) { return cors({ voice_mode: "ai" }); }
-      }
-      if (request.method === "POST") {
-        try {
-          const { voice_mode } = await request.json();
-          const mode = ["ai", "human"].includes(voice_mode) ? voice_mode : "ai";
-          await upsertState(env, { voice_mode: mode });
-          return cors({ voice_mode: mode });
-        } catch (e) { return cors({ error: e.message }, 500); }
-      }
+      if (request.method==="GET") { try { const r=await sbGet(env,"system_state?id=eq.main&select=voice_mode"); return cors({voice_mode:r[0]?.voice_mode||"ai"}); } catch(e){return cors({voice_mode:"ai"});} }
+      if (request.method==="POST") { try { const {voice_mode}=await request.json(); const m=["ai","human"].includes(voice_mode)?voice_mode:"ai"; await upsertState(env,{voice_mode:m}); return cors({voice_mode:m}); } catch(e){return cors({error:e.message},500);} }
     }
 
-    // ── SCHEDULE ──────────────────────────────────────────────
     if (url.pathname === "/set-schedule" && request.method === "POST") {
-      try {
-        const { videos_per_day } = await request.json();
-        const vpd = Math.min(3, Math.max(1, parseInt(videos_per_day) || 1));
-        await upsertState(env, { videos_per_day: vpd });
-        return cors({ videos_per_day: vpd });
-      } catch (e) { return cors({ error: e.message }, 500); }
+      try { const {videos_per_day}=await request.json(); const vpd=Math.min(3,Math.max(1,parseInt(videos_per_day)||1)); await upsertState(env,{videos_per_day:vpd}); return cors({videos_per_day:vpd}); }
+      catch(e){return cors({error:e.message},500);}
     }
-
     if (url.pathname === "/get-schedule") {
-      try {
-        const rows = await sbGet(env, "system_state?id=eq.main&select=videos_per_day");
-        const vpd  = rows[0]?.videos_per_day || 1;
-        return cors({ videos_per_day: vpd });
-      } catch (e) { return cors({ videos_per_day: 1 }); }
+      try { const r=await sbGet(env,"system_state?id=eq.main&select=videos_per_day"); return cors({videos_per_day:r[0]?.videos_per_day||1}); }
+      catch(e){return cors({videos_per_day:1});}
     }
 
-    // ── KILL INCOMPLETE ───────────────────────────────────────
     if (url.pathname === "/kill-incomplete" && request.method === "POST") {
       try {
-        const stuck = await sbGet(env,
-          "jobs?status=in.(pending,processing,images,voice,render,upload)&select=id,topic,cluster");
-        let topicsRestored = 0;
-        for (const job of stuck) {
-          await sbPatch(env, "jobs?id=eq." + job.id, {
-            status: "failed", error: "manually_killed",
-            updated_at: new Date().toISOString()
-          });
-          if (job.topic) {
-            try {
-              const ex = await sbGet(env, "topics?topic=eq." +
-                encodeURIComponent(job.topic) + "&select=id,used");
-              if (ex.length > 0 && ex[0].used) {
-                await sbPatch(env, "topics?id=eq." + ex[0].id,
-                  { used: false, used_at: null });
-                topicsRestored++;
-              }
-            } catch (e) {}
-          }
+        const stuck=await sbGet(env,"jobs?status=in.(pending,processing,images,voice,render,upload)&select=id,topic,cluster");
+        let restored=0;
+        for (const j of stuck) {
+          await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"manually_killed",updated_at:new Date().toISOString()});
+          if (j.topic) { try { const ex=await sbGet(env,"topics?topic=eq."+encodeURIComponent(j.topic)+"&select=id,used"); if(ex.length>0&&ex[0].used){await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null});restored++;} } catch(e){} }
         }
-        return cors({ killed: stuck.length, topics_restored: topicsRestored });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        return cors({killed:stuck.length,topics_restored:restored});
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── RESTORE FAILED ────────────────────────────────────────
     if (url.pathname === "/restore-failed" && request.method === "POST") {
       try {
-        const failed = await sbGet(env,
-          "jobs?status=eq.failed&select=id,topic,council_score,script_package,cluster");
-        let restored = 0, already = 0;
-        for (const job of failed) {
-          if (!job.topic) continue;
+        const failed=await sbGet(env,"jobs?status=eq.failed&select=id,topic,council_score,script_package,cluster");
+        let restored=0,already=0;
+        for (const j of failed) {
+          if (!j.topic) continue;
           try {
-            const ex = await sbGet(env, "topics?topic=eq." +
-              encodeURIComponent(job.topic) + "&select=id,used");
-            if (ex.length > 0) {
-              if (ex[0].used) {
-                await sbPatch(env, "topics?id=eq." + ex[0].id,
-                  { used: false, used_at: null });
-                restored++;
-              } else { already++; }
-            } else {
-              await sbInsert(env, "topics", {
-                cluster: job.cluster || "AI", topic: job.topic, used: false,
-                council_score: job.council_score || 75,
-                script_package: job.script_package || null,
-                source: "restored_from_failed",
-                created_at: new Date().toISOString()
-              });
-              restored++;
-            }
-          } catch (e) {}
+            const ex=await sbGet(env,"topics?topic=eq."+encodeURIComponent(j.topic)+"&select=id,used");
+            if (ex.length>0) { if(ex[0].used){await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null});restored++;}else{already++;} }
+            else { await sbInsert(env,"topics",{cluster:j.cluster||"AI",topic:j.topic,used:false,council_score:j.council_score||75,script_package:j.script_package||null,source:"restored_from_failed",created_at:new Date().toISOString()});restored++; }
+          } catch(e) {}
         }
-        return cors({ restored, already_in_queue: already,
-                      total_failed: failed.length });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        return cors({restored,already_in_queue:already,total_failed:failed.length});
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── TEST RENDER ───────────────────────────────────────────
     if (url.pathname === "/test-render") {
-      const healthUrl = env.MODAL_HEALTH_URL || "NOT_SET";
-      try {
-        const r    = await fetch(healthUrl,
-          { signal: AbortSignal.timeout(15000) });
-        const text = await r.text();
-        return cors({ url: healthUrl, status: r.status,
-                      response: text.slice(0, 400), ok: r.ok });
-      } catch (e) {
-        return cors({ url: healthUrl, error: e.message, ok: false });
-      }
+      const healthUrl=env.MODAL_HEALTH_URL||"NOT_SET";
+      try { const r=await fetch(healthUrl,{signal:AbortSignal.timeout(15000)}); const t=await r.text(); return cors({url:healthUrl,status:r.status,response:t.slice(0,400),ok:r.ok}); }
+      catch(e){return cors({url:healthUrl,error:e.message,ok:false});}
     }
 
-    // ── WEBHOOK ───────────────────────────────────────────────
     if (url.pathname === "/webhook" && request.method === "POST") {
       try {
-        const data = await request.json();
-        const { job_id, status, youtube_id, error, script } = data;
-        if (!job_id) return cors({ error: "Missing job_id" }, 400);
-        const u = { status: status || "unknown",
-                    updated_at: new Date().toISOString() };
-        if (youtube_id) u.youtube_id = youtube_id;
-        if (error)      u.error      = error;
-        if (script)     u.script_package = { text: script };
-        await sbPatch(env, "jobs?id=eq." + job_id, u);
-        if (status === "complete" && youtube_id && youtube_id !== "TEST_MODE")
-          ctx.waitUntil(createAnalyticsRecord(job_id, youtube_id, env));
-        return cors({ received: true, job_id, status });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const data=await request.json();
+        const {job_id,status,youtube_id,error,script}=data;
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const u={status:status||"unknown",updated_at:new Date().toISOString()};
+        if (youtube_id) u.youtube_id=youtube_id;
+        if (error) u.error=error;
+        if (script) u.script_package={text:script};
+        await sbPatch(env,"jobs?id=eq."+job_id,u);
+        if (status==="complete"&&youtube_id&&youtube_id!=="TEST_MODE") ctx.waitUntil(createAnalyticsRecord(job_id,youtube_id,env));
+        return cors({received:true,job_id,status});
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── SYNC ANALYTICS ────────────────────────────────────────
-    if (url.pathname === "/sync-analytics" && request.method === "POST") {
-      ctx.waitUntil(syncYouTubeAnalytics(env));
-      return cors({ status: "sync_started" });
-    }
+    if (url.pathname === "/sync-analytics" && request.method === "POST") { ctx.waitUntil(syncYouTubeAnalytics(env)); return cors({status:"sync_started"}); }
 
-    // ── STAGING QUEUE ─────────────────────────────────────────
     if (url.pathname === "/staging") {
       try {
-        const r2Base  = (env.R2_BASE_URL || "").replace(/\/$/, "");
-        const staged  = await sbGet(env,
-          "jobs?status=eq.staged&order=created_at.asc" +
-          "&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score");
-        const enriched = staged.map(j => {
-          const raw = j.video_r2_url || "";
-          const videoUrl = raw.startsWith("http")
-            ? raw
-            : (raw && r2Base ? r2Base + "/" + raw : null);
-          return { ...j, video_public_url: videoUrl };
-        });
-        return cors(enriched);
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const staged=await sbGet(env,"jobs?status=eq.staged&order=created_at.asc&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score");
+        return cors(staged.map(j=>{ const raw=j.video_r2_url||""; const v=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null); return {...j,video_public_url:v}; }));
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── CBDP QUEUE ────────────────────────────────────────────
-    // "Completed But Didn't Publish" — rendered OK, YouTube upload failed
     if (url.pathname === "/cbdp") {
-      try {
-        const cbdp = await sbGet(env,
-          "jobs?status=eq.cbdp&order=created_at.desc" +
-          "&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score,error");
-        return cors(cbdp);
-      } catch (e) { return cors({ error: e.message }, 500); }
+      try { return cors(await sbGet(env,"jobs?status=eq.cbdp&order=created_at.desc&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score,error")); }
+      catch(e){return cors({error:e.message},500);}
     }
 
-    // ── RETRY CBDP UPLOAD ─────────────────────────────────────
     if (url.pathname === "/retry-upload" && request.method === "POST") {
       try {
-        const { job_id } = await request.json();
-        if (!job_id) return cors({ error: "Missing job_id" }, 400);
-        const retryUrl = env.RETRY_UPLOAD_URL || "";
-        if (!retryUrl) return cors({ error: "RETRY_UPLOAD_URL not set in Cloudflare bindings" }, 500);
-        // Mark as retrying so UI updates
-        await sbPatch(env, "jobs?id=eq." + job_id,
-          { status: "upload", error: null, updated_at: new Date().toISOString() });
-        // Fire and forget — Modal handles it async
-        ctx.waitUntil(
-          fetch(retryUrl, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ job_id })
-          }).catch(e => console.error("retry-upload trigger:", e.message))
-        );
-        return cors({ status: "retry_triggered", job_id });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const {job_id}=await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const retryUrl=env.RETRY_UPLOAD_URL||"";
+        if (!retryUrl) return cors({error:"RETRY_UPLOAD_URL not set"},500);
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"upload",error:null,updated_at:new Date().toISOString()});
+        ctx.waitUntil(fetch(retryUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({job_id})}).catch(e=>console.error("retry:",e.message)));
+        return cors({status:"retry_triggered",job_id});
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── MARK FAILED AS CBDP (bulk) ────────────────────────────
-    // Run once to convert existing failed upload jobs to cbdp status
-    if (url.pathname === "/mark-cbdp" && request.method === "POST") {
-      try {
-        const failed = await sbGet(env,
-          "jobs?status=eq.failed&select=id,error,script_package");
-        const uploadKeywords = ["400", "401", "403", "youtube", "upload",
-                                "quota", "invaliddescription", "bad request"];
-        let marked = 0;
-        for (const job of failed) {
-          const err = (job.error || "").toLowerCase();
-          const hasScript = !!(job.script_package);
-          const isUploadFail = uploadKeywords.some(k => err.includes(k));
-          if (isUploadFail && hasScript) {
-            await sbPatch(env, "jobs?id=eq." + job.id,
-              { status: "cbdp", updated_at: new Date().toISOString() });
-            marked++;
-          }
-        }
-        return cors({ marked, total_failed: failed.length });
-      } catch (e) { return cors({ error: e.message }, 500); }
-    }
-
-    // ── UPLOAD VOICE ──────────────────────────────────────────
     if (url.pathname === "/upload-voice" && request.method === "POST") {
       try {
-        const jobId = url.searchParams.get("job_id");
-        if (!jobId) return cors({ error: "Missing job_id" }, 400);
-        const blob  = await request.arrayBuffer();
-        const r2Key = "voices/" + jobId + "/voice.webm";
-        if (env.R2) {
-          await env.R2.put(r2Key, blob,
-            { httpMetadata: { contentType: "audio/webm" } });
-        }
-        await sbPatch(env, "jobs?id=eq." + jobId,
-          { voice_r2_url: r2Key, updated_at: new Date().toISOString() });
-        return cors({ status: "uploaded", r2_key: r2Key, job_id: jobId });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const jobId=url.searchParams.get("job_id");
+        if (!jobId) return cors({error:"Missing job_id"},400);
+        const blob=await request.arrayBuffer();
+        const r2Key="voices/"+jobId+"/voice.webm";
+        if (env.R2) await env.R2.put(r2Key,blob,{httpMetadata:{contentType:"audio/webm"}});
+        await sbPatch(env,"jobs?id=eq."+jobId,{voice_r2_url:r2Key,updated_at:new Date().toISOString()});
+        return cors({status:"uploaded",r2_key:r2Key,job_id:jobId});
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── MUSIC LIBRARY ─────────────────────────────────────────
     if (url.pathname === "/music-library") {
-      return cors({ tracks: [
-        { id: "epic_01",      label: "Epic Rise",         category: "Epic",      duration: 45 },
-        { id: "hopeful_01",   label: "Hopeful Morning",   category: "Hopeful",   duration: 52 },
-        { id: "tech_01",      label: "Digital Pulse",     category: "Tech",      duration: 38 },
-        { id: "emotional_01", label: "Stirring Moment",   category: "Emotional", duration: 60 },
-        { id: "neutral_01",   label: "Subtle Background", category: "Neutral",   duration: 44 },
+      return cors({tracks:[
+        {id:"epic_01",label:"Epic Rise",category:"Epic",duration:45},
+        {id:"hopeful_01",label:"Hopeful Morning",category:"Hopeful",duration:52},
+        {id:"tech_01",label:"Digital Pulse",category:"Tech",duration:38},
+        {id:"emotional_01",label:"Stirring Moment",category:"Emotional",duration:60},
+        {id:"neutral_01",label:"Subtle Background",category:"Neutral",duration:44},
       ]});
     }
 
-    // ── MIX TRIGGER ───────────────────────────────────────────
     if (url.pathname === "/mix" && request.method === "POST") {
       try {
-        const body = await request.json();
-        const { job_id, music_track, music_volume,
-                publish_at, voice_offset_ms } = body;
-        if (!job_id) return cors({ error: "Missing job_id" }, 400);
-        const jobs = await sbGet(env,
-          "jobs?id=eq." + job_id +
-          "&select=id,topic,video_r2_url,voice_r2_url");
-        if (!jobs.length) return cors({ error: "Job not found" }, 404);
-        const job = jobs[0];
-        if (!job.voice_r2_url)
-          return cors({ error: "No voice recording for this job" }, 400);
-        const mixerUrl = env.MIXER_URL || "";
-        if (!mixerUrl) return cors({ error: "MIXER_URL not set" }, 500);
-        const r2Base   = (env.R2_BASE_URL || "").replace(/\/$/, "");
-        const toUrl    = (v) => !v ? null : v.startsWith("http") ? v : r2Base + "/" + v;
-        await sbPatch(env, "jobs?id=eq." + job_id,
-          { status: "mixing", updated_at: new Date().toISOString() });
-        const r = await fetch(mixerUrl, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            job_id,
-            video_url:       toUrl(job.video_r2_url),
-            voice_url:       toUrl(job.voice_r2_url),
-            music_track:     music_track     || "neutral_01",
-            music_volume:    music_volume    || 0.08,
-            publish_at:      publish_at      || null,
-            voice_offset_ms: voice_offset_ms || 0,
-          })
-        });
-        if (!r.ok) throw new Error("Mixer returned " + r.status);
-        return cors({ status: "mixing_started", job_id });
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const body=await request.json();
+        const {job_id,music_track,music_volume,publish_at,voice_offset_ms}=body;
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs=await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,video_r2_url,voice_r2_url");
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const job=jobs[0];
+        if (!job.voice_r2_url) return cors({error:"No voice recording"},400);
+        const mixerUrl=env.MIXER_URL||"";
+        if (!mixerUrl) return cors({error:"MIXER_URL not set"},500);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const toUrl=v=>!v?null:v.startsWith("http")?v:r2Base+"/"+v;
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"mixing",updated_at:new Date().toISOString()});
+        const r=await fetch(mixerUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({job_id,video_url:toUrl(job.video_r2_url),voice_url:toUrl(job.voice_r2_url),music_track:music_track||"neutral_01",music_volume:music_volume||0.08,publish_at:publish_at||null,voice_offset_ms:voice_offset_ms||0})});
+        if (!r.ok) throw new Error("Mixer returned "+r.status);
+        return cors({status:"mixing_started",job_id});
+      } catch(e){return cors({error:e.message},500);}
     }
 
-    // ── CALENDAR ──────────────────────────────────────────────
-    if (url.pathname === "/calendar") {
+    if (url.pathname === "/kill-job" && request.method === "POST") {
       try {
-        const rows = await sbGet(env,
-          "jobs?status=in.(staged,mixing,complete)" +
-          "&order=scheduled_at.asc.nullslast,created_at.desc" +
-          "&select=id,topic,cluster,status,youtube_id,scheduled_at,created_at");
-        return cors(rows);
-      } catch (e) { return cors({ error: e.message }, 500); }
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const jobs = await sbGet(env,"jobs?id=eq."+job_id+"&select=id,topic,cluster,status");
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const job = jobs[0];
+        const killable = ["pending","processing","images","voice","render","upload"];
+        if (!killable.includes(job.status))
+          return cors({error:"Job status '"+job.status+"' cannot be killed"},400);
+        await sbPatch(env,"jobs?id=eq."+job_id,
+          {status:"failed",error:"manually_killed",updated_at:new Date().toISOString()});
+        let topicRestored = false;
+        if (job.topic) {
+          try {
+            const ex = await sbGet(env,"topics?topic=eq."+encodeURIComponent(job.topic)+"&select=id,used");
+            if (ex.length > 0 && ex[0].used) {
+              await sbPatch(env,"topics?id=eq."+ex[0].id,{used:false,used_at:null});
+              topicRestored = true;
+            }
+          } catch(e) {}
+        }
+        return cors({killed:true,job_id,topic_restored:topicRestored});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
-    return cors({ error: "route_not_found" }, 404);
+    if (url.pathname === "/logs") {
+      try {
+        const fields = "id,topic,cluster,status,error,youtube_id,council_score,created_at,updated_at,script_package";
+        const [failed,complete] = await Promise.all([
+          sbGet(env,"jobs?status=eq.failed&order=updated_at.desc&limit=50&select="+fields),
+          sbGet(env,"jobs?status=in.(complete,test_complete)&order=updated_at.desc&limit=50&select="+fields),
+        ]);
+        return cors({failed,complete});
+      } catch(e) { return cors({error:e.message},500); }
+    }
+
+    if (url.pathname === "/mark-cbdp" && request.method === "POST") {
+      try {
+        const failed=await sbGet(env,"jobs?status=eq.failed&select=id,error,script_package");
+        const kw=["400","401","403","youtube","upload","quota","invaliddescription","bad request"];
+        let marked=0;
+        for (const j of failed) { if (kw.some(k=>(j.error||"").toLowerCase().includes(k))&&j.script_package) { await sbPatch(env,"jobs?id=eq."+j.id,{status:"cbdp",updated_at:new Date().toISOString()}); marked++; } }
+        return cors({marked,total_failed:failed.length});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/calendar") {
+      try { return cors(await sbGet(env,"jobs?status=in.(staged,mixing,complete)&order=scheduled_at.asc.nullslast,created_at.desc&select=id,topic,cluster,status,youtube_id,scheduled_at,created_at")); }
+      catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/service-health") {
+      try {
+        const results={};
+        try { const r=await fetch(env.MODAL_HEALTH_URL||"",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.modal={ok:r.ok,version:d.version||"?"}; } catch(e){results.modal={ok:false,error:e.message};}
+        try { const r=await fetch((env.TOPIC_COUNCIL_URL||"")+"/health",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.topic_council={ok:r.ok,queue_depth:d.queue_depth||0}; } catch(e){results.topic_council={ok:false,error:e.message};}
+        try { const t=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=cluster"); results.topics_ready=t.length; results.space_ready=t.filter(x=>x.cluster==="Space").length; } catch(e){}
+        try { const j=await sbGet(env,"jobs?order=created_at.desc&limit=100&select=status,created_at"); const today=new Date(); today.setHours(0,0,0,0); const tj=j.filter(x=>new Date(x.created_at)>=today); results.jobs_today=tj.length; results.running=j.filter(x=>["pending","processing","images","voice","render","upload"].includes(x.status)).length; results.complete_today=tj.filter(x=>x.status==="complete").length; } catch(e){}
+        results.time=new Date().toISOString();
+        return cors(results);
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/create-manual-job" && request.method === "POST") {
+      try {
+        const {topic,script,cluster}=await request.json().catch(()=>({}));
+        if (!topic||!script) return cors({error:"Missing topic or script"},400);
+        const words=script.trim().split(/\s+/).filter(Boolean);
+        if (words.length>70) return cors({error:"Script too long: "+words.length+" words (max 65)"},400);
+        const safeCluster=(cluster&&ALL_CATS.includes(cluster))?cluster:"AI";
+        const job=await sbInsert(env,"jobs",{topic:topic.trim().slice(0,200),cluster:safeCluster,status:"manual_pending",script_package:{text:script.trim(),source:"manual",word_count:words.length,generated_at:new Date().toISOString()},council_score:75,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});
+        return cors({status:"created",job_id:job.id,topic:job.topic,word_count:words.length});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/upload-manual-video" && request.method === "POST") {
+      try {
+        const jobId=url.searchParams.get("job_id");
+        if (!jobId) return cors({error:"Missing job_id"},400);
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const blob=await request.arrayBuffer();
+        if (blob.byteLength<10000) return cors({error:"File too small"},400);
+        const r2Key="manual/"+jobId+"/video.mp4";
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        await env.R2.put(r2Key,blob,{httpMetadata:{contentType:"video/mp4"}});
+        const publicUrl=r2Base+"/"+r2Key;
+        await sbPatch(env,"jobs?id=eq."+jobId,{video_r2_url:publicUrl,status:"staged",updated_at:new Date().toISOString()});
+        return cors({status:"uploaded",r2_key:r2Key,url:publicUrl,job_id:jobId,size_kb:Math.round(blob.byteLength/1024)});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/manual-jobs") {
+      try {
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const fields="id,topic,cluster,status,script_package,video_r2_url,created_at,updated_at,youtube_id";
+        const [p,s,a,c,f]=await Promise.all([
+          sbGet(env,"jobs?status=eq.manual_pending&order=created_at.desc&limit=30&select="+fields),
+          sbGet(env,"jobs?status=eq.staged&order=created_at.desc&limit=30&select="+fields),
+          sbGet(env,"jobs?status=in.(voice,upload,mixing)&order=created_at.desc&limit=20&select="+fields),
+          sbGet(env,"jobs?status=eq.complete&order=created_at.desc&limit=20&select="+fields),
+          sbGet(env,"jobs?status=eq.failed&order=created_at.desc&limit=10&select="+fields),
+        ]);
+        const all=[...p,...s,...a,...c,...f].filter(j=>j.script_package&&j.script_package.source==="manual");
+        const seen=new Set();
+        return cors(all.filter(j=>{if(seen.has(j.id))return false;seen.add(j.id);return true;}).map(j=>{
+          const raw=j.video_r2_url||""; const v=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null);
+          return {...j,video_public_url:v,has_video:!!v};
+        }));
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // LONG-FORM ROUTES
+    // ══════════════════════════════════════════════════════════
+
+    if (url.pathname === "/longform/create" && request.method === "POST") {
+      try {
+        const {topic,cluster,target_duration}=await request.json().catch(()=>({}));
+        if (!topic) return cors({error:"Missing topic"},400);
+        const safeCluster=(cluster&&ALL_CATS.includes(cluster))?cluster:"Space";
+        const durSecs=Math.min(720,Math.max(180,(parseInt(target_duration)||420)));
+        const job=await sbInsert(env,"longform_jobs",{
+          topic:topic.trim().slice(0,300),cluster:safeCluster,
+          status:"scripting",target_duration:durSecs,
+          created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
+        });
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-script",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs})}).catch(e=>console.error("lf script:",e.message)));
+        return cors({status:"created",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/jobs") {
+      try { return cors(await sbGet(env,"longform_jobs?order=created_at.desc&limit=30")); }
+      catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname.match(/^\/longform\/[a-f0-9-]{36}$/) && request.method === "GET") {
+      try {
+        const jobId=url.pathname.split("/longform/")[1];
+        const [jobs,segments]=await Promise.all([
+          sbGet(env,"longform_jobs?id=eq."+jobId),
+          sbGet(env,"longform_segments?job_id=eq."+jobId+"&order=segment_idx.asc"),
+        ]);
+        if (!jobs.length) return cors({error:"Job not found"},404);
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const enrichedSegs=segments.map(s=>({
+          ...s,
+          media:(s.media||[]).map(m=>({...m,public_url:m.r2_url?(m.r2_url.startsWith("http")?m.r2_url:r2Base+"/"+m.r2_url):null})),
+          voice_public_url:s.voice_r2_url?(s.voice_r2_url.startsWith("http")?s.voice_r2_url:r2Base+"/"+s.voice_r2_url):null,
+        }));
+        return cors({...jobs[0],segments:enrichedSegs});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/script" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx,script}=await request.json();
+        if (!job_id||segment_idx==null||!script) return cors({error:"Missing fields"},400);
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{script,updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,job_id);
+        return cors({status:"updated",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/upload-media" && request.method === "POST") {
+      try {
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const jobId=url.searchParams.get("job_id");
+        const segIdx=url.searchParams.get("segment_idx");
+        const mediaIdx=url.searchParams.get("media_idx")||"0";
+        const mediaType=url.searchParams.get("media_type")||"image";
+        if (!jobId||segIdx==null) return cors({error:"Missing job_id or segment_idx"},400);
+        const ext=mediaType==="video"?"mp4":"png";
+        const r2Key="longform/"+jobId+"/seg"+segIdx+"_media"+mediaIdx+"."+ext;
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const blob=await request.arrayBuffer();
+        const ct=request.headers.get("content-type")||(mediaType==="video"?"video/mp4":"image/png");
+        await env.R2.put(r2Key,blob,{httpMetadata:{contentType:ct}});
+        const publicUrl=r2Base+"/"+r2Key;
+        const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx+"&select=id,media,script");
+        if (!segs.length) return cors({error:"Segment not found"},404);
+        const media=segs[0].media||[];
+        const idx=parseInt(mediaIdx);
+        while (media.length<=idx) media.push(null);
+        media[idx]={type:mediaType,r2_url:r2Key,public_url:publicUrl,order:idx};
+        const filtered=media.filter(Boolean);
+        const newStatus=filtered.length>0?(segs[0].script?"has_media":"has_media_no_script"):segs[0].status;
+        await sbPatch(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx,{media:filtered,status:newStatus,updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,jobId);
+        return cors({status:"uploaded",r2_key:r2Key,public_url:publicUrl,segment_idx:parseInt(segIdx),media_idx:idx,type:mediaType});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/upload-voice" && request.method === "POST") {
+      try {
+        if (!env.R2) return cors({error:"R2 not bound"},500);
+        const jobId=url.searchParams.get("job_id");
+        const segIdx=url.searchParams.get("segment_idx");
+        if (!jobId||segIdx==null) return cors({error:"Missing job_id or segment_idx"},400);
+        const r2Key="longform/"+jobId+"/seg"+segIdx+"_voice.webm";
+        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
+        const blob=await request.arrayBuffer();
+        await env.R2.put(r2Key,blob,{httpMetadata:{contentType:"audio/webm"}});
+        const publicUrl=r2Base+"/"+r2Key;
+        await sbPatch(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx,{voice_r2_url:r2Key,voice_source:"human",status:"ready",updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,jobId);
+        return cors({status:"uploaded",r2_key:r2Key,public_url:publicUrl,segment_idx:parseInt(segIdx)});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/generate-voice" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx}=await request.json();
+        if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
+        const segs=await sbGet(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx+"&select=id,script");
+        if (!segs.length) return cors({error:"Segment not found"},404);
+        if (!segs[0].script) return cors({error:"No script for this segment"},400);
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_voice",updated_at:new Date().toISOString()});
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-voice",job_id,segment_idx})}).catch(e=>console.error("seg voice:",e.message)));
+        return cors({status:"generating",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/generate-images" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx}=await request.json();
+        if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_images",updated_at:new Date().toISOString()});
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-images",job_id,segment_idx})}).catch(e=>console.error("seg img:",e.message)));
+        return cors({status:"generating",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/render" && request.method === "POST") {
+      try {
+        const {job_id,publish_at}=await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const segments=await sbGet(env,"longform_segments?job_id=eq."+job_id+"&select=segment_idx,status");
+        const notReady=segments.filter(s=>s.status!=="ready");
+        if (notReady.length>0) return cors({error:"Not all segments ready",not_ready:notReady.map(s=>s.segment_idx)},400);
+        await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"rendering",updated_at:new Date().toISOString()});
+        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
+        if (!lfUrl) return cors({error:"LONGFORM_PIPELINE_URL not set"},500);
+        ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"render-full",job_id,publish_at:publish_at||null})}).catch(e=>console.error("lf render:",e.message)));
+        return cors({status:"rendering",job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/webhook" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx,event,payload}=await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        if (event==="segment_voice_ready"&&segment_idx!=null) { await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{voice_r2_url:payload.voice_r2_url,voice_source:"ai",status:"ready",updated_at:new Date().toISOString()}); await _updateLongformStatus(env,job_id); }
+        if (event==="segment_images_ready"&&segment_idx!=null) { await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{media:payload.media,status:"has_media",updated_at:new Date().toISOString()}); await _updateLongformStatus(env,job_id); }
+        if (event==="render_complete") { await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"complete",youtube_id:payload.youtube_id||null,video_r2_url:payload.video_r2_url||null,updated_at:new Date().toISOString()}); }
+        if (event==="render_failed") { await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"failed",error:payload.error||"render failed",updated_at:new Date().toISOString()}); }
+        if (event==="script_ready") {
+          for (const seg of (payload.segments||[])) {
+            await sbInsert(env,"longform_segments",{job_id,segment_idx:seg.segment_idx,segment_type:seg.type,script:seg.script,duration_target:seg.duration_target,image_prompts:seg.image_prompts||[],media:[],voice_r2_url:null,voice_source:null,status:"has_script",created_at:new Date().toISOString()}).catch(()=>{});
+          }
+          await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"media_collecting",updated_at:new Date().toISOString()});
+        }
+        return cors({received:true});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    return cors({error:"route_not_found"},404);
   },
 
-  // ── SCHEDULED CRON ──────────────────────────────────────────
   async scheduled(event, env, ctx) {
-    const cron = event.cron;
-
-    if (cron === "* * * * *") {
-      await processQueue(env, ctx);
-      if (env.MODAL_HEALTH_URL)
-        fetch(env.MODAL_HEALTH_URL).catch(() => {});
-      if (env.TOPIC_COUNCIL_URL)
-        fetch(env.TOPIC_COUNCIL_URL + "/health").catch(() => {});
+    const cron=event.cron;
+    if (cron==="* * * * *") {
+      await processQueue(env,ctx);
+      if (env.MODAL_HEALTH_URL) fetch(env.MODAL_HEALTH_URL).catch(()=>{});
+      if (env.TOPIC_COUNCIL_URL) fetch(env.TOPIC_COUNCIL_URL+"/health").catch(()=>{});
     }
-
-    if (cron === "30 0,6,12 * * *") {
+    if (cron==="30 0,6,12 * * *") {
       try {
-        const rows = await sbGet(env,
-          "system_state?id=eq.main&select=videos_per_day");
-        const vpd  = rows[0]?.videos_per_day || 1;
-        const utcH = new Date().getUTCHours();
-        const fire =
-          vpd === 3 ||
-          (vpd === 2 && (utcH === 0 || utcH === 12)) ||
-          (vpd === 1 && utcH === 6);
+        const rows=await sbGet(env,"system_state?id=eq.main&select=videos_per_day,last_cluster");
+        const vpd=rows[0]?.videos_per_day||1; const last=rows[0]?.last_cluster||"";
+        const utcH=new Date().getUTCHours();
+        const fire=vpd===3||(vpd===2&&(utcH===0||utcH===12))||(vpd===1&&utcH===6);
         if (fire) {
-          const t = await pickTopic(env, null);
-          const j = await createJob(t, env);
-          ctx.waitUntil(triggerRender(j, env));
-          console.log("Scheduled:", j.id, t.topic);
+          const t=await pickTopic(env,null,last);
+          const j=await createJob(t,env);
+          await upsertState(env,{last_cluster:t.category});
+          ctx.waitUntil(triggerRender(j,env));
+          console.log("Scheduled:",j.id,t.topic,t.category);
         }
-      } catch (e) { console.error("Scheduled:", e.message); }
+      } catch(e){console.error("Scheduled:",e.message);}
     }
-
-    if (cron === "30 20 * * *") {
+    if (cron==="30 20 * * *") {
       ctx.waitUntil(syncYouTubeAnalytics(env));
-      try {
-        const av = await sbGet(env,
-          "topics?used=eq.false&council_score=gte.70&select=id");
-        if (av.length < 5) ctx.waitUntil(triggerReplenish(env, 12, null));
-      } catch (e) { console.error("Queue check:", e.message); }
+      try { const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id"); if(av.length<5)ctx.waitUntil(triggerReplenish(env,12,null)); } catch(e){}
     }
   }
 };
 
-// ============================================================
-// HELPERS
-// ============================================================
+// ── HELPERS ───────────────────────────────────────────────────
+const CATEGORIES={AI:{label:"AI & ML",color:"#00e5ff",emoji:"\uD83E\uDD16"},Space:{label:"Space & Defence",color:"#b388ff",emoji:"\uD83D\uDE80"},Gadgets:{label:"Gadgets & Tech",color:"#ffd740",emoji:"\uD83D\uDCF1"},DeepTech:{label:"Deep Tech",color:"#ff6b35",emoji:"\uD83D\uDD2C"},GreenTech:{label:"Green & Energy",color:"#00e676",emoji:"\u26A1"},Startups:{label:"Startups",color:"#ff6b9d",emoji:"\uD83D\uDCA1"}};
+const ALL_CATS=Object.keys(CATEGORIES);
+function sbh(env){return{apikey:env.SUPABASE_ANON_KEY,Authorization:"Bearer "+(env.SUPABASE_SERVICE_ROLE_KEY||env.SUPABASE_ANON_KEY),"Content-Type":"application/json"};}
+async function sbGet(env,ep){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{headers:sbh(env)});if(!r.ok)throw new Error("GET "+r.status+" "+ep);return r.json();}
+async function sbInsert(env,table,data){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+table,{method:"POST",headers:{...sbh(env),Prefer:"return=representation"},body:JSON.stringify(data)});if(!r.ok){const b=await r.text();throw new Error("INSERT "+r.status+" "+b.slice(0,200));}return(await r.json())[0];}
+async function sbPatch(env,ep,data){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{method:"PATCH",headers:{...sbh(env),Prefer:"return=minimal"},body:JSON.stringify(data)});return r.ok;}
+async function upsertState(env,data){try{const rows=await sbGet(env,"system_state?id=eq.main&select=id");if(rows.length>0){await sbPatch(env,"system_state?id=eq.main",{...data,updated_at:new Date().toISOString()});}else{await sbInsert(env,"system_state",{id:"main",...data});}}catch(e){console.error("upsertState:",e.message);}}
+function cors(data,status){return new Response(JSON.stringify(data,null,2),{status:status||200,headers:{"content-type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"*","Access-Control-Allow-Methods":"GET,POST,OPTIONS,PATCH"}});}
 
-// ── CATEGORIES ────────────────────────────────────────────────
-const CATEGORIES = {
-  AI:        { label: "AI & ML",          color: "#00e5ff", emoji: "🤖" },
-  Space:     { label: "Space & Defence",  color: "#b388ff", emoji: "🚀" },
-  Gadgets:   { label: "Gadgets & Tech",   color: "#ffd740", emoji: "📱" },
-  DeepTech:  { label: "Deep Tech",        color: "#ff6b35", emoji: "🔬" },
-  GreenTech: { label: "Green & Energy",   color: "#00e676", emoji: "⚡" },
-  Startups:  { label: "Startups",         color: "#ff6b9d", emoji: "💡" },
-};
-const ALL_CATS = Object.keys(CATEGORIES);
-
-const VPD_SCHEDULES = {
-  1: ["12:00 PM IST"],
-  2: ["6:00 AM IST", "6:00 PM IST"],
-  3: ["6:00 AM IST", "12:00 PM IST", "6:00 PM IST"],
-};
-
-// ── SUPABASE ──────────────────────────────────────────────────
-function sbh(env) {
-  return {
-    apikey: env.SUPABASE_ANON_KEY,
-    Authorization: "Bearer " +
-      (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY),
-    "Content-Type": "application/json"
-  };
-}
-async function sbGet(env, ep) {
-  const r = await fetch(env.SUPABASE_URL + "/rest/v1/" + ep,
-    { headers: sbh(env) });
-  if (!r.ok) throw new Error("GET " + r.status + " " + ep);
-  return r.json();
-}
-async function sbInsert(env, table, data) {
-  const r = await fetch(env.SUPABASE_URL + "/rest/v1/" + table, {
-    method: "POST",
-    headers: { ...sbh(env), Prefer: "return=representation" },
-    body: JSON.stringify(data)
-  });
-  if (!r.ok) {
-    const b = await r.text();
-    throw new Error("INSERT " + r.status + " " + b.slice(0, 200));
-  }
-  return (await r.json())[0];
-}
-async function sbPatch(env, ep, data) {
-  const r = await fetch(env.SUPABASE_URL + "/rest/v1/" + ep, {
-    method: "PATCH",
-    headers: { ...sbh(env), Prefer: "return=minimal" },
-    body: JSON.stringify(data)
-  });
-  return r.ok;
-}
-async function upsertState(env, data) {
-  // Try patch first, insert if missing
-  try {
-    const rows = await sbGet(env, "system_state?id=eq.main&select=id");
-    if (rows.length > 0) {
-      await sbPatch(env, "system_state?id=eq.main",
-        { ...data, updated_at: new Date().toISOString() });
-    } else {
-      await sbInsert(env, "system_state",
-        { id: "main", ...data });
+// ── PRIORITY A TOPIC SELECTION ────────────────────────────────
+async function pickTopic(env, preferCategory, lastCluster) {
+  let priorityA=false;
+  try{const rows=await sbGet(env,"system_state?id=eq.main&select=priority_a");priorityA=rows[0]?.priority_a===true;}catch(e){}
+  if (preferCategory&&ALL_CATS.includes(preferCategory)) { const t=await _fetchBestTopic(env,preferCategory); if(t)return t; }
+  // Priority A: Space first — but skip if last job was also Space (avoid channel being 100% Space)
+  if (priorityA&&lastCluster!=="Space") {
+    const spaceTopics=await sbGet(env,"topics?used=eq.false&council_score=gte.70&cluster=eq.Space&order=council_score.desc&limit=1");
+    if (spaceTopics.length>0) {
+      const t=spaceTopics[0];
+      await sbPatch(env,"topics?id=eq."+t.id,{used:true,used_at:new Date().toISOString()});
+      console.log("Priority A → Space:",t.topic);
+      return {topic:t.topic,script_package:t.script_package,council_score:t.council_score,category:"Space",source:"priority_a"};
     }
-  } catch (e) {
-    console.error("upsertState:", e.message);
   }
+  const best=await _fetchBestTopic(env,null);
+  if (best) return best;
+  const pool=["India AI healthcare revolution","ISRO next space mission","India EV revolution","AI chips made in India","India solar energy breakthrough"];
+  return {topic:pool[Math.floor(Math.random()*pool.length)],script_package:null,council_score:0,category:"AI",source:"fallback"};
 }
-
-// ── RESPONSE ──────────────────────────────────────────────────
-function cors(data, status) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status: status || 200,
-    headers: {
-      "content-type": "application/json",
-      "Access-Control-Allow-Origin":  "*",
-      "Access-Control-Allow-Headers": "*",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS,PATCH"
-    }
-  });
+async function _fetchBestTopic(env,cluster){
+  let ep="topics?used=eq.false&council_score=gte.70&order=council_score.desc&limit=1";
+  if(cluster)ep+="&cluster=eq."+cluster;
+  const t=await sbGet(env,ep);if(!t.length)return null;
+  await sbPatch(env,"topics?id=eq."+t[0].id,{used:true,used_at:new Date().toISOString()});
+  return {topic:t[0].topic,script_package:t[0].script_package,council_score:t[0].council_score,category:t[0].cluster||"AI",source:"db_approved"};
 }
-
-// ── TOPIC SELECTION ───────────────────────────────────────────
-async function pickTopic(env, preferCategory) {
-  let ep = "topics?used=eq.false&council_score=gte.70" +
-           "&order=council_score.desc&limit=1";
-  if (preferCategory && ALL_CATS.includes(preferCategory))
-    ep = "topics?used=eq.false&council_score=gte.70&cluster=eq." +
-         preferCategory + "&order=council_score.desc&limit=1";
-  const t = await sbGet(env, ep);
-  if (t.length > 0) {
-    await sbPatch(env, "topics?id=eq." + t[0].id,
-      { used: true, used_at: new Date().toISOString() });
-    return { topic: t[0].topic, script_package: t[0].script_package,
-             council_score: t[0].council_score,
-             category: t[0].cluster || "AI", source: "db_approved" };
-  }
-  // Fallback pool
-  const pool = [
-    "India AI healthcare revolution in rural areas",
-    "ISRO next space mission changing everything",
-    "India EV revolution what is actually happening",
-    "AI chips made in India semiconductor story",
-    "India solar energy breakthrough",
-  ];
-  const topic = pool[Math.floor(Math.random() * pool.length)];
-  return { topic, script_package: null, council_score: 0,
-           category: "AI", source: "fallback" };
-}
-
-async function callCouncil(env, topic, source, category) {
-  if (!env.TOPIC_COUNCIL_URL) throw new Error("TOPIC_COUNCIL_URL not set");
-  const r = await fetch(env.TOPIC_COUNCIL_URL + "/full-pipeline", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ topic, source, category })
-  });
-  if (!r.ok) throw new Error("Council returned " + r.status);
-  return r.json();
-}
-
-async function triggerReplenish(env, target, categories) {
-  if (!env.TOPIC_COUNCIL_URL) return;
-  try {
-    await fetch(env.TOPIC_COUNCIL_URL + "/replenish", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ target, categories: categories || ALL_CATS })
-    });
-  } catch (e) { console.error("Replenish:", e.message); }
-}
-
-// ── JOB MANAGEMENT ────────────────────────────────────────────
-async function createJob(t, env) {
-  return await sbInsert(env, "jobs", {
-    topic: t.topic, cluster: t.category || "AI", status: "pending",
-    script_package: t.script_package || null,
-    council_score: t.council_score || 0,
-    retries: 0,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  });
-}
-
-async function processQueue(env, ctx) {
-  const ago = new Date(Date.now() - 15 * 60000).toISOString();
-  try {
-    // Reset stuck jobs
-    for (const j of await sbGet(env,
-      "jobs?status=eq.processing&updated_at=lt." + ago + "&retries=lt.3"))
-      await sbPatch(env, "jobs?id=eq." + j.id,
-        { status: "pending", retries: (j.retries || 0) + 1,
-          updated_at: new Date().toISOString() });
-    for (const j of await sbGet(env,
-      "jobs?status=eq.processing&updated_at=lt." + ago + "&retries=gte.3"))
-      await sbPatch(env, "jobs?id=eq." + j.id,
-        { status: "failed", error: "max_retries_exceeded",
-          updated_at: new Date().toISOString() });
-    // Trigger next pending
-    const pending = await sbGet(env,
-      "jobs?status=eq.pending&order=created_at.asc&limit=1");
-    if (!pending.length) return;
-    await sbPatch(env, "jobs?id=eq." + pending[0].id,
-      { status: "processing", started_at: new Date().toISOString(),
-        updated_at: new Date().toISOString() });
-    ctx.waitUntil(triggerRender(pending[0], env));
-  } catch (e) { console.error("Queue:", e.message); }
-}
-
-async function triggerRender(job, env, image_urls) {
-  if (!env.RENDER_PIPELINE_URL) {
-    await sbPatch(env, "jobs?id=eq." + job.id,
-      { status: "failed", error: "RENDER_PIPELINE_URL not set",
-        updated_at: new Date().toISOString() });
-    return;
-  }
-  const renderUrl = env.RENDER_PIPELINE_URL.trim().replace(/\/$/, "");
-  try {
-    const body = {
-      job_id: job.id, topic: job.topic,
-      script_package: job.script_package,
-      webhook_url: (env.WORKER_URL || "").trim().replace(/\/$/, "") + "/webhook"
-    };
-    if (image_urls && image_urls.length >= 3) {
-      body.image_urls = image_urls;
-    }
-    const r = await fetch(renderUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000)
-    });
-    if (!r.ok) throw new Error(r.status + ": " + (await r.text()).slice(0, 100));
-  } catch (e) {
-    console.error("Render trigger:", e.message);
-    await sbPatch(env, "jobs?id=eq." + job.id,
-      { status: "failed", error: e.message,
-        updated_at: new Date().toISOString() });
-  }
-}
-
-// ── ANALYTICS ─────────────────────────────────────────────────
-async function createAnalyticsRecord(job_id, youtube_id, env) {
-  try {
-    await sbInsert(env, "analytics", {
-      video_id: job_id, youtube_views: 0, youtube_likes: 0,
-      comment_count: 0, score: 0,
-      created_at: new Date().toISOString()
-    });
-  } catch (e) {}
-}
-
-async function syncYouTubeAnalytics(env) {
-  if (!env.YOUTUBE_CLIENT_ID) return;
-  try {
-    const jobs = (await sbGet(env,
-      "jobs?status=eq.complete&youtube_id=not.is.null" +
-      "&order=created_at.desc&limit=50"))
-      .filter(j => j.youtube_id && j.youtube_id !== "TEST_MODE");
-    if (!jobs.length) return;
-    const tr = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id:     env.YOUTUBE_CLIENT_ID,
-        client_secret: env.YOUTUBE_CLIENT_SECRET,
-        refresh_token: env.YOUTUBE_REFRESH_TOKEN,
-        grant_type:    "refresh_token"
-      })
-    });
-    if (!tr.ok) return;
-    const token = (await tr.json()).access_token;
-    for (let i = 0; i < jobs.length; i += 50) {
-      const batch = jobs.slice(i, i + 50);
-      const res = await fetch(
-        "https://www.googleapis.com/youtube/v3/videos?part=statistics&id=" +
-        batch.map(j => j.youtube_id).join(",") + "&access_token=" + token
-      );
-      if (!res.ok) continue;
-      for (const item of (await res.json()).items || []) {
-        const s = item.statistics || {};
-        const views    = parseInt(s.viewCount    || 0);
-        const likes    = parseInt(s.likeCount    || 0);
-        const comments = parseInt(s.commentCount || 0);
-        const score    = views + likes * 50 + comments * 30;
-        const job = batch.find(j => j.youtube_id === item.id);
-        if (!job) continue;
-        const ex = await sbGet(env,
-          "analytics?video_id=eq." + job.id);
-        if (ex.length > 0)
-          await sbPatch(env, "analytics?video_id=eq." + job.id,
-            { youtube_views: views, youtube_likes: likes,
-              comment_count: comments, score,
-              updated_at: new Date().toISOString() });
-        else
-          await sbInsert(env, "analytics", {
-            video_id: job.id, youtube_views: views, youtube_likes: likes,
-            comment_count: comments, score,
-            created_at: new Date().toISOString()
-          });
-      }
-    }
-  } catch (e) { console.error("Analytics sync:", e.message); }
-}
-
-// ============================================================
-// DASHBOARD HTML
-// ============================================================
-
-// buildDashboard removed — dashboard is now static files
+async function callCouncil(env,topic,source,category){if(!env.TOPIC_COUNCIL_URL)throw new Error("TOPIC_COUNCIL_URL not set");const r=await fetch(env.TOPIC_COUNCIL_URL+"/full-pipeline",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({topic,source,category})});if(!r.ok)throw new Error("Council returned "+r.status);return r.json();}
+async function triggerReplenish(env,target,categories){if(!env.TOPIC_COUNCIL_URL)return;try{await fetch(env.TOPIC_COUNCIL_URL+"/replenish",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({target,categories:categories||ALL_CATS})});}catch(e){console.error("Replenish:",e.message);}}
+async function createJob(t,env){return await sbInsert(env,"jobs",{topic:t.topic,cluster:t.category||"AI",status:"pending",script_package:t.script_package||null,council_score:t.council_score||0,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});}
+async function processQueue(env,ctx){const ago=new Date(Date.now()-15*60000).toISOString();try{for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=lt.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"pending",retries:(j.retries||0)+1,updated_at:new Date().toISOString()});for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=gte.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"max_retries_exceeded",updated_at:new Date().toISOString()});const pending=await sbGet(env,"jobs?status=eq.pending&order=created_at.asc&limit=1");if(!pending.length)return;await sbPatch(env,"jobs?id=eq."+pending[0].id,{status:"processing",started_at:new Date().toISOString(),updated_at:new Date().toISOString()});ctx.waitUntil(triggerRender(pending[0],env));}catch(e){console.error("Queue:",e.message);}}
+async function triggerRender(job,env,image_urls){if(!env.RENDER_PIPELINE_URL){await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:"RENDER_PIPELINE_URL not set",updated_at:new Date().toISOString()});return;}const renderUrl=env.RENDER_PIPELINE_URL.trim().replace(/\/$/,"");try{const body={job_id:job.id,topic:job.topic,script_package:job.script_package,webhook_url:(env.WORKER_URL||"").trim().replace(/\/$/,"")+"/webhook"};if(image_urls&&image_urls.length>=3)body.image_urls=image_urls;const r=await fetch(renderUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});if(!r.ok)throw new Error(r.status+": "+(await r.text()).slice(0,100));}catch(e){console.error("Render trigger:",e.message);await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:e.message,updated_at:new Date().toISOString()});}}
+async function createAnalyticsRecord(job_id,youtube_id,env){try{await sbInsert(env,"analytics",{video_id:job_id,youtube_views:0,youtube_likes:0,comment_count:0,score:0,created_at:new Date().toISOString()});}catch(e){}}
+async function syncYouTubeAnalytics(env){if(!env.YOUTUBE_CLIENT_ID)return;try{const jobs=(await sbGet(env,"jobs?status=eq.complete&youtube_id=not.is.null&order=created_at.desc&limit=50")).filter(j=>j.youtube_id&&j.youtube_id!=="TEST_MODE");if(!jobs.length)return;const tr=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.YOUTUBE_CLIENT_ID,client_secret:env.YOUTUBE_CLIENT_SECRET,refresh_token:env.YOUTUBE_REFRESH_TOKEN,grant_type:"refresh_token"})});if(!tr.ok)return;const token=(await tr.json()).access_token;for(let i=0;i<jobs.length;i+=50){const batch=jobs.slice(i,i+50);const res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+batch.map(j=>j.youtube_id).join(",")+"&access_token="+token);if(!res.ok)continue;for(const item of(await res.json()).items||[]){const s=item.statistics||{};const views=parseInt(s.viewCount||0),likes=parseInt(s.likeCount||0),coms=parseInt(s.commentCount||0),score=views+likes*50+coms*30;const job=batch.find(j=>j.youtube_id===item.id);if(!job)continue;const ex=await sbGet(env,"analytics?video_id=eq."+job.id);if(ex.length>0)await sbPatch(env,"analytics?video_id=eq."+job.id,{youtube_views:views,youtube_likes:likes,comment_count:coms,score,updated_at:new Date().toISOString()});else await sbInsert(env,"analytics",{video_id:job.id,youtube_views:views,youtube_likes:likes,comment_count:coms,score,created_at:new Date().toISOString()});}}}catch(e){console.error("Analytics sync:",e.message);}}
+async function _updateLongformStatus(env,jobId){try{const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&select=status");if(!segs.length)return;const allReady=segs.every(s=>s.status==="ready");const allHaveMedia=segs.every(s=>["has_media","has_media_no_script","ready","generating_voice","generating_images"].includes(s.status));const newStatus=allReady?"ready_to_render":allHaveMedia?"media_collecting":"scripting";await sbPatch(env,"longform_jobs?id=eq."+jobId,{status:newStatus,updated_at:new Date().toISOString()});}catch(e){console.error("_updateLongformStatus:",e.message);}}

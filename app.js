@@ -1068,6 +1068,21 @@ function applySettingsUI(s) {
   });
   var sched = VPD_SCHED[s.videos_per_day] || [];
   setText('vpd-times', 'Schedule: ' + (sched.join(' \u2022 ') || '-'));
+
+  // Engine toggles
+  var imgMode = s.image_engine || 'inbuilt';
+  var voxMode = s.voice_engine || 'inbuilt';
+  var ieIn  = document.getElementById('ie-inbuilt-btn');
+  var ieEx  = document.getElementById('ie-external-btn');
+  var veIn  = document.getElementById('ve-inbuilt-btn');
+  var veEx  = document.getElementById('ve-external-btn');
+  if (ieIn) ieIn.className = 'btn btn-sm ' + (imgMode === 'inbuilt' ? 'btn-primary' : 'btn-ghost');
+  if (ieEx) ieEx.className = 'btn btn-ghost btn-sm ' + (imgMode === 'external' ? 'btn-primary' : 'btn-ghost');
+  if (veIn) veIn.className = 'btn btn-sm ' + (voxMode === 'inbuilt' ? 'btn-primary' : 'btn-ghost');
+  if (veEx) veEx.className = 'btn btn-ghost btn-sm ' + (voxMode === 'external' ? 'btn-primary' : 'btn-ghost');
+
+  // Update longform precursor engine labels
+  updateLfPrecursor();
 }
 
 function setToggle(togId, knobId, on, onColor, offColor) {
@@ -1129,6 +1144,25 @@ async function setVPD(n) {
       body: JSON.stringify({ videos_per_day: n })
     });
   } catch(e) { showDebug('debug-settings', '<span class="dr">' + e.message + '</span>'); }
+}
+
+async function setEngineMode(type, mode) {
+  // type = 'image' | 'voice', mode = 'inbuilt' | 'external'
+  var key = type + '_engine';
+  currentSettings[key] = mode;
+  applySettingsUI(currentSettings);
+  try {
+    var body = {};
+    body[key] = mode;
+    await fetch(API_BASE + '/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    showDebug('debug-settings',
+      '<span class="dg">&#10003; ' + type + ' engine → ' + mode + '</span>');
+  } catch(e) {
+    showDebug('debug-settings', '<span class="dr">' + e.message + '</span>');
+  }
 }
 
 // ── ACTION BUTTONS ──────────────────────────────────────────────
@@ -1427,24 +1461,45 @@ function publishScheduled() {
 // ── IMAGE LIBRARY (Create from Library) ─────────────────────────
 var libTopicFilter = 'all';
 
+// ── LIBRARY STATE ───────────────────────────────────────────────
+var _libCluster = 'all';
+var _libJobType = 'all';
+
+function setLibCluster(cluster, el) {
+  _libCluster = cluster;
+  document.querySelectorAll('[id^="libtab-"]').forEach(function(t) {
+    t.classList.remove('active');
+  });
+  if (el) el.classList.add('active');
+  loadLibrary();
+}
+
+function setLibJobType(jt, el) {
+  _libJobType = jt;
+  document.querySelectorAll('[id^="libjt-"]').forEach(function(t) {
+    t.classList.remove('active');
+  });
+  if (el) el.classList.add('active');
+  loadLibrary();
+}
+
 async function loadLibrary() {
-  var grid1 = document.getElementById('lib-grid');
   var grid2 = document.getElementById('lib-grid2');
-  var loading = '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--muted);font-size:.78rem">\u23F3 Loading...</div>';
-  if (grid1) grid1.innerHTML = loading;
-  if (grid2) grid2.innerHTML = loading;
+  if (grid2) grid2.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--muted);font-family:var(--mono);font-size:.75rem">&#9203; Loading...</div>';
+
   try {
-    var r = await fetch(API_BASE + '/image-library');
+    var params = [];
+    if (_libCluster !== 'all') params.push('cluster=' + _libCluster);
+    if (_libJobType !== 'all') params.push('job_type=' + _libJobType);
+    var qs = params.length ? '?' + params.join('&') : '';
+
+    var r = await fetch(API_BASE + '/image-library' + qs);
     var d = await r.json();
     allImages = Array.isArray(d.images) ? d.images : [];
-    setText('lib-count', allImages.length);
     setText('lib-count2', allImages.length);
-    buildLibFilter();
     renderLibrary();
   } catch(e) {
-    var err = '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--red)">\u26A0 Failed to load: ' + e.message + '</div>';
-    if (grid1) grid1.innerHTML = err;
-    if (grid2) grid2.innerHTML = err;
+    if (grid2) grid2.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--red)">&#9888; ' + e.message + '</div>';
   }
 }
 
@@ -1473,32 +1528,37 @@ function filterLib(topic, el) {
 }
 
 function renderLibrary() {
-  var imgs = libTopicFilter === 'all' ? allImages : allImages.filter(function(i) { return i.topic === libTopicFilter; });
-  var html = imgs.length ? imgs.map(function(img) {
-    var sel1 = selectedImages.indexOf(img.url) > -1;
-    var sel2 = libSelectedImages2.indexOf(img.url) > -1;
-    var idx1 = selectedImages.indexOf(img.url);
-    var idx2 = libSelectedImages2.indexOf(img.url);
-    return '<div class="lib-img-card ' + (sel1 ? 'selected' : '') + '" data-imgurl="' + img.url.replace(/"/g, '&quot;') + '" onclick="toggleLib1(this)" id="libcard1-' + img.url.slice(-10) + '">'
-      + '<img src="' + img.url + '" loading="lazy" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" onerror="this.parentElement.style.display=\'none\'">'
-      + (sel1 ? '<div class="lib-num">' + (idx1 + 1) + '</div>' : '')
-      + '<div class="lib-topic">' + img.topic.slice(0, 28) + '</div>'
+  var html2 = allImages.length ? allImages.map(function(img) {
+    var sel2  = libSelectedImages2.indexOf(img.url) > -1;
+    var idx2  = libSelectedImages2.indexOf(img.url);
+    var cat   = CATS[img.cluster] || null;
+    var engBadge = img.engine && img.engine !== 'unknown'
+      ? '<div style="position:absolute;top:4px;left:4px;font-family:var(--mono);font-size:.52rem;'
+        + 'background:rgba(0,0,0,.7);color:' + (img.engine.includes('FLUX') ? 'var(--accent)' : 'var(--muted)') + ';'
+        + 'padding:1px 4px;border-radius:3px">' + img.engine.replace('FLUX-A10G','FLUX').slice(0,10) + '</div>'
+      : '';
+    var jtBadge = img.job_type === 'longform'
+      ? '<div style="position:absolute;top:4px;right:4px;font-family:var(--mono);font-size:.52rem;'
+        + 'background:rgba(179,136,255,.3);color:var(--purple);padding:1px 4px;border-radius:3px">LF</div>'
+      : '';
+    var clBadge = cat
+      ? '<div style="font-size:.55rem;color:' + cat.color + ';padding:1px 0">' + cat.emoji + ' ' + img.cluster + '</div>'
+      : '';
+    return '<div class="lib-img-card ' + (sel2 ? 'selected' : '') + '" '
+      + 'data-imgurl="' + img.url.replace(/"/g,'&quot;') + '" onclick="toggleLib2(this)" '
+      + 'style="position:relative">'
+      + '<img src="' + img.url + '" loading="lazy" '
+        + 'style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" '
+        + 'onerror="this.parentElement.style.display=\'none\'">'
+      + engBadge + jtBadge
+      + (sel2 ? '<div class="lib-num">' + (idx2+1) + '</div>' : '')
+      + '<div class="lib-topic">' + clBadge + esc(img.topic.slice(0,24)) + '</div>'
       + '</div>';
-  }).join('') : '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--muted)">\uD83D\uDDBC No images yet.</div>';
+  }).join('')
+  : '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--muted);font-family:var(--mono);font-size:.75rem">'
+    + 'No images yet — run Full Auto to start building the library.</div>';
 
-  var html2 = imgs.length ? imgs.map(function(img) {
-    var sel2 = libSelectedImages2.indexOf(img.url) > -1;
-    var idx2 = libSelectedImages2.indexOf(img.url);
-    return '<div class="lib-img-card ' + (sel2 ? 'selected' : '') + '" data-imgurl="' + img.url.replace(/"/g, '&quot;') + '" onclick="toggleLib2(this)">'
-      + '<img src="' + img.url + '" loading="lazy" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" onerror="this.parentElement.style.display=\'none\'">'
-      + (sel2 ? '<div class="lib-num">' + (idx2 + 1) + '</div>' : '')
-      + '<div class="lib-topic">' + img.topic.slice(0, 28) + '</div>'
-      + '</div>';
-  }).join('') : '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--muted)">\uD83D\uDDBC No images yet.</div>';
-
-  var g1 = document.getElementById('lib-grid');
   var g2 = document.getElementById('lib-grid2');
-  if (g1) g1.innerHTML = html;
   if (g2) g2.innerHTML = html2;
 }
 
@@ -1871,12 +1931,40 @@ var lfCurrentJobId = null;
 var lfCurrentSegIdx= null;
 var lfJobData      = null;
 
+// Long-form image count table per duration
+var LF_IMG_COUNT = {
+  3:  { Hook:1, Context:1, 'Deep Dive':2, 'What It Means':1, Challenge:1, Payoff:1, total:7,  render:8  },
+  7:  { Hook:1, Context:2, 'Deep Dive':3, 'What It Means':2, Challenge:1, Payoff:1, total:10, render:12 },
+  10: { Hook:1, Context:2, 'Deep Dive':4, 'What It Means':2, Challenge:2, Payoff:1, total:12, render:16 },
+  12: { Hook:1, Context:3, 'Deep Dive':5, 'What It Means':3, Challenge:2, Payoff:1, total:15, render:20 },
+};
+
 function setLfDur(mins, btn) {
   lfDurMins = mins;
   ['3','7','10','12'].forEach(function(d) {
     var b = document.getElementById('lf-dur-' + d);
     if (b) b.className = 'btn' + (d == mins ? ' btn-primary' : '');
   });
+  updateLfPrecursor();
+}
+
+function updateLfPrecursor() {
+  var data      = LF_IMG_COUNT[lfDurMins] || LF_IMG_COUNT[7];
+  var imgEng    = (currentSettings && currentSettings.image_engine) || 'inbuilt';
+  var voxEng    = (currentSettings && currentSettings.voice_engine) || 'inbuilt';
+  var imgLabel  = imgEng === 'inbuilt' ? '&#9889; FLUX &mdash; free' : '&#9729; External APIs';
+  var voxLabel  = voxEng === 'inbuilt' ? '&#9889; Chatterbox &mdash; free' : '&#9729; ElevenLabs';
+  var imgColor  = imgEng === 'inbuilt' ? 'var(--green)' : 'var(--yellow)';
+  var voxColor  = voxEng === 'inbuilt' ? 'var(--green)' : 'var(--yellow)';
+
+  setText('lf-pre-imgs',   data.total);
+  setText('lf-pre-voice',  6);  // always 6 segments
+  setText('lf-pre-render', '~' + data.render + ' min');
+
+  var imgEl = document.getElementById('lf-pre-engine-img');
+  var voxEl = document.getElementById('lf-pre-engine-voice');
+  if (imgEl) { imgEl.innerHTML = imgLabel; imgEl.style.color = imgColor; }
+  if (voxEl) { voxEl.innerHTML = voxLabel; voxEl.style.color = voxColor; }
 }
 
 async function createLongformJob() {
