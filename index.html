@@ -414,6 +414,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     <button class="nav-btn"        onclick="showPage('calendar',this)">&#128197; Calendar</button>
     <button class="nav-btn"        onclick="showPage('analytics',this)">Analytics</button>
     <button class="nav-btn"        onclick="showPage('topics',this)">Topics</button>
+    <button class="nav-btn"        onclick="showPage('longform',this)">&#127916; Long-form</button>
     <button class="nav-btn"        onclick="showPage('settings',this)">&#9881; Settings</button>
   </nav>
   <div class="topbar-right">
@@ -931,6 +932,101 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
         </div>
         <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);
           text-align:center;margin-top:4px" id="pub-status"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     LONG-FORM PAGE
+════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-longform">
+
+  <!-- CREATE NEW LONG-FORM -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
+    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
+        <input id="lf-topic" type="text" placeholder="e.g. ISRO space station India 2035"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
+        <select id="lf-cluster"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+          <option value="Space">&#128640; Space &amp; Defence</option>
+          <option value="AI">&#129302; AI &amp; ML</option>
+          <option value="DeepTech">&#128300; Deep Tech</option>
+          <option value="GreenTech">&#9889; Green &amp; Energy</option>
+          <option value="Gadgets">&#128241; Gadgets &amp; Tech</option>
+          <option value="Startups">&#128161; Startups</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">Target Duration</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="lf-dur-3" onclick="setLfDur(3,this)" style="flex:1;font-size:.75rem">3 min</button>
+        <button class="btn btn-primary" id="lf-dur-7" onclick="setLfDur(7,this)" style="flex:1;font-size:.75rem">7 min ✓</button>
+        <button class="btn" id="lf-dur-10" onclick="setLfDur(10,this)" style="flex:1;font-size:.75rem">10 min</button>
+        <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
+    <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
+  </div>
+
+  <!-- JOBS LIST -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Long-form Jobs</div>
+    <button class="btn" style="font-size:.72rem;padding:4px 10px" onclick="loadLongformJobs()">&#8635; Refresh</button>
+  </div>
+  <div id="lf-jobs-list">
+    <div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Loading...</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     LONG-FORM STUDIO OVERLAY
+════════════════════════════════════════════════════════════ -->
+<div id="lf-studio" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:200;overflow:auto">
+  <div style="max-width:1100px;margin:0 auto;padding:16px">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <button class="btn" onclick="closeLfStudio()" style="font-size:.8rem">&#8592; Back</button>
+      <div style="flex:1">
+        <div id="lf-studio-topic" style="font-size:1rem;font-weight:700">Loading...</div>
+        <div id="lf-studio-status" style="font-family:var(--mono);font-size:.65rem;color:var(--muted)"></div>
+      </div>
+      <button class="btn btn-primary" id="lf-render-btn" onclick="triggerLfRender()" disabled style="font-size:.8rem">
+        &#128640; Render &amp; Publish
+      </button>
+    </div>
+
+    <!-- Two-column layout -->
+    <div style="display:grid;grid-template-columns:220px 1fr;gap:16px">
+
+      <!-- Segment Timeline -->
+      <div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Segments</div>
+        <div id="lf-seg-timeline"></div>
+        <div style="margin-top:12px;padding:10px;background:var(--surface);border-radius:8px;font-family:var(--mono);font-size:.65rem;color:var(--muted)">
+          <div style="margin-bottom:4px"><span style="color:#888">&#9899;</span> Empty</div>
+          <div style="margin-bottom:4px"><span style="color:var(--yellow)">&#9899;</span> Has script</div>
+          <div style="margin-bottom:4px"><span style="color:#4fc3f7">&#9899;</span> Has media</div>
+          <div><span style="color:#69f0ae">&#9899;</span> Ready</div>
+        </div>
+      </div>
+
+      <!-- Segment Editor -->
+      <div id="lf-seg-editor" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+        <div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">
+          Select a segment from the timeline to edit
+        </div>
       </div>
     </div>
   </div>
