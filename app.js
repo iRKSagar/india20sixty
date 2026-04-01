@@ -458,6 +458,8 @@ function setManualTopicSrc(src) {
   if (src === 'queue') loadManualQueueTopics(manualState.manualCat);
 }
 
+var _manualTopicsCache = [];
+
 async function loadManualQueueTopics(cat, el) {
   manualState.manualCat = cat;
   if (el) {
@@ -475,15 +477,16 @@ async function loadManualQueueTopics(cat, el) {
     var topics = allTopics.filter(function(t) {
       return !t.used && t.council_score >= 70 && (!cat || t.cluster === cat);
     }).sort(function(a,b) { return b.council_score - a.council_score; }).slice(0,20);
+    _manualTopicsCache = topics;
     if (!topics.length) {
       container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">No topics in queue. Replenish first.</div>';
       return;
     }
-    container.innerHTML = topics.map(function(t) {
+    container.innerHTML = topics.map(function(t, i) {
       var cat2 = CATS[t.cluster] || null;
       var hasScript = !!(t.script_package && t.script_package.text);
-      return '<div onclick="selectManualTopic(\'' + t.id + '\',\'' + esc(t.topic).replace(/'/g,"\\'") + '\',\'' + (t.cluster||'AI') + '\',' + JSON.stringify(t.council_score) + ',' + JSON.stringify(t.script_package||null) + ')" style="'
-        + 'padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color .15s"'
+      return '<div onclick="selectManualTopicByIdx(' + i + ')" style="'
+        + 'padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color .15s;margin-bottom:4px"'
         + ' onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">'
         + '<div style="font-size:.78rem;font-weight:600;margin-bottom:3px">' + esc(t.topic) + '</div>'
         + '<div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.6rem;color:var(--muted)">'
@@ -496,6 +499,12 @@ async function loadManualQueueTopics(cat, el) {
   } catch(e) {
     container.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:8px">Error: ' + e.message + '</div>';
   }
+}
+
+function selectManualTopicByIdx(idx) {
+  var t = _manualTopicsCache[idx];
+  if (!t) return;
+  selectManualTopic(t.id, t.topic, t.cluster, t.council_score, t.script_package);
 }
 
 function selectManualTopic(id, topic, cluster, score, scriptPkg) {
