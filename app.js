@@ -5,7 +5,7 @@
 // ============================================================
 
 var API_BASE = 'https://india20sixty.tommyhillary1.workers.dev';
-var R2_BASE_URL = 'https://pub-e5ed97c9fd6a4c3f80fffa5e84da8fef.r2.dev';
+var R2_BASE_URL = '';
 
 // ── CONSTANTS ─────────────────────────────────────────────────
 var CATS = {
@@ -63,6 +63,15 @@ var audioCtx = null, analyserNode = null, recTimer = null, recSecs = 0;
 var selectedMusic = null, playbackAudio = null, isRecording = false;
 
 // ── UTILS ──────────────────────────────────────────────────────
+function esc(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
 function ago(iso) {
   var s = Math.floor((Date.now() - new Date(iso)) / 1000);
   if (s < 60) return s + 's';
