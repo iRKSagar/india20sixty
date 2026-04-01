@@ -162,7 +162,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 .hd-ok{background:var(--green)}.hd-warn{background:var(--yellow)}.hd-err{background:var(--red)}
 
 /* ── CREATE PAGE ─────────────────────────────────────────── */
-.create-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px}
+.create-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
 .create-tab{background:var(--surface);border:1.5px solid var(--border);border-radius:12px;
   padding:16px;cursor:pointer;transition:all .18s;text-align:center}
 .create-tab:hover{border-color:var(--border2)}
@@ -404,17 +404,16 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     <div class="logo-sub">Mission Control v4</div>
   </div>
   <nav class="topbar-nav">
-    <button class="nav-btn active" onclick="showPage('home',this)">Home</button>
+    <button class="nav-btn active" onclick="showPage('home',this)">&#127968; Home</button>
     <button class="nav-btn"        onclick="showPage('create',this)">&#9654; Create</button>
     <button class="nav-btn"        onclick="showPage('queue',this)">
-      Queue
+      &#128228; Queue
       <span class="nav-badge yellow" id="queue-badge">0</span>
     </button>
     <button class="nav-btn"        onclick="showPage('library',this)">&#128444; Library</button>
+    <button class="nav-btn"        onclick="showPage('topics',this)">&#128270; Topics</button>
     <button class="nav-btn"        onclick="showPage('calendar',this)">&#128197; Calendar</button>
-    <button class="nav-btn"        onclick="showPage('analytics',this)">Analytics</button>
-    <button class="nav-btn"        onclick="showPage('topics',this)">Topics</button>
-    <button class="nav-btn"        onclick="showPage('longform',this)">&#127916; Long-form</button>
+    <button class="nav-btn"        onclick="showPage('analytics',this)">&#128200; Analytics</button>
     <button class="nav-btn"        onclick="showPage('settings',this)">&#9881; Settings</button>
   </nav>
   <div class="topbar-right">
@@ -432,23 +431,23 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 <div class="page active" id="page-home">
   <div class="stats-row">
     <div class="stat s1"><div class="stat-val" id="s-total">-</div><div class="stat-lbl">Total Jobs</div></div>
-    <div class="stat s2"><div class="stat-val" id="s-running">-</div><div class="stat-lbl">Running</div></div>
-    <div class="stat s3"><div class="stat-val" id="s-complete">-</div><div class="stat-lbl">Complete</div></div>
-    <div class="stat s4"><div class="stat-val" id="s-failed">-</div><div class="stat-lbl">Failed</div></div>
+    <div class="stat s2"><div class="stat-val" id="s-running">-</div><div class="stat-lbl">Running Now</div></div>
+    <div class="stat s3"><div class="stat-val" id="s-complete">-</div><div class="stat-lbl">Complete Today</div></div>
     <div class="stat s5"><div class="stat-val" id="s-topics">-</div><div class="stat-lbl">Topics Ready</div></div>
+    <div class="stat s5" style="--s5c:var(--accent)"><div class="stat-val" id="s-space" style="color:var(--accent)">-</div><div class="stat-lbl">&#128640; Space Ready</div></div>
   </div>
   <div class="two-col">
     <div>
       <div class="panel">
         <div class="panel-head">
           <span class="panel-title">Live Jobs</span>
-          <span class="panel-sub" id="last-ref"></span>
-        </div>
-        <div class="tabs">
-          <button class="tab active" data-tab="all"      onclick="switchTab('all')">All <span class="tc tc-blue" id="tc-all">0</span></button>
-          <button class="tab"        data-tab="running"  onclick="switchTab('running')">Running <span class="tc tc-yellow" id="tc-run">0</span></button>
-          <button class="tab"        data-tab="complete" onclick="switchTab('complete')">Complete <span class="tc tc-green" id="tc-ok">0</span></button>
-          <button class="tab"        data-tab="failed"   onclick="switchTab('failed')">Failed <span class="tc tc-red" id="tc-fail">0</span></button>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span id="failed-badge" onclick="openLogs()" style="display:none;cursor:pointer;
+              font-family:var(--mono);font-size:.65rem;color:var(--red);
+              background:rgba(255,82,82,.1);border:1px solid rgba(255,82,82,.2);
+              padding:2px 8px;border-radius:10px">&#9679; 0 failed</span>
+            <span class="panel-sub" id="last-ref"></span>
+          </div>
         </div>
         <div id="job-list"></div>
       </div>
@@ -476,7 +475,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 <div class="page" id="page-create">
   <div id="debug-create"></div>
   <div class="create-tabs">
-    <div class="create-tab active" id="ctab-auto"    onclick="switchCreateTab('auto',this)">
+    <div class="create-tab active" id="ctab-auto"     onclick="switchCreateTab('auto',this)">
       <div class="create-tab-icon">&#9889;</div>
       <div class="create-tab-title">Full Auto</div>
       <div class="create-tab-desc">Pick from queue, pipeline handles everything end to end</div>
@@ -490,6 +489,11 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
       <div class="create-tab-icon">&#9999;</div>
       <div class="create-tab-title">Manual</div>
       <div class="create-tab-desc">Write your own script, download video from Leonardo web, upload here</div>
+    </div>
+    <div class="create-tab" id="ctab-longform" onclick="switchCreateTab('longform',this)">
+      <div class="create-tab-icon">&#127916;</div>
+      <div class="create-tab-title">Long-form</div>
+      <div class="create-tab-desc">3–12 minute videos with chapters, mixed media, per-segment voice</div>
     </div>
   </div>
 
@@ -588,6 +592,54 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- cpanel-longform ─────────────────────────────────────────── -->
+<div class="create-panel" id="cpanel-longform">
+  <!-- Create form -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
+    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
+        <input id="lf-topic" type="text" placeholder="e.g. ISRO space station India 2035"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
+        <select id="lf-cluster"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+          <option value="Space">&#128640; Space &amp; Defence</option>
+          <option value="AI">&#129302; AI &amp; ML</option>
+          <option value="DeepTech">&#128300; Deep Tech</option>
+          <option value="GreenTech">&#9889; Green &amp; Energy</option>
+          <option value="Gadgets">&#128241; Gadgets &amp; Tech</option>
+          <option value="Startups">&#128161; Startups</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">Target Duration</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="lf-dur-3"  onclick="setLfDur(3,this)"  style="flex:1;font-size:.75rem">3 min</button>
+        <button class="btn btn-primary" id="lf-dur-7"  onclick="setLfDur(7,this)"  style="flex:1;font-size:.75rem">7 min &#10003;</button>
+        <button class="btn" id="lf-dur-10" onclick="setLfDur(10,this)" style="flex:1;font-size:.75rem">10 min</button>
+        <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
+    <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
+  </div>
+  <!-- Jobs list -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Long-form Jobs</div>
+    <button class="btn" style="font-size:.72rem;padding:4px 10px" onclick="loadLongformJobs()">&#8635; Refresh</button>
+  </div>
+  <div id="lf-jobs-list">
+    <div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Click a duration above to create your first long-form video.</div>
   </div>
 </div>
 
@@ -938,54 +990,22 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 </div>
 
 <!-- ══════════════════════════════════════════════════════════
-     LONG-FORM PAGE
+     LOGS OVERLAY (failed + history — level deep)
 ════════════════════════════════════════════════════════════ -->
-<div class="page" id="page-longform">
-
-  <!-- CREATE NEW LONG-FORM -->
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
-    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-      <div>
-        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
-        <input id="lf-topic" type="text" placeholder="e.g. ISRO space station India 2035"
-          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
-                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
-      </div>
-      <div>
-        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
-        <select id="lf-cluster"
-          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
-                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
-          <option value="Space">&#128640; Space &amp; Defence</option>
-          <option value="AI">&#129302; AI &amp; ML</option>
-          <option value="DeepTech">&#128300; Deep Tech</option>
-          <option value="GreenTech">&#9889; Green &amp; Energy</option>
-          <option value="Gadgets">&#128241; Gadgets &amp; Tech</option>
-          <option value="Startups">&#128161; Startups</option>
-        </select>
-      </div>
+<div id="logs-overlay" style="display:none;position:fixed;inset:0;background:rgba(8,12,20,.97);z-index:300;overflow:auto">
+  <div style="max-width:900px;margin:0 auto;padding:20px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <button class="btn" onclick="closeLogs()">&#8592; Back</button>
+      <div style="font-size:.95rem;font-weight:700">Job Logs</div>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="loadLogs()">&#8635; Refresh</button>
     </div>
-    <div style="margin-bottom:12px">
-      <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">Target Duration</div>
-      <div style="display:flex;gap:8px">
-        <button class="btn" id="lf-dur-3" onclick="setLfDur(3,this)" style="flex:1;font-size:.75rem">3 min</button>
-        <button class="btn btn-primary" id="lf-dur-7" onclick="setLfDur(7,this)" style="flex:1;font-size:.75rem">7 min ✓</button>
-        <button class="btn" id="lf-dur-10" onclick="setLfDur(10,this)" style="flex:1;font-size:.75rem">10 min</button>
-        <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
-      </div>
+    <div style="display:flex;gap:4px;margin-bottom:14px">
+      <button class="tab active" id="ltab-failed"  onclick="switchLogsTab('failed')">&#9888; Failed</button>
+      <button class="tab"        id="ltab-history" onclick="switchLogsTab('history')">&#10003; History</button>
     </div>
-    <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
-    <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
-  </div>
-
-  <!-- JOBS LIST -->
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Long-form Jobs</div>
-    <button class="btn" style="font-size:.72rem;padding:4px 10px" onclick="loadLongformJobs()">&#8635; Refresh</button>
-  </div>
-  <div id="lf-jobs-list">
-    <div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Loading...</div>
+    <div id="logs-list">
+      <div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Loading...</div>
+    </div>
   </div>
 </div>
 
