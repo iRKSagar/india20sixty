@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>India20Sixty — Mission Control</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#080c14;--surface:#0d1320;--surface2:#111827;--surface3:#161f30;
+  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.14);
+  --text:#e8eaf0;--muted:#5a6278;--muted2:#3a4258;
+  --accent:#00e5ff;--accent2:#ff6b35;
+  --green:#00e676;--yellow:#ffd740;--red:#ff5252;--purple:#b388ff;--pink:#ff6b9d;
+  --font:'Syne',sans-serif;--mono:'DM Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--font);display:flex;flex-direction:column}
+body::before{content:'';position:fixed;inset:0;z-index:0;
+  background-image:linear-gradient(rgba(0,229,255,0.015) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,229,255,0.015) 1px,transparent 1px);
+  background-size:48px 48px;pointer-events:none}
+
+/* ── TOPBAR ───────────────────────────────────────────────── */
+.topbar{position:relative;z-index:10;display:flex;align-items:center;
+  justify-content:space-between;padding:0 20px;height:52px;
+  border-bottom:1px solid var(--border);background:rgba(8,12,20,0.97);
+  backdrop-filter:blur(12px);flex-shrink:0}
+.logo{display:flex;flex-direction:column;gap:1px}
+.logo-name{font-size:1.05rem;font-weight:800;letter-spacing:-0.02em}
+.logo-name span{color:var(--accent)}
+.logo-sub{font-family:var(--mono);font-size:.55rem;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.topbar-nav{display:flex;align-items:center;gap:2px}
+.nav-btn{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:7px;
+  border:none;background:transparent;font-family:var(--font);font-size:.78rem;
+  font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s;white-space:nowrap}
+.nav-btn:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.nav-btn.active{color:var(--text);background:var(--surface2);border:1px solid var(--border2)}
+.nav-badge{font-family:var(--mono);font-size:.58rem;padding:1px 5px;border-radius:10px;
+  background:rgba(0,229,255,.15);color:var(--accent);margin-left:2px}
+.nav-badge.yellow{background:rgba(255,215,64,.15);color:var(--yellow)}
+.nav-badge.purple{background:rgba(179,136,255,.15);color:var(--purple)}
+.topbar-right{display:flex;align-items:center;gap:10px}
+.live-row{display:flex;align-items:center;gap:5px}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 6px var(--green);animation:blink 2s infinite}
+.live-lbl{font-family:var(--mono);font-size:.62rem;color:var(--green)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── PAGES ────────────────────────────────────────────────── */
+.pages{flex:1;overflow:hidden;position:relative;z-index:1}
+.page{display:none;height:100%;overflow-y:auto;padding:20px}
+.page.active{display:block}
+.page::-webkit-scrollbar{width:3px}
+.page::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+
+/* ── LAYOUT HELPERS ──────────────────────────────────────── */
+.two-col{display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start}
+.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
+
+/* ── STAT CARDS ──────────────────────────────────────────── */
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:13px 15px;position:relative;overflow:hidden}
+.stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:10px 10px 0 0}
+.s1::before{background:var(--accent)}.s2::before{background:var(--yellow)}
+.s3::before{background:var(--green)}.s4::before{background:var(--red)}
+.s5::before{background:var(--purple)}
+.stat-val{font-size:1.8rem;font-weight:800;letter-spacing:-0.04em;line-height:1;margin-bottom:2px}
+.s1 .stat-val{color:var(--accent)}.s2 .stat-val{color:var(--yellow)}
+.s3 .stat-val{color:var(--green)}.s4 .stat-val{color:var(--red)}
+.s5 .stat-val{color:var(--purple)}
+.stat-lbl{font-family:var(--mono);font-size:.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+
+/* ── BUTTONS ─────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:8px 15px;
+  border-radius:8px;border:none;font-family:var(--font);font-size:.78rem;
+  font-weight:600;cursor:pointer;transition:all .18s;white-space:nowrap}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#000}
+.btn-primary:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-1px)}
+.btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
+.btn-ghost:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn-purple{background:rgba(179,136,255,.1);color:var(--purple);border:1px solid rgba(179,136,255,.2)}
+.btn-purple:hover:not(:disabled){background:rgba(179,136,255,.2)}
+.btn-orange{background:rgba(255,107,53,.1);color:var(--accent2);border:1px solid rgba(255,107,53,.2)}
+.btn-orange:hover:not(:disabled){background:rgba(255,107,53,.2)}
+.btn-red{background:rgba(255,82,82,.08);color:var(--red);border:1px solid rgba(255,82,82,.2)}
+.btn-red:hover:not(:disabled){background:rgba(255,82,82,.18)}
+.btn-green{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.2)}
+.btn-green:hover:not(:disabled){background:rgba(0,230,118,.2)}
+.btn-sm{padding:5px 11px;font-size:.7rem}
+
+/* ── PANELS ──────────────────────────────────────────────── */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  overflow:hidden;margin-bottom:14px}
+.panel-head{padding:11px 15px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between}
+.panel-title{font-size:.68rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--muted)}
+.panel-sub{font-family:var(--mono);font-size:.6rem;color:var(--muted)}
+
+/* ── TABS ────────────────────────────────────────────────── */
+.tabs{display:flex;gap:3px;padding:8px 11px;border-bottom:1px solid var(--border);
+  flex-wrap:wrap}
+.tab{display:flex;align-items:center;gap:4px;padding:5px 11px;border-radius:6px;
+  border:1px solid transparent;background:transparent;font-family:var(--font);
+  font-size:.73rem;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s}
+.tab:hover{color:var(--text);background:var(--surface2)}
+.tab.active{color:var(--text);background:var(--surface2);border-color:var(--border2)}
+.tc{font-family:var(--mono);font-size:.58rem;padding:1px 6px;border-radius:20px}
+.tc-blue{background:rgba(0,229,255,.12);color:var(--accent)}
+.tc-yellow{background:rgba(255,215,64,.12);color:var(--yellow)}
+.tc-green{background:rgba(0,230,118,.12);color:var(--green)}
+.tc-red{background:rgba(255,82,82,.12);color:var(--red)}
+.tc-purple{background:rgba(179,136,255,.12);color:var(--purple)}
+
+/* ── BADGES ──────────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;
+  border-radius:5px;font-family:var(--mono);font-size:.6rem;font-weight:500;
+  text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.bdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+.b-pending{background:rgba(255,215,64,.1);color:var(--yellow);border:1px solid rgba(255,215,64,.2)}
+.b-processing,.b-upload{background:rgba(0,229,255,.1);color:var(--accent);border:1px solid rgba(0,229,255,.2)}
+.b-images,.b-voice{background:rgba(179,136,255,.1);color:var(--purple);border:1px solid rgba(179,136,255,.2)}
+.b-render{background:rgba(255,107,53,.1);color:var(--accent2);border:1px solid rgba(255,107,53,.2)}
+.b-complete,.b-test_complete{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.2)}
+.b-staged,.b-mixing,.b-manual_pending{background:rgba(255,215,64,.1);color:var(--yellow);border:1px solid rgba(255,215,64,.2)}
+.b-failed{background:rgba(255,82,82,.1);color:var(--red);border:1px solid rgba(255,82,82,.2)}
+.b-review,.b-cbdp{background:rgba(179,136,255,.1);color:var(--purple);border:1px solid rgba(179,136,255,.2)}
+.b-pending .bdot,.b-processing .bdot,.b-voice .bdot,.b-render .bdot{animation:blink 1.4s infinite}
+.mood-badge{font-family:var(--mono);font-size:.58rem;padding:2px 7px;border-radius:4px;
+  background:rgba(0,229,255,.08);color:var(--accent);border:1px solid rgba(0,229,255,.15)}
+
+/* ── JOB LIST ────────────────────────────────────────────── */
+.job-item{display:grid;grid-template-columns:1fr 110px 160px 68px;
+  gap:10px;padding:10px 15px;border-bottom:1px solid var(--border);
+  align-items:center;transition:background .12s}
+.job-item:hover{background:rgba(255,255,255,.02)}
+.job-item:last-child{border-bottom:none}
+.job-topic{font-size:.8rem;font-weight:600;color:var(--text);line-height:1.3;margin-bottom:2px}
+.job-meta{font-family:var(--mono);font-size:.6rem;color:var(--muted);
+  display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.job-err{color:#ff6b6b;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prog-wrap{display:flex;flex-direction:column;gap:3px}
+.prog-bar{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;border-radius:2px;transition:width .6s}
+.prog-pct{font-family:var(--mono);font-size:.56rem;color:var(--muted)}
+.time-cell{font-family:var(--mono);font-size:.6rem;color:var(--muted);text-align:right}
+.yt-link{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:.6rem}
+.yt-link:hover{color:#fff}
+
+/* ── HEALTH PANEL ────────────────────────────────────────── */
+.health-row{display:flex;align-items:center;justify-content:space-between;
+  padding:9px 14px;border-bottom:1px solid var(--border)}
+.health-row:last-child{border-bottom:none}
+.health-label{font-family:var(--mono);font-size:.65rem;color:var(--muted)}
+.health-val{font-family:var(--mono);font-size:.65rem;font-weight:500}
+.hv-ok{color:var(--green)}.hv-warn{color:var(--yellow)}.hv-err{color:var(--red)}
+.health-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.hd-ok{background:var(--green)}.hd-warn{background:var(--yellow)}.hd-err{background:var(--red)}
+
+/* ── CREATE PAGE ─────────────────────────────────────────── */
+.create-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+.create-tab{background:var(--surface);border:1.5px solid var(--border);border-radius:12px;
+  padding:16px;cursor:pointer;transition:all .18s;text-align:center}
+.create-tab:hover{border-color:var(--border2)}
+.create-tab.active{border-color:var(--accent);background:rgba(0,229,255,.05)}
+.create-tab-icon{font-size:1.6rem;margin-bottom:7px}
+.create-tab-title{font-size:.88rem;font-weight:700;margin-bottom:3px}
+.create-tab-desc{font-family:var(--mono);font-size:.62rem;color:var(--muted);line-height:1.5}
+.create-panel{display:none}.create-panel.active{display:block}
+.form-group{margin-bottom:14px}
+.form-label{font-family:var(--mono);font-size:.63rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;display:block}
+.form-input{width:100%;background:var(--surface2);border:1px solid var(--border2);
+  border-radius:8px;padding:9px 12px;font-family:var(--mono);font-size:.75rem;
+  color:var(--text);outline:none;transition:border-color .15s;resize:vertical}
+.form-input:focus{border-color:var(--accent)}
+.form-input::placeholder{color:var(--muted)}
+.word-count{font-family:var(--mono);font-size:.6rem;margin-top:4px}
+.wc-ok{color:var(--green)}.wc-warn{color:var(--yellow)}.wc-err{color:var(--red)}
+.cat-grid{display:flex;gap:6px;flex-wrap:wrap}
+.cat-pill{display:flex;align-items:center;gap:4px;padding:5px 11px;border-radius:20px;
+  border:1px solid var(--border2);background:var(--surface2);font-family:var(--mono);
+  font-size:.63rem;cursor:pointer;transition:all .15s;color:var(--muted)}
+.cat-pill:hover{color:var(--text)}
+.cat-pill.active{border-color:var(--accent);color:var(--accent);background:rgba(0,229,255,.07)}
+.quick-actions{display:flex;gap:8px;flex-wrap:wrap;padding:14px;
+  border-top:1px solid var(--border);background:var(--surface);
+  border-radius:0 0 12px 12px}
+.debug-box{background:rgba(0,0,0,.4);border:1px solid var(--border2);border-radius:8px;
+  padding:10px 14px;font-family:var(--mono);font-size:.66rem;color:var(--muted);
+  line-height:1.8;margin-bottom:12px}
+.dk{color:var(--accent)}.dg{color:var(--green)}.dr{color:var(--red)}.dy{color:var(--yellow)}
+
+/* ── QUEUE PAGE ──────────────────────────────────────────── */
+.queue-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  overflow:hidden;transition:border-color .2s,transform .15s;margin-bottom:0}
+.queue-card:hover{border-color:var(--border2);transform:translateY(-1px)}
+.queue-card-head{padding:12px 14px 9px;border-bottom:1px solid var(--border)}
+.queue-card-topic{font-size:.84rem;font-weight:700;color:var(--text);
+  line-height:1.3;margin-bottom:5px}
+.queue-card-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.queue-card-body{padding:9px 14px;font-size:.72rem;color:var(--muted);
+  line-height:1.6;max-height:52px;overflow:hidden}
+.queue-card-foot{padding:8px 14px;border-top:1px solid var(--border);
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+
+/* ── MANUAL UPLOAD STATES ────────────────────────────────── */
+.upload-zone{border:2px dashed var(--border2);border-radius:10px;padding:24px;
+  text-align:center;cursor:pointer;transition:all .2s;background:var(--surface2)}
+.upload-zone:hover{border-color:var(--accent);background:rgba(0,229,255,.04)}
+.upload-zone.dragging{border-color:var(--accent);background:rgba(0,229,255,.08)}
+.state-step{display:flex;align-items:center;gap:8px;padding:8px 12px;
+  border-radius:8px;font-family:var(--mono);font-size:.65rem;margin-bottom:6px}
+.ss-done{background:rgba(0,230,118,.08);color:var(--green);border:1px solid rgba(0,230,118,.15)}
+.ss-current{background:rgba(0,229,255,.08);color:var(--accent);border:1px solid rgba(0,229,255,.15)}
+.ss-pending{background:rgba(255,255,255,.03);color:var(--muted);border:1px solid var(--border)}
+
+/* ── SETTINGS PAGE ───────────────────────────────────────── */
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.settings-section{background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden}
+.settings-head{padding:12px 16px;border-bottom:1px solid var(--border);
+  font-size:.68rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--muted)}
+.setting-row{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;border-bottom:1px solid var(--border)}
+.setting-row:last-child{border-bottom:none}
+.setting-info{flex:1;min-width:0;padding-right:12px}
+.setting-name{font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:2px}
+.setting-desc{font-family:var(--mono);font-size:.6rem;color:var(--muted);line-height:1.5}
+.toggle-switch{width:38px;height:20px;border-radius:10px;cursor:pointer;
+  position:relative;transition:background .2s;flex-shrink:0;
+  border:1px solid rgba(255,255,255,.1)}
+.toggle-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;
+  border-radius:50%;background:#fff;transition:transform .2s;pointer-events:none}
+.vpd-group{display:flex;gap:5px}
+.vpd-opt{padding:5px 13px;border-radius:6px;border:1px solid var(--border2);
+  background:var(--surface2);font-family:var(--mono);font-size:.72rem;
+  color:var(--muted);cursor:pointer;transition:all .15s}
+.vpd-opt.active{background:var(--accent);color:#000;border-color:var(--accent)}
+
+/* ── ANALYTICS ───────────────────────────────────────────── */
+.analytics-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.hero-card{background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:16px;text-align:center}
+.hero-val{font-size:1.9rem;font-weight:800;letter-spacing:-0.04em;margin-bottom:3px}
+.hero-lbl{font-family:var(--mono);font-size:.61rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.07em}
+.hv-views{color:#60b4ff}.hv-likes{color:var(--pink)}
+.hv-comments{color:var(--yellow)}.hv-score{color:var(--accent)}
+.perf-row{display:grid;grid-template-columns:1fr 68px 68px 88px;
+  gap:10px;padding:9px 15px;border-bottom:1px solid var(--border);align-items:center}
+.perf-row:last-child{border-bottom:none}
+.perf-topic{font-size:.76rem;font-weight:600;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.perf-num{font-family:var(--mono);font-size:.66rem;text-align:right}
+.pn-views{color:#60b4ff}.pn-likes{color:var(--pink)}.pn-score{color:var(--yellow);font-weight:600}
+
+/* ── TOPICS ──────────────────────────────────────────────── */
+.topic-row{padding:11px 15px;border-bottom:1px solid var(--border);transition:background .12s}
+.topic-row:hover{background:rgba(255,255,255,.02)}
+.topic-row:last-child{border-bottom:none}
+.topic-text{font-size:.78rem;font-weight:600;color:var(--text);
+  line-height:1.4;margin-bottom:4px}
+.score-pill{font-family:var(--mono);font-size:.6rem;font-weight:500;padding:2px 7px;border-radius:4px}
+.sc-hi{background:rgba(0,230,118,.12);color:var(--green)}
+.sc-med{background:rgba(255,215,64,.12);color:var(--yellow)}
+.sc-lo{background:rgba(255,82,82,.12);color:var(--red)}
+
+/* ── LIBRARY ─────────────────────────────────────────────── */
+.lib-img-card{position:relative;cursor:pointer;border-radius:8px;
+  overflow:hidden;border:2px solid transparent;transition:all .15s}
+.lib-img-card:hover{transform:translateY(-2px)}
+.lib-img-card.selected{border-color:var(--accent)}
+.lib-num{position:absolute;top:6px;right:6px;background:var(--accent);
+  color:#000;border-radius:50%;width:22px;height:22px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.73rem;font-weight:700;z-index:2}
+.lib-topic{position:absolute;bottom:0;left:0;right:0;padding:5px 7px;
+  background:linear-gradient(transparent,rgba(0,0,0,.85));
+  font-size:.57rem;color:rgba(255,255,255,.85)}
+
+/* ── CALENDAR ────────────────────────────────────────────── */
+.cal-nav{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.cal-month{font-size:.92rem;font-weight:700;color:var(--text)}
+.cal-hdr{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px}
+.cal-hdr div{text-align:center;font-family:var(--mono);font-size:.57rem;
+  color:var(--muted);padding:3px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cal-cell{min-height:68px;background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;padding:5px}
+.cal-cell.today{border-color:var(--accent)}
+.cal-dn{font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-bottom:3px}
+.cal-evt{font-size:.56rem;font-weight:600;padding:2px 4px;border-radius:3px;
+  margin-bottom:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+/* ── STUDIO OVERLAY ──────────────────────────────────────── */
+.studio-overlay{position:fixed;inset:0;background:rgba(0,0,0,.93);
+  z-index:200;display:flex;flex-direction:column;overflow:hidden}
+.studio-overlay.hidden{display:none}
+.studio-top{display:flex;align-items:center;justify-content:space-between;
+  padding:11px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
+.studio-body{display:grid;grid-template-columns:1fr 380px;flex:1;overflow:hidden;min-height:0}
+.studio-video{background:#000;display:flex;align-items:center;justify-content:center}
+.studio-video video{max-height:100%;max-width:100%;object-fit:contain}
+.studio-panel{background:var(--surface);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow-y:auto}
+.studio-sec{padding:13px;border-bottom:1px solid var(--border)}
+.studio-sec-title{font-family:var(--mono);font-size:.6rem;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--muted);margin-bottom:10px}
+.script-box{font-size:.8rem;line-height:1.8;color:var(--text);background:var(--surface2);
+  border:1px solid var(--border);border-radius:7px;padding:11px;
+  max-height:150px;overflow-y:auto}
+.rec-row{display:flex;gap:7px;align-items:center;margin-bottom:10px}
+.rec-btn{width:38px;height:38px;border-radius:50%;border:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:.95rem;transition:all .18s}
+.rec-record{background:#ff3333;color:#fff}.rec-record:hover{background:#ff0000}
+.rec-stop{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
+.rec-play{background:var(--accent);color:#000}
+.rec-reset{background:var(--surface2);color:var(--muted);border:1px solid var(--border)}
+.rec-status{font-family:var(--mono);font-size:.65rem;color:var(--muted)}
+.rec-status.recording{color:var(--red);animation:blink .8s infinite}
+.waveform{width:100%;height:60px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:6px}
+.music-track{display:flex;align-items:center;gap:8px;padding:7px 10px;
+  border-radius:7px;border:1px solid var(--border);background:var(--surface2);
+  cursor:pointer;margin-bottom:5px;transition:all .15s}
+.music-track:hover{border-color:var(--border2)}
+.music-track.selected{border-color:var(--green);background:rgba(0,230,118,.05)}
+.music-name{font-size:.74rem;font-weight:600;color:var(--text)}
+.music-cat{font-family:var(--mono);font-size:.57rem;color:var(--muted)}
+.pub-ctrl{padding:13px;display:flex;flex-direction:column;gap:8px}
+.dt-input{width:100%;background:var(--surface2);border:1px solid var(--border2);
+  border-radius:7px;padding:8px 11px;font-family:var(--mono);font-size:.68rem;
+  color:var(--text);outline:none}
+.dt-input:focus{border-color:var(--accent)}
+
+/* ── MODAL OVERLAY ───────────────────────────────────────── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;
+  display:flex;align-items:center;justify-content:center}
+.modal-overlay.hidden{display:none}
+.modal{background:var(--surface);border:1px solid var(--border2);
+  border-radius:14px;padding:22px;width:420px;max-width:92vw;max-height:90vh;overflow-y:auto}
+.modal-title{font-size:.92rem;font-weight:700;margin-bottom:4px}
+.modal-sub{font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:16px}
+.modal-cats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px}
+.cat-check{display:flex;align-items:center;gap:7px;padding:8px 11px;
+  border-radius:8px;border:1px solid var(--border);cursor:pointer;
+  transition:all .15s;font-size:.76rem;font-weight:600}
+.cat-check:hover{border-color:var(--border2)}
+.cat-check.selected{border-color:var(--accent);background:rgba(0,229,255,.06);color:var(--accent)}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+
+/* ── EMPTY STATE ─────────────────────────────────────────── */
+.empty{padding:36px 20px;text-align:center;color:var(--muted);
+  font-family:var(--mono);font-size:.7rem;line-height:1.9}
+.empty-icon{font-size:1.7rem;display:block;margin-bottom:9px;opacity:.3}
+
+/* ── MISC ────────────────────────────────────────────────── */
+.used-pill{font-family:var(--mono);font-size:.57px;padding:1px 6px;border-radius:3px;
+  background:rgba(0,230,118,.1);color:var(--green)}
+.used-no{background:rgba(255,82,82,.1);color:var(--red)}
+.sched-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:12px 16px;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;margin-bottom:14px}
+.video-card{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;overflow:hidden;transition:border-color .2s}
+.video-card:hover{border-color:var(--border2)}
+.video-thumb{width:100%;aspect-ratio:9/16;background:var(--surface2);
+  display:flex;align-items:center;justify-content:center;
+  font-size:2rem;opacity:.3;max-height:110px}
+.video-body{padding:9px}
+.video-topic{font-size:.76rem;font-weight:600;color:var(--text);
+  line-height:1.3;margin-bottom:4px}
+.video-stats{display:flex;gap:7px;font-family:var(--mono);font-size:.61rem;
+  color:var(--muted);margin-bottom:4px}
+.video-link{display:inline-flex;align-items:center;gap:3px;color:var(--accent);
+  text-decoration:none;font-family:var(--mono);font-size:.61rem;margin-top:2px}
+
+@media(max-width:1100px){
+  .settings-grid{grid-template-columns:1fr}
+  .two-col{grid-template-columns:1fr}
+  .analytics-hero{grid-template-columns:repeat(2,1fr)}
+  .create-tabs{grid-template-columns:1fr}
+  .studio-body{grid-template-columns:1fr}
+}
+@media(max-width:700px){
+  .stats-row{grid-template-columns:repeat(2,1fr)}
+  .three-col{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- ── TOPBAR ──────────────────────────────────────────────── -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-name">&#127470;&#127475; India<span>20Sixty</span></div>
+    <div class="logo-sub">Mission Control v4</div>
+  </div>
+  <nav class="topbar-nav">
+    <button class="nav-btn active" onclick="showPage('home',this)">&#127968; Home</button>
+    <button class="nav-btn"        onclick="showPage('create',this)">&#9654; Create</button>
+    <button class="nav-btn"        onclick="showPage('queue',this)">
+      &#128228; Queue
+      <span class="nav-badge yellow" id="queue-badge">0</span>
+    </button>
+    <button class="nav-btn"        onclick="showPage('library',this)">&#128444; Library</button>
+    <button class="nav-btn"        onclick="showPage('topics',this)">&#128270; Topics</button>
+    <button class="nav-btn"        onclick="showPage('calendar',this)">&#128197; Calendar</button>
+    <button class="nav-btn"        onclick="showPage('analytics',this)">&#128200; Analytics</button>
+    <button class="nav-btn"        onclick="showPage('settings',this)">&#9881; Settings</button>
+  </nav>
+  <div class="topbar-right">
+    <div class="live-row">
+      <div class="live-dot"></div>
+      <span class="live-lbl" id="live-time">Live</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── PAGES ───────────────────────────────────────────────── -->
+<div class="pages">
+
+<!-- HOME ──────────────────────────────────────────────────── -->
+<div class="page active" id="page-home">
+  <div class="stats-row">
+    <div class="stat s1"><div class="stat-val" id="s-total">-</div><div class="stat-lbl">Total Jobs</div></div>
+    <div class="stat s2"><div class="stat-val" id="s-running">-</div><div class="stat-lbl">Running Now</div></div>
+    <div class="stat s3"><div class="stat-val" id="s-complete">-</div><div class="stat-lbl">Complete Today</div></div>
+    <div class="stat s5"><div class="stat-val" id="s-topics">-</div><div class="stat-lbl">Topics Ready</div></div>
+    <div class="stat s5" style="--s5c:var(--accent)"><div class="stat-val" id="s-space" style="color:var(--accent)">-</div><div class="stat-lbl">&#128640; Space Ready</div></div>
+  </div>
+  <div class="two-col">
+    <div>
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Live Jobs</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span id="failed-badge" onclick="openLogs()" style="display:none;cursor:pointer;
+              font-family:var(--mono);font-size:.65rem;color:var(--red);
+              background:rgba(255,82,82,.1);border:1px solid rgba(255,82,82,.2);
+              padding:2px 8px;border-radius:10px">&#9679; 0 failed</span>
+            <span class="panel-sub" id="last-ref"></span>
+          </div>
+        </div>
+        <div id="job-list"></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Channel Health</span><button class="btn btn-ghost btn-sm" onclick="loadHealth()">&#8635;</button></div>
+        <div id="health-panel">
+          <div class="health-row"><span class="health-label">Modal Pipeline</span><span class="health-val" id="h-modal">-</span></div>
+          <div class="health-row"><span class="health-label">Topic Council</span><span class="health-val" id="h-council">-</span></div>
+          <div class="health-row"><span class="health-label">Topics Ready</span><span class="health-val" id="h-topics">-</span></div>
+          <div class="health-row"><span class="health-label">Jobs Today</span><span class="health-val" id="h-jobs-today">-</span></div>
+          <div class="health-row"><span class="health-label">Published Today</span><span class="health-val" id="h-published">-</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Queue</span></div>
+        <div id="queue-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE ─────────────────────────────────────────────────── -->
+<div class="page" id="page-create">
+  <div id="debug-create"></div>
+  <div class="create-tabs">
+    <div class="create-tab active" id="ctab-auto"     onclick="switchCreateTab('auto',this)">
+      <div class="create-tab-icon">&#9889;</div>
+      <div class="create-tab-title">Full Auto</div>
+      <div class="create-tab-desc">Pick from queue, pipeline handles everything end to end</div>
+    </div>
+    <div class="create-tab" id="ctab-library" onclick="switchCreateTab('library',this)">
+      <div class="create-tab-icon">&#128444;</div>
+      <div class="create-tab-title">From Library</div>
+      <div class="create-tab-desc">Select 3 saved images — no image generation credits needed</div>
+    </div>
+    <div class="create-tab" id="ctab-manual"  onclick="switchCreateTab('manual',this)">
+      <div class="create-tab-icon">&#9999;</div>
+      <div class="create-tab-title">Manual</div>
+      <div class="create-tab-desc">Write your own script, download video from Leonardo web, upload here</div>
+    </div>
+    <div class="create-tab" id="ctab-longform" onclick="switchCreateTab('longform',this)">
+      <div class="create-tab-icon">&#127916;</div>
+      <div class="create-tab-title">Long-form</div>
+      <div class="create-tab-desc">3–12 minute videos with chapters, mixed media, per-segment voice</div>
+    </div>
+  </div>
+
+  <!-- AUTO PANEL -->
+  <div class="create-panel active" id="cpanel-auto">
+    <div class="panel" style="margin-bottom:0">
+      <div class="panel-head"><span class="panel-title">Create Video</span></div>
+      <div style="padding:16px">
+        <div class="form-group">
+          <label class="form-label">Category (optional — leave blank for highest scoring)</label>
+          <div class="cat-grid" id="auto-cat-strip"></div>
+        </div>
+        <button class="btn btn-primary" id="auto-create-btn" onclick="doAutoCreate()" style="width:100%;justify-content:center;padding:12px">
+          &#9654; Create Video
+        </button>
+      </div>
+      <div class="quick-actions">
+        <button class="btn btn-ghost btn-sm"   onclick="doGenerateTopic()">&#10022; Generate Topic</button>
+        <button class="btn btn-purple btn-sm"  onclick="openReplenishModal()">&#8635; Replenish Queue</button>
+        <button class="btn btn-red btn-sm"     onclick="doKillIncomplete()">&#9940; Kill Stuck</button>
+        <button class="btn btn-ghost btn-sm"   onclick="doRestoreFailed()">&#8617; Restore Failed</button>
+        <button class="btn btn-orange btn-sm"  onclick="doTestRender()">&#9741; Test Modal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIBRARY PANEL -->
+  <div class="create-panel" id="cpanel-library">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:.9rem;font-weight:700">Select 3 Images
+          <span id="lib-count" style="font-family:var(--mono);font-size:.68rem;background:rgba(0,229,255,.12);color:var(--accent);padding:2px 8px;border-radius:4px;margin-left:6px">0</span>
+        </div>
+        <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:2px">Images saved from previous pipeline runs. Select exactly 3 then create.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="lib-sel-count" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 / 3 selected</span>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer">
+          &#8679; Upload
+          <input type="file" id="lib-upload-input" accept="image/*" multiple style="display:none" onchange="uploadLibImages(this)">
+        </label>
+        <button class="btn btn-primary btn-sm" id="lib-create-btn" onclick="createVideoFromLibrary()" disabled style="opacity:.4">&#9654; Create</button>
+        <button class="btn btn-ghost btn-sm" onclick="loadLibrary()">&#8635;</button>
+      </div>
+    </div>
+    <div id="lib-filter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+    <div id="lib-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>
+  </div>
+
+  <!-- MANUAL PANEL -->
+  <div class="create-panel" id="cpanel-manual">
+    <div class="two-col" style="align-items:start">
+      <div class="panel" style="margin-bottom:0">
+        <div class="panel-head"><span class="panel-title">Step 1 — Write Job</span></div>
+        <div style="padding:16px">
+          <div class="form-group">
+            <label class="form-label">Topic</label>
+            <input class="form-input" id="m-topic" type="text" placeholder="e.g. ISRO building India's first space station by 2035" maxlength="200">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Script <span id="m-wc" class="word-count wc-ok">0 / 55</span></label>
+            <textarea class="form-input" id="m-script" rows="6"
+              placeholder="Write your 55-word script here. No Fact: prefix. Indian English. Punchy sentences."
+              oninput="updateWordCount()"></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Category</label>
+            <div class="cat-grid" id="manual-cat-strip"></div>
+          </div>
+          <button class="btn btn-primary" id="m-create-btn" onclick="doManualCreate()" style="width:100%;justify-content:center;padding:11px">
+            &#10003; Create Job
+          </button>
+          <div id="m-result" style="margin-top:10px"></div>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">How This Works</span></div>
+          <div style="padding:14px;font-family:var(--mono);font-size:.65rem;color:var(--muted);line-height:2">
+            <div class="state-step ss-current">1 Write topic + script → Create Job</div>
+            <div class="state-step ss-pending">2 Copy image prompts → Generate in Leonardo web UI</div>
+            <div class="state-step ss-pending">3 Download the video → Upload here</div>
+            <div class="state-step ss-pending">4 Generate AI Voice → auto-publishes to YouTube</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">Script Rules</span></div>
+          <div style="padding:14px;font-family:var(--mono);font-size:.63rem;color:var(--muted);line-height:2">
+            <div>&#10003; Max 55 words — count before saving</div>
+            <div>&#10003; Indian English — direct and warm</div>
+            <div>&#10003; No "Fact:" prefix — state facts directly</div>
+            <div>&#10003; No Hindi words</div>
+            <div>&#10003; Max 12 words per sentence</div>
+            <div>&#10003; End with a debate question</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- cpanel-longform ─────────────────────────────────────────── -->
+<div class="create-panel" id="cpanel-longform">
+  <!-- Create form -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
+    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
+        <input id="lf-topic" type="text" placeholder="e.g. ISRO space station India 2035"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
+        <select id="lf-cluster"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+          <option value="Space">&#128640; Space &amp; Defence</option>
+          <option value="AI">&#129302; AI &amp; ML</option>
+          <option value="DeepTech">&#128300; Deep Tech</option>
+          <option value="GreenTech">&#9889; Green &amp; Energy</option>
+          <option value="Gadgets">&#128241; Gadgets &amp; Tech</option>
+          <option value="Startups">&#128161; Startups</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">Target Duration</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="lf-dur-3"  onclick="setLfDur(3,this)"  style="flex:1;font-size:.75rem">3 min</button>
+        <button class="btn btn-primary" id="lf-dur-7"  onclick="setLfDur(7,this)"  style="flex:1;font-size:.75rem">7 min &#10003;</button>
+        <button class="btn" id="lf-dur-10" onclick="setLfDur(10,this)" style="flex:1;font-size:.75rem">10 min</button>
+        <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
+    <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
+  </div>
+  <!-- Jobs list -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Long-form Jobs</div>
+    <button class="btn" style="font-size:.72rem;padding:4px 10px" onclick="loadLongformJobs()">&#8635; Refresh</button>
+  </div>
+  <div id="lf-jobs-list">
+    <div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Click a duration above to create your first long-form video.</div>
+  </div>
+</div>
+
+<!-- QUEUE ──────────────────────────────────────────────────── -->
+<div class="page" id="page-queue">
+  <div class="tabs" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 11px;margin-bottom:14px">
+    <button class="tab active" id="qtab-voice"  onclick="switchQueueTab('voice')">
+      &#127908; Awaiting Voice <span class="tc tc-yellow" id="qc-voice">0</span>
+    </button>
+    <button class="tab"        id="qtab-review" onclick="switchQueueTab('review')">
+      &#128250; Review <span class="tc tc-purple" id="qc-review">0</span>
+    </button>
+    <button class="tab"        id="qtab-manual" onclick="switchQueueTab('manual')">
+      &#9999; Manual Upload <span class="tc tc-blue" id="qc-manual">0</span>
+    </button>
+  </div>
+  <div id="qpanel-voice">
+    <div class="cards-grid" id="staged-grid"></div>
+  </div>
+  <div id="qpanel-review" style="display:none">
+    <div id="cbdp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px"></div>
+  </div>
+  <div id="qpanel-manual" style="display:none">
+    <div id="manual-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px"></div>
+  </div>
+</div>
+
+<!-- LIBRARY ────────────────────────────────────────────────── -->
+<div class="page" id="page-library">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:.95rem;font-weight:700">Image Library
+        <span id="lib-count2" style="font-family:var(--mono);font-size:.68rem;background:rgba(0,229,255,.12);color:var(--accent);padding:2px 8px;border-radius:4px;margin-left:6px">0</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:2px">All images saved from pipeline runs. Select 3 → Create Video to use them.</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="lib-sel-count2" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 / 3 selected</span>
+      <button class="btn btn-primary btn-sm" id="lib-create-btn2" onclick="createVideoFromLibrary2()" disabled style="opacity:.4">&#9654; Create Video</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadLibrary()">&#8635; Refresh</button>
+    </div>
+  </div>
+  <div id="lib-filter2" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+  <div id="lib-grid2" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px"></div>
+</div>
+
+<!-- CALENDAR ────────────────────────────────────────────────── -->
+<div class="page" id="page-calendar">
+  <div class="cal-nav">
+    <button class="btn btn-ghost btn-sm" onclick="calPrev()">&#8592;</button>
+    <span class="cal-month" id="cal-lbl"></span>
+    <button class="btn btn-ghost btn-sm" onclick="calNext()">&#8594;</button>
+    <button class="btn btn-ghost btn-sm" onclick="calToday()" style="margin-left:6px">Today</button>
+  </div>
+  <div class="panel" style="padding:12px">
+    <div class="cal-hdr">
+      <div>SUN</div><div>MON</div><div>TUE</div><div>WED</div><div>THU</div><div>FRI</div><div>SAT</div>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+  </div>
+</div>
+
+<!-- ANALYTICS ───────────────────────────────────────────────── -->
+<div class="page" id="page-analytics">
+  <div style="margin-bottom:14px">
+    <button class="btn btn-ghost btn-sm" onclick="doSyncAnalytics()">&#8635; Sync YouTube</button>
+  </div>
+  <div class="analytics-hero">
+    <div class="hero-card"><div class="hero-val hv-views"    id="a-views">-</div><div class="hero-lbl">Views</div></div>
+    <div class="hero-card"><div class="hero-val hv-likes"    id="a-likes">-</div><div class="hero-lbl">Likes</div></div>
+    <div class="hero-card"><div class="hero-val hv-comments" id="a-comments">-</div><div class="hero-lbl">Comments</div></div>
+    <div class="hero-card"><div class="hero-val hv-score"    id="a-avg">-</div><div class="hero-lbl">Avg Score</div></div>
+  </div>
+  <div class="two-col">
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Videos</span><span class="panel-sub" id="a-count"></span></div>
+        <div id="video-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px;padding:12px"></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Top Performers</span></div>
+        <div class="perf-row" style="opacity:.35;font-family:var(--mono);font-size:.58rem">
+          <div>TOPIC</div><div style="text-align:right">VIEWS</div><div style="text-align:right">LIKES</div><div style="text-align:right">SCORE</div>
+        </div>
+        <div id="perf-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Needs Attention</span></div>
+        <div class="perf-row" style="opacity:.35;font-family:var(--mono);font-size:.58rem">
+          <div>TOPIC</div><div style="text-align:right">VIEWS</div><div style="text-align:right">LIKES</div><div style="text-align:right">SCORE</div>
+        </div>
+        <div id="flop-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOPICS ──────────────────────────────────────────────────── -->
+<div class="page" id="page-topics">
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <button class="btn btn-ghost btn-sm"   id="bt-all"   onclick="filterTopics('all')">All</button>
+    <button class="btn btn-primary btn-sm" id="bt-ready" onclick="filterTopics('ready')">Ready</button>
+    <button class="btn btn-ghost btn-sm"   id="bt-used"  onclick="filterTopics('used')">Used</button>
+    <button class="btn btn-purple btn-sm"  onclick="openReplenishModal()">&#8635; Replenish</button>
+  </div>
+  <div class="cat-grid" id="topic-cat-strip" style="margin-bottom:12px"></div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">Topics</span>
+      <span class="panel-sub" id="topics-count">-</span>
+    </div>
+    <div id="topics-list"></div>
+  </div>
+</div>
+
+<!-- SETTINGS ────────────────────────────────────────────────── -->
+<div class="page" id="page-settings">
+  <div id="debug-settings"></div>
+  <div class="settings-grid">
+
+    <!-- Pipeline -->
+    <div class="settings-section">
+      <div class="settings-head">&#9889; Pipeline</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Mode</div>
+          <div class="setting-desc">Full Auto — pipeline completes without intervention. Stage — you control each step.</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" id="mode-auto-btn" onclick="setMode('auto')">Full Auto</button>
+          <button class="btn btn-ghost btn-sm" id="mode-stage-btn" onclick="setMode('stage')">Stage</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Voice Mode</div>
+          <div class="setting-desc">AI — ElevenLabs auto-generates voice. Human — video is staged for you to record.</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" id="vm-ai-btn"    onclick="setVoiceMode('ai')">AI Voice</button>
+          <button class="btn btn-ghost btn-sm" id="vm-human-btn" onclick="setVoiceMode('human')">Human</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Publish</div>
+          <div class="setting-desc">ON — auto-uploads to YouTube after render. OFF — sends to Review queue first.</div>
+        </div>
+        <div class="toggle-switch" id="pub-tog" onclick="toggleSetting('publish')">
+          <div class="toggle-knob" id="pub-knob"></div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Videos Per Day</div>
+          <div class="setting-desc" id="vpd-times">Schedule: -</div>
+        </div>
+        <div class="vpd-group">
+          <div class="vpd-opt" id="vpd-1" onclick="setVPD(1)">1</div>
+          <div class="vpd-opt" id="vpd-2" onclick="setVPD(2)">2</div>
+          <div class="vpd-opt" id="vpd-3" onclick="setVPD(3)">3</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="settings-section">
+      <div class="settings-head">&#127916; Content</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Subscribe CTA</div>
+          <div class="setting-desc">Adds "Follow India20Sixty for daily India tech updates" as the final sentence in every script.</div>
+        </div>
+        <div class="toggle-switch" id="cta-tog" onclick="toggleSetting('subscribe_cta')">
+          <div class="toggle-knob" id="cta-knob"></div>
+        </div>
+      </div>
+
+      <div class="setting-row" style="opacity:.5">
+        <div class="setting-info">
+          <div class="setting-name">Long-form Videos <span style="font-family:var(--mono);font-size:.58rem;background:rgba(255,215,64,.15);color:var(--yellow);padding:2px 7px;border-radius:4px;margin-left:6px">Plan A</span></div>
+          <div class="setting-desc">8-10 min videos using Sarvam AI voice. Not yet built — coming in Plan A.</div>
+        </div>
+        <div class="toggle-switch" style="pointer-events:none;opacity:.4">
+          <div class="toggle-knob"></div>
+        </div>
+      </div>
+
+      <div class="setting-row" style="opacity:.5">
+        <div class="setting-info">
+          <div class="setting-name">Cross-posting <span style="font-family:var(--mono);font-size:.58rem;background:rgba(255,215,64,.15);color:var(--yellow);padding:2px 7px;border-radius:4px;margin-left:6px">Coming</span></div>
+          <div class="setting-desc">Auto-post to Instagram Reels and TikTok after YouTube upload.</div>
+        </div>
+        <div class="toggle-switch" style="pointer-events:none;opacity:.4">
+          <div class="toggle-knob"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Service Health -->
+    <div class="settings-section" style="grid-column:1/-1">
+      <div class="settings-head" style="display:flex;align-items:center;justify-content:space-between">
+        &#128268; Services
+        <button class="btn btn-ghost btn-sm" onclick="loadHealth()">&#8635; Refresh</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
+        <div class="health-row">
+          <span class="health-label">Modal Pipeline</span>
+          <span class="health-val" id="sh-modal">-</span>
+        </div>
+        <div class="health-row">
+          <span class="health-label">Topic Council</span>
+          <span class="health-val" id="sh-council">-</span>
+        </div>
+        <div class="health-row">
+          <span class="health-label">Topics in Queue</span>
+          <span class="health-val" id="sh-topics">-</span>
+        </div>
+        <div class="health-row">
+          <span class="health-label">Leonardo Note</span>
+          <span class="health-val" style="color:var(--yellow);font-size:.6rem">Check API tab at app.leonardo.ai</span>
+        </div>
+        <div class="health-row">
+          <span class="health-label">ElevenLabs Note</span>
+          <span class="health-val" style="color:var(--yellow);font-size:.6rem">Check elevenlabs.io/settings</span>
+        </div>
+        <div class="health-row">
+          <span class="health-label">YouTube Quota</span>
+          <span class="health-val" style="color:var(--muted);font-size:.6rem">Resets 12:30 PM IST</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Danger Zone -->
+    <div class="settings-section" style="grid-column:1/-1">
+      <div class="settings-head">&#9888; Danger Zone</div>
+      <div style="padding:14px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-red btn-sm" onclick="doKillIncomplete()">&#9940; Kill All Stuck Jobs</button>
+        <button class="btn btn-ghost btn-sm" onclick="doRestoreFailed()">&#8617; Restore All Failed</button>
+        <button class="btn btn-ghost btn-sm" onclick="doTestRender()">&#9741; Test Modal Connection</button>
+      </div>
+      <div id="debug-settings-inner" style="padding:0 14px 14px"></div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /pages -->
+
+<!-- ── REPLENISH MODAL ──────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="rep-modal">
+  <div class="modal">
+    <div class="modal-title">Replenish Topic Queue</div>
+    <div class="modal-sub">Select categories to scout real news from</div>
+    <div class="modal-cats" id="modal-cats"></div>
+    <div style="margin-bottom:14px">
+      <div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:5px">Target count</div>
+      <input type="range" id="tgt-slider" min="5" max="30" value="12"
+        oninput="document.getElementById('tgt-val').textContent=this.value" style="width:100%">
+      <div style="font-family:var(--mono);font-size:.66rem;color:var(--accent);margin-top:3px">
+        <span id="tgt-val">12</span> topics
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeReplenishModal()">Cancel</button>
+      <button class="btn btn-purple" onclick="doReplenish()">&#8635; Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── STUDIO OVERLAY ───────────────────────────────────────── -->
+<div class="studio-overlay hidden" id="studio">
+  <div class="studio-top">
+    <div>
+      <div style="font-size:.92rem;font-weight:700;color:var(--text)" id="stu-title">Studio</div>
+      <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted)" id="stu-id"></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" onclick="previewMix()">&#9654; Preview</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeStudio()">&#10005; Close</button>
+    </div>
+  </div>
+  <div class="studio-body">
+    <div class="studio-video">
+      <video id="stu-vid" controls preload="auto" crossorigin="anonymous"
+        style="width:100%;height:100%;max-height:calc(100vh - 52px)"></video>
+      <div id="stu-vid-err" style="display:none;width:100%;height:200px;
+        align-items:center;justify-content:center;flex-direction:column;gap:8px;
+        background:var(--surface2)">
+        <span style="font-size:2rem">&#128249;</span>
+        <span style="font-size:.76rem;color:var(--muted)">Video not available</span>
+        <span style="font-family:var(--mono);font-size:.58rem;color:var(--muted)">Enable R2 public access + CORS</span>
+      </div>
+    </div>
+    <div class="studio-panel">
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#128196; Script</div>
+        <div class="script-box" id="stu-script">Loading...</div>
+        <div style="font-family:var(--mono);font-size:.58rem;color:var(--muted);margin-top:5px" id="stu-mood"></div>
+      </div>
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#127908; Voice Recording</div>
+        <div class="rec-row">
+          <button class="rec-btn rec-record" id="rec-rec" onclick="startRec()" title="Record">&#9210;</button>
+          <button class="rec-btn rec-stop"   id="rec-stp" onclick="stopRec()"  title="Stop" disabled>&#9209;</button>
+          <button class="rec-btn rec-play"   id="rec-ply" onclick="playRec()"  title="Play" disabled>&#9654;</button>
+          <button class="rec-btn rec-reset"  id="rec-rst" onclick="resetRec()" title="Reset" disabled>&#8634;</button>
+          <span class="rec-status" id="rec-status">Ready</span>
+        </div>
+        <canvas class="waveform" id="waveform"></canvas>
+        <div style="display:flex;gap:8px;margin-top:7px;font-family:var(--mono);font-size:.63rem;color:var(--muted)">
+          <span>Duration: <b id="rec-dur" style="color:var(--text)">0:00</b></span>
+          <span style="margin-left:auto">Offset: <input type="number" id="voice-off" value="0" min="-2000" max="2000" step="100"
+            style="width:55px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;
+              color:var(--text);font-family:var(--mono);font-size:.63rem;padding:2px 4px"> ms</span>
+        </div>
+      </div>
+      <div class="studio-sec">
+        <div class="studio-sec-title">&#127925; Music</div>
+        <div id="music-list"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;
+          font-family:var(--mono);font-size:.63rem;color:var(--muted)">
+          <span>Vol:</span>
+          <input type="range" id="mus-vol" min="0" max="20" value="8"
+            oninput="document.getElementById('mus-vol-v').textContent=this.value+'%'" style="flex:1">
+          <span id="mus-vol-v">8%</span>
+        </div>
+      </div>
+      <div class="pub-ctrl">
+        <div class="studio-sec-title">&#128197; Schedule &amp; Publish</div>
+        <input type="datetime-local" id="pub-at" class="dt-input">
+        <div style="display:flex;gap:7px">
+          <button class="btn btn-primary" style="flex:1" id="pub-now" onclick="publishNow()">&#128640; Publish Now</button>
+          <button class="btn btn-purple"  style="flex:1" id="pub-sch" onclick="publishScheduled()">&#128197; Schedule</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);
+          text-align:center;margin-top:4px" id="pub-status"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     LOGS OVERLAY (failed + history — level deep)
+════════════════════════════════════════════════════════════ -->
+<div id="logs-overlay" style="display:none;position:fixed;inset:0;background:rgba(8,12,20,.97);z-index:300;overflow:auto">
+  <div style="max-width:900px;margin:0 auto;padding:20px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <button class="btn" onclick="closeLogs()">&#8592; Back</button>
+      <div style="font-size:.95rem;font-weight:700">Job Logs</div>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="loadLogs()">&#8635; Refresh</button>
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:14px">
+      <button class="tab active" id="ltab-failed"  onclick="switchLogsTab('failed')">&#9888; Failed</button>
+      <button class="tab"        id="ltab-history" onclick="switchLogsTab('history')">&#10003; History</button>
+    </div>
+    <div id="logs-list">
+      <div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     LONG-FORM STUDIO OVERLAY
+════════════════════════════════════════════════════════════ -->
+<div id="lf-studio" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:200;overflow:auto">
+  <div style="max-width:1100px;margin:0 auto;padding:16px">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <button class="btn" onclick="closeLfStudio()" style="font-size:.8rem">&#8592; Back</button>
+      <div style="flex:1">
+        <div id="lf-studio-topic" style="font-size:1rem;font-weight:700">Loading...</div>
+        <div id="lf-studio-status" style="font-family:var(--mono);font-size:.65rem;color:var(--muted)"></div>
+      </div>
+      <button class="btn btn-primary" id="lf-render-btn" onclick="triggerLfRender()" disabled style="font-size:.8rem">
+        &#128640; Render &amp; Publish
+      </button>
+    </div>
+
+    <!-- Two-column layout -->
+    <div style="display:grid;grid-template-columns:220px 1fr;gap:16px">
+
+      <!-- Segment Timeline -->
+      <div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Segments</div>
+        <div id="lf-seg-timeline"></div>
+        <div style="margin-top:12px;padding:10px;background:var(--surface);border-radius:8px;font-family:var(--mono);font-size:.65rem;color:var(--muted)">
+          <div style="margin-bottom:4px"><span style="color:#888">&#9899;</span> Empty</div>
+          <div style="margin-bottom:4px"><span style="color:var(--yellow)">&#9899;</span> Has script</div>
+          <div style="margin-bottom:4px"><span style="color:#4fc3f7">&#9899;</span> Has media</div>
+          <div><span style="color:#69f0ae">&#9899;</span> Ready</div>
+        </div>
+      </div>
+
+      <!-- Segment Editor -->
+      <div id="lf-seg-editor" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+        <div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">
+          Select a segment from the timeline to edit
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
