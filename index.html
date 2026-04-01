@@ -488,7 +488,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     <div class="create-tab" id="ctab-manual"  onclick="switchCreateTab('manual',this)">
       <div class="create-tab-icon">&#9999;</div>
       <div class="create-tab-title">Manual</div>
-      <div class="create-tab-desc">Write your own script, download video from Leonardo web, upload here</div>
+      <div class="create-tab-desc">Pick a topic, customise script, choose visuals and voice — fully flexible</div>
     </div>
     <div class="create-tab" id="ctab-longform" onclick="switchCreateTab('longform',this)">
       <div class="create-tab-icon">&#127916;</div>
@@ -543,104 +543,239 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     <div id="lib-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>
   </div>
 
-  <!-- MANUAL PANEL -->
+  <!-- MANUAL PANEL — step-progressive, topic-driven -->
   <div class="create-panel" id="cpanel-manual">
-    <div class="two-col" style="align-items:start">
-      <div class="panel" style="margin-bottom:0">
-        <div class="panel-head"><span class="panel-title">Step 1 — Write Job</span></div>
-        <div style="padding:16px">
-          <div class="form-group">
-            <label class="form-label">Topic</label>
-            <input class="form-input" id="m-topic" type="text" placeholder="e.g. ISRO building India's first space station by 2035" maxlength="200">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Script <span id="m-wc" class="word-count wc-ok">0 / 55</span></label>
-            <textarea class="form-input" id="m-script" rows="6"
-              placeholder="Write your 55-word script here. No Fact: prefix. Indian English. Punchy sentences."
-              oninput="updateWordCount()"></textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Category</label>
-            <div class="cat-grid" id="manual-cat-strip"></div>
-          </div>
-          <button class="btn btn-primary" id="m-create-btn" onclick="doManualCreate()" style="width:100%;justify-content:center;padding:11px">
-            &#10003; Create Job
-          </button>
-          <div id="m-result" style="margin-top:10px"></div>
-        </div>
-      </div>
-      <div>
-        <div class="panel">
-          <div class="panel-head"><span class="panel-title">How This Works</span></div>
-          <div style="padding:14px;font-family:var(--mono);font-size:.65rem;color:var(--muted);line-height:2">
-            <div class="state-step ss-current">1 Write topic + script → Create Job</div>
-            <div class="state-step ss-pending">2 Copy image prompts → Generate in Leonardo web UI</div>
-            <div class="state-step ss-pending">3 Download the video → Upload here</div>
-            <div class="state-step ss-pending">4 Generate AI Voice → auto-publishes to YouTube</div>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><span class="panel-title">Script Rules</span></div>
-          <div style="padding:14px;font-family:var(--mono);font-size:.63rem;color:var(--muted);line-height:2">
-            <div>&#10003; Max 55 words — count before saving</div>
-            <div>&#10003; Indian English — direct and warm</div>
-            <div>&#10003; No "Fact:" prefix — state facts directly</div>
-            <div>&#10003; No Hindi words</div>
-            <div>&#10003; Max 12 words per sentence</div>
-            <div>&#10003; End with a debate question</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
 
-<!-- cpanel-longform ─────────────────────────────────────────── -->
-<div class="create-panel" id="cpanel-longform">
-  <!-- Create form -->
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
-    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-      <div>
-        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
-        <input id="lf-topic" type="text" placeholder="e.g. ISRO space station India 2035"
-          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
-                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+    <!-- Step 1: Topic -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--accent);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">1</span>
+          <span style="font-size:.82rem;font-weight:700">Topic</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button id="mts-queue"  onclick="setManualTopicSrc('queue')"  class="btn btn-primary btn-sm" style="font-size:.7rem">From Queue</button>
+          <button id="mts-custom" onclick="setManualTopicSrc('custom')" class="btn btn-sm"             style="font-size:.7rem">Custom</button>
+        </div>
       </div>
-      <div>
-        <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
-        <select id="lf-cluster"
+
+      <!-- Queue source -->
+      <div id="mts-queue-panel">
+        <div id="manual-cat-strip" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px"></div>
+        <div id="manual-topic-cards" style="max-height:220px;overflow-y:auto;display:grid;gap:6px">
+          <div style="text-align:center;padding:20px;color:var(--muted);font-family:var(--mono);font-size:.72rem">Loading topics...</div>
+        </div>
+      </div>
+
+      <!-- Custom source -->
+      <div id="mts-custom-panel" style="display:none">
+        <input id="m-custom-topic" type="text" placeholder="e.g. India's first space station 2035"
           style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
-                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
-          <option value="Space">&#128640; Space &amp; Defence</option>
-          <option value="AI">&#129302; AI &amp; ML</option>
-          <option value="DeepTech">&#128300; Deep Tech</option>
-          <option value="GreenTech">&#9889; Green &amp; Energy</option>
-          <option value="Gadgets">&#128241; Gadgets &amp; Tech</option>
-          <option value="Startups">&#128161; Startups</option>
-        </select>
+                 padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box;margin-bottom:8px">
+        <button class="btn btn-primary" style="width:100%;font-size:.78rem" onclick="generateManualScript()">&#9889; Generate Script</button>
+      </div>
+
+      <!-- Selected topic display -->
+      <div id="m-selected-topic" style="display:none;margin-top:10px;padding:10px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);border-radius:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-size:.8rem;font-weight:600" id="m-sel-name"></div>
+            <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)" id="m-sel-meta"></div>
+          </div>
+          <button class="btn btn-sm" style="font-size:.7rem" onclick="clearManualTopic()">&#10005; Clear</button>
+        </div>
       </div>
     </div>
-    <div style="margin-bottom:12px">
-      <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">Target Duration</div>
-      <div style="display:flex;gap:8px">
-        <button class="btn" id="lf-dur-3"  onclick="setLfDur(3,this)"  style="flex:1;font-size:.75rem">3 min</button>
-        <button class="btn btn-primary" id="lf-dur-7"  onclick="setLfDur(7,this)"  style="flex:1;font-size:.75rem">7 min &#10003;</button>
-        <button class="btn" id="lf-dur-10" onclick="setLfDur(10,this)" style="flex:1;font-size:.75rem">10 min</button>
-        <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
+
+    <!-- Step 2: Script -->
+    <div id="m-step-script" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--green);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">2</span>
+          <span style="font-size:.82rem;font-weight:700">Script</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="m-wc" style="font-family:var(--mono);font-size:.68rem;color:var(--green)">0 words · ~0s</span>
+          <button class="btn btn-sm" style="font-size:.68rem" onclick="copyManualScript()">&#128203; Copy</button>
+          <button class="btn btn-sm" style="font-size:.68rem" onclick="regenManualScript()">&#8635; Regen</button>
+        </div>
+      </div>
+      <textarea id="m-script" rows="5" oninput="updateManualWordCount()"
+        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+               padding:8px 10px;color:var(--text);font-size:.8rem;resize:vertical;box-sizing:border-box;line-height:1.6"
+        placeholder="Script will appear here. Edit freely."></textarea>
+      <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:4px">
+        Max 55 words · Indian English · No &quot;Fact:&quot; prefix · End with a question
       </div>
     </div>
-    <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
-    <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
+
+    <!-- Step 3: Visuals -->
+    <div id="m-step-visuals" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--purple);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">3</span>
+          <span style="font-size:.82rem;font-weight:700">Visuals</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button id="vtog-images" onclick="setManualVisualMode('images')" class="btn btn-primary btn-sm" style="font-size:.7rem">&#128444; 3 Images</button>
+          <button id="vtog-video"  onclick="setManualVisualMode('video')"  class="btn btn-sm"             style="font-size:.7rem">&#127909; Upload Video</button>
+        </div>
+      </div>
+
+      <!-- Images mode -->
+      <div id="vmode-images">
+        <div style="font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-bottom:8px">
+          Edit prompts or use as-is. Auto-gen uses credits (~3 Leonardo).
+        </div>
+        <div id="m-img-prompts">
+          <div style="margin-bottom:6px" id="m-img-p1-wrap">
+            <div style="font-size:.65rem;color:var(--muted);margin-bottom:3px">Image 1 — Hook</div>
+            <div style="display:flex;gap:5px">
+              <textarea id="m-img-p1" rows="2" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;color:var(--text);font-size:.72rem;resize:none"></textarea>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <button class="btn btn-sm" style="font-size:.62rem;padding:3px 7px" onclick="autoGenManualImg(0)">&#9889;</button>
+                <label class="btn btn-sm" style="font-size:.62rem;padding:3px 7px;cursor:pointer">&#8679;<input type="file" accept="image/*" style="display:none" onchange="uploadManualImg(event,0)"></label>
+              </div>
+            </div>
+          </div>
+          <div style="margin-bottom:6px">
+            <div style="font-size:.65rem;color:var(--muted);margin-bottom:3px">Image 2 — Story</div>
+            <div style="display:flex;gap:5px">
+              <textarea id="m-img-p2" rows="2" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;color:var(--text);font-size:.72rem;resize:none"></textarea>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <button class="btn btn-sm" style="font-size:.62rem;padding:3px 7px" onclick="autoGenManualImg(1)">&#9889;</button>
+                <label class="btn btn-sm" style="font-size:.62rem;padding:3px 7px;cursor:pointer">&#8679;<input type="file" accept="image/*" style="display:none" onchange="uploadManualImg(event,1)"></label>
+              </div>
+            </div>
+          </div>
+          <div style="margin-bottom:8px">
+            <div style="font-size:.65rem;color:var(--muted);margin-bottom:3px">Image 3 — Payoff</div>
+            <div style="display:flex;gap:5px">
+              <textarea id="m-img-p3" rows="2" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;color:var(--text);font-size:.72rem;resize:none"></textarea>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <button class="btn btn-sm" style="font-size:.62rem;padding:3px 7px" onclick="autoGenManualImg(2)">&#9889;</button>
+                <label class="btn btn-sm" style="font-size:.62rem;padding:3px 7px;cursor:pointer">&#8679;<input type="file" accept="image/*" style="display:none" onchange="uploadManualImg(event,2)"></label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="m-img-status" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:8px"></div>
+        <button class="btn" style="width:100%;font-size:.75rem" onclick="autoGenAllManualImgs()">&#9889; Auto-generate All 3 Images</button>
+      </div>
+
+      <!-- Video mode -->
+      <div id="vmode-video" style="display:none">
+        <div style="font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-bottom:8px">
+          Upload a .mp4 from Leonardo web, Pika, Runway or anywhere. No credits used.
+        </div>
+        <label style="display:block;border:2px dashed var(--border2);border-radius:10px;padding:24px;text-align:center;cursor:pointer;transition:border-color .2s"
+          onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+          <div style="font-size:1.8rem;margin-bottom:6px">&#127909;</div>
+          <div style="font-size:.8rem;font-weight:600;margin-bottom:4px">Click to upload video</div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">.mp4 recommended · max 500MB</div>
+          <input type="file" accept="video/*" style="display:none" onchange="handleManualVideoUpload(event)">
+        </label>
+        <div id="m-video-status" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-top:8px;text-align:center"></div>
+      </div>
+    </div>
+
+    <!-- Step 4: Voice -->
+    <div id="m-step-voice" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--yellow);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">4</span>
+          <span style="font-size:.82rem;font-weight:700">Voice</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button id="vtog-ai"     onclick="setManualVoiceMode('ai')"     class="btn btn-primary btn-sm" style="font-size:.7rem">&#129302; AI Voice</button>
+          <button id="vtog-record" onclick="setManualVoiceMode('record')" class="btn btn-sm"             style="font-size:.7rem">&#127908; Record</button>
+          <button id="vtog-upload" onclick="setManualVoiceMode('upload')" class="btn btn-sm"             style="font-size:.7rem">&#8679; Upload</button>
+        </div>
+      </div>
+      <!-- AI mode info -->
+      <div id="vvoice-ai" style="font-family:var(--mono);font-size:.68rem;color:var(--muted)">
+        ElevenLabs generates voice automatically. Pronunciation fixes applied. ~200 chars from quota.
+      </div>
+      <!-- Record mode info -->
+      <div id="vvoice-record" style="display:none;font-family:var(--mono);font-size:.68rem;color:var(--muted)">
+        Video renders first, then you record your voice in the Studio. Job goes to Queue → Awaiting Voice.
+      </div>
+      <!-- Upload mode -->
+      <div id="vvoice-upload" style="display:none">
+        <label style="display:block;border:2px dashed var(--border2);border-radius:8px;padding:16px;text-align:center;cursor:pointer">
+          <div style="font-size:.8rem;font-weight:600;margin-bottom:4px">&#127908; Upload your voice recording</div>
+          <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">.mp3 · .wav · .m4a · .webm</div>
+          <input type="file" accept="audio/*" style="display:none" onchange="handleManualVoiceUpload(event)">
+        </label>
+        <div id="m-voice-status" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-top:6px;text-align:center"></div>
+      </div>
+    </div>
+
+    <!-- Step 5: Summary + Actions -->
+    <div id="m-step-actions" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="background:var(--accent2);color:#fff;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">5</span>
+        <span style="font-size:.82rem;font-weight:700">Create</span>
+      </div>
+      <div id="m-summary" style="font-family:var(--mono);font-size:.65rem;color:var(--muted);margin-bottom:12px;line-height:1.9"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button class="btn btn-primary" style="justify-content:center;padding:11px;font-size:.8rem" onclick="doManualCreate('publish')">
+          &#9654; Create &amp; Publish
+        </button>
+        <button class="btn btn-ghost"   style="justify-content:center;padding:11px;font-size:.8rem" onclick="doManualCreate('stage')">
+          &#128190; Stage for Review
+        </button>
+      </div>
+      <div id="m-result" style="margin-top:10px;font-family:var(--mono);font-size:.72rem"></div>
+    </div>
   </div>
-  <!-- Jobs list -->
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-    <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Long-form Jobs</div>
-    <button class="btn" style="font-size:.72rem;padding:4px 10px" onclick="loadLongformJobs()">&#8635; Refresh</button>
+
+  <!-- LONGFORM PANEL — inside page-create -->
+  <div class="create-panel" id="cpanel-longform">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
+      <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
+          <input id="lf-topic" type="text" placeholder="e.g. ISRO space station India 2035"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                   padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
+          <select id="lf-cluster"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                   padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+            <option value="Space">&#128640; Space &amp; Defence</option>
+            <option value="AI">&#129302; AI &amp; ML</option>
+            <option value="DeepTech">&#128300; Deep Tech</option>
+            <option value="GreenTech">&#9889; Green &amp; Energy</option>
+            <option value="Gadgets">&#128241; Gadgets &amp; Tech</option>
+            <option value="Startups">&#128161; Startups</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">Target Duration</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" id="lf-dur-3"  onclick="setLfDur(3,this)"  style="flex:1;font-size:.75rem">3 min</button>
+          <button class="btn btn-primary" id="lf-dur-7"  onclick="setLfDur(7,this)"  style="flex:1;font-size:.75rem">7 min &#10003;</button>
+          <button class="btn" id="lf-dur-10" onclick="setLfDur(10,this)" style="flex:1;font-size:.75rem">10 min</button>
+          <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
+      <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">Long-form Jobs</div>
+      <button class="btn" style="font-size:.72rem;padding:4px 10px" onclick="loadLongformJobs()">&#8635; Refresh</button>
+    </div>
+    <div id="lf-jobs-list">
+      <div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Create your first long-form video above.</div>
+    </div>
   </div>
-  <div id="lf-jobs-list">
-    <div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Click a duration above to create your first long-form video.</div>
-  </div>
+
 </div>
 
 <!-- QUEUE ──────────────────────────────────────────────────── -->

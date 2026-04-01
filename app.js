@@ -212,6 +212,7 @@ function switchCreateTab(name, el) {
   if (panel) panel.classList.add('active');
   if (name === 'library')  loadLibrary();
   if (name === 'longform') loadLongformJobs();
+  if (name === 'manual')   initManualPanel();
 }
 
 // ── QUEUE TABS ──────────────────────────────────────────────────
@@ -402,49 +403,357 @@ async function doAutoCreate() {
 }
 
 // ── CREATE — MANUAL ─────────────────────────────────────────────
-function updateWordCount() {
-  var script = document.getElementById('m-script').value;
-  var words  = script.trim().split(/\s+/).filter(Boolean).length;
-  var el     = document.getElementById('m-wc');
-  if (!el) return;
-  el.textContent = words + ' / 55';
-  el.className   = 'word-count ' + (words <= 55 ? (words >= 45 ? 'wc-ok' : 'wc-warn') : 'wc-err');
+// ============================================================
+// MANUAL CREATE — step-progressive, topic-driven
+// ============================================================
+
+var manualState = {
+  topicSrc:    'queue',   // 'queue' | 'custom'
+  topicId:     null,
+  topic:       '',
+  cluster:     'AI',
+  script:      '',
+  scriptPkg:   null,
+  visualMode:  localStorage.getItem('m_visual') || 'images',  // 'images' | 'video'
+  voiceMode:   localStorage.getItem('m_voice')  || 'ai',      // 'ai' | 'record' | 'upload'
+  imgUrls:     [null, null, null],   // uploaded/generated image URLs
+  videoUrl:    null,                 // uploaded video R2 URL
+  voiceUrl:    null,                 // uploaded voice R2 URL
+  manualCat:   null,
+};
+
+function initManualPanel() {
+  setManualTopicSrc(manualState.topicSrc);
+  setManualVisualMode(manualState.visualMode);
+  setManualVoiceMode(manualState.voiceMode);
+  loadManualQueueTopics(null);
+  buildManualCatStrip();
 }
 
-async function doManualCreate() {
-  var topic  = (document.getElementById('m-topic').value || '').trim();
-  var script = (document.getElementById('m-script').value || '').trim();
-  var result = document.getElementById('m-result');
-  if (!topic) { result.innerHTML = '<div class="debug-box"><span class="dr">Topic is required</span></div>'; return; }
-  if (!script) { result.innerHTML = '<div class="debug-box"><span class="dr">Script is required</span></div>'; return; }
-  var words = script.split(/\s+/).filter(Boolean).length;
-  if (words > 65) { result.innerHTML = '<div class="debug-box"><span class="dr">Script too long: ' + words + ' words (max 65)</span></div>'; return; }
+function buildManualCatStrip() {
+  var el = document.getElementById('manual-cat-strip');
+  if (!el) return;
+  el.innerHTML = '<div class="cat-pill active" onclick="loadManualQueueTopics(null,this)" style="border-color:var(--accent);color:var(--accent)">All</div>'
+    + Object.keys(CATS).map(function(k) {
+        var c = CATS[k];
+        return '<div class="cat-pill" onclick="loadManualQueueTopics(\'' + k + '\',this)">' + c.emoji + ' ' + c.label + '</div>';
+      }).join('');
+}
 
-  var btn = document.getElementById('m-create-btn');
-  btn.disabled = true; btn.textContent = 'Creating...';
-  result.innerHTML = '';
+function setManualTopicSrc(src) {
+  manualState.topicSrc = src;
+  document.getElementById('mts-queue').className  = 'btn btn-sm' + (src==='queue'  ? ' btn-primary' : '');
+  document.getElementById('mts-custom').className = 'btn btn-sm' + (src==='custom' ? ' btn-primary' : '');
+  document.getElementById('mts-queue-panel').style.display  = src === 'queue'  ? '' : 'none';
+  document.getElementById('mts-custom-panel').style.display = src === 'custom' ? '' : 'none';
+  if (src === 'queue') loadManualQueueTopics(manualState.manualCat);
+}
+
+async function loadManualQueueTopics(cat, el) {
+  manualState.manualCat = cat;
+  if (el) {
+    document.querySelectorAll('#manual-cat-strip .cat-pill').forEach(function(p) {
+      p.classList.remove('active'); p.style.borderColor=''; p.style.color='';
+    });
+    el.classList.add('active');
+    if (cat) { el.style.borderColor=CATS[cat]?.color||'var(--accent)'; el.style.color=CATS[cat]?.color||'var(--accent)'; }
+    else      { el.style.borderColor='var(--accent)'; el.style.color='var(--accent)'; }
+  }
+  var container = document.getElementById('manual-topic-cards');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">Loading...</div>';
   try {
+    var topics = allTopics.filter(function(t) {
+      return !t.used && t.council_score >= 70 && (!cat || t.cluster === cat);
+    }).sort(function(a,b) { return b.council_score - a.council_score; }).slice(0,20);
+    if (!topics.length) {
+      container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">No topics in queue. Replenish first.</div>';
+      return;
+    }
+    container.innerHTML = topics.map(function(t) {
+      var cat2 = CATS[t.cluster] || null;
+      var hasScript = !!(t.script_package && t.script_package.text);
+      return '<div onclick="selectManualTopic(\'' + t.id + '\',\'' + esc(t.topic).replace(/'/g,"\\'") + '\',\'' + (t.cluster||'AI') + '\',' + JSON.stringify(t.council_score) + ',' + JSON.stringify(t.script_package||null) + ')" style="'
+        + 'padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color .15s"'
+        + ' onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">'
+        + '<div style="font-size:.78rem;font-weight:600;margin-bottom:3px">' + esc(t.topic) + '</div>'
+        + '<div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.6rem;color:var(--muted)">'
+        + (cat2 ? '<span style="color:' + cat2.color + '">' + cat2.emoji + ' ' + t.cluster + '</span>' : '')
+        + '<span>Score: ' + t.council_score + '</span>'
+        + (hasScript ? '<span style="color:var(--green)">&#10003; Script ready</span>' : '<span style="color:var(--yellow)">&#9888; No script</span>')
+        + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    container.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:8px">Error: ' + e.message + '</div>';
+  }
+}
+
+function selectManualTopic(id, topic, cluster, score, scriptPkg) {
+  manualState.topicId   = id;
+  manualState.topic     = topic;
+  manualState.cluster   = cluster;
+  manualState.scriptPkg = scriptPkg;
+
+  document.getElementById('m-sel-name').textContent = topic;
+  document.getElementById('m-sel-meta').textContent = (CATS[cluster]?.emoji||'') + ' ' + cluster + ' · Score: ' + score;
+  document.getElementById('m-selected-topic').style.display = '';
+
+  // Pre-fill script from script_package if available
+  var script = (scriptPkg && scriptPkg.text) ? scriptPkg.text : '';
+  document.getElementById('m-script').value = script;
+  manualState.script = script;
+  updateManualWordCount();
+
+  // Pre-fill image prompts if available
+  var prompts = (scriptPkg && scriptPkg.scene_prompts) ? scriptPkg.scene_prompts : ['','',''];
+  ['m-img-p1','m-img-p2','m-img-p3'].forEach(function(id2, i) {
+    var el = document.getElementById(id2);
+    if (el) el.value = prompts[i] || '';
+  });
+
+  // Reveal steps
+  document.getElementById('m-step-script').style.display  = '';
+  document.getElementById('m-step-visuals').style.display = '';
+  document.getElementById('m-step-voice').style.display   = '';
+  document.getElementById('m-step-actions').style.display = '';
+  updateManualSummary();
+}
+
+function clearManualTopic() {
+  manualState.topicId = null; manualState.topic = ''; manualState.scriptPkg = null;
+  document.getElementById('m-selected-topic').style.display = 'none';
+  document.getElementById('m-step-script').style.display    = 'none';
+  document.getElementById('m-step-visuals').style.display   = 'none';
+  document.getElementById('m-step-voice').style.display     = 'none';
+  document.getElementById('m-step-actions').style.display   = 'none';
+}
+
+async function generateManualScript() {
+  var topic = (document.getElementById('m-custom-topic').value || '').trim();
+  if (!topic) { alert('Enter a topic first'); return; }
+  manualState.topic = topic; manualState.topicId = null; manualState.cluster = 'AI';
+  document.getElementById('m-sel-name').textContent = topic;
+  document.getElementById('m-sel-meta').textContent = 'Custom topic — script generating...';
+  document.getElementById('m-selected-topic').style.display = '';
+  document.getElementById('m-step-script').style.display = '';
+  document.getElementById('m-script').value = 'Generating script...';
+  try {
+    var r = await fetch(API_BASE + '/generate-topic', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topic })
+    });
+    var d = await r.json();
+    var script = (d.script_package && d.script_package.text) || (d.text) || '';
+    if (script) {
+      document.getElementById('m-script').value = script;
+      manualState.script = script;
+      manualState.scriptPkg = d.script_package || null;
+      var prompts = (d.script_package && d.script_package.scene_prompts) || ['','',''];
+      ['m-img-p1','m-img-p2','m-img-p3'].forEach(function(id2, i) {
+        var el = document.getElementById(id2);
+        if (el) el.value = prompts[i] || '';
+      });
+    } else {
+      document.getElementById('m-script').value = '';
+    }
+    updateManualWordCount();
+    document.getElementById('m-step-visuals').style.display = '';
+    document.getElementById('m-step-voice').style.display   = '';
+    document.getElementById('m-step-actions').style.display = '';
+    document.getElementById('m-sel-meta').textContent = 'Custom topic';
+    updateManualSummary();
+  } catch(e) {
+    document.getElementById('m-script').value = '';
+    alert('Script generation failed: ' + e.message);
+  }
+}
+
+function updateManualWordCount() {
+  var script = document.getElementById('m-script').value || '';
+  var words  = script.trim().split(/\s+/).filter(Boolean).length;
+  var secs   = Math.round(words * 0.45);
+  var el     = document.getElementById('m-wc');
+  if (el) {
+    el.textContent = words + ' words · ~' + secs + 's';
+    el.style.color = words > 65 ? 'var(--red)' : words > 55 ? 'var(--yellow)' : 'var(--green)';
+  }
+  manualState.script = script;
+  updateManualSummary();
+}
+
+function copyManualScript() {
+  var script = document.getElementById('m-script').value || '';
+  navigator.clipboard.writeText(script).catch(function() {});
+}
+
+async function regenManualScript() {
+  if (!manualState.topic) return;
+  document.getElementById('m-script').value = 'Regenerating...';
+  try {
+    var r = await fetch(API_BASE + '/generate-topic', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topic: manualState.topic })
+    });
+    var d = await r.json();
+    var script = (d.script_package && d.script_package.text) || '';
+    document.getElementById('m-script').value = script;
+    updateManualWordCount();
+  } catch(e) { alert('Regen failed: ' + e.message); }
+}
+
+function setManualVisualMode(mode) {
+  manualState.visualMode = mode;
+  localStorage.setItem('m_visual', mode);
+  document.getElementById('vtog-images').className = 'btn btn-sm' + (mode==='images' ? ' btn-primary' : '');
+  document.getElementById('vtog-video').className  = 'btn btn-sm' + (mode==='video'  ? ' btn-primary' : '');
+  document.getElementById('vmode-images').style.display = mode === 'images' ? '' : 'none';
+  document.getElementById('vmode-video').style.display  = mode === 'video'  ? '' : 'none';
+  updateManualSummary();
+}
+
+function setManualVoiceMode(mode) {
+  manualState.voiceMode = mode;
+  localStorage.setItem('m_voice', mode);
+  ['ai','record','upload'].forEach(function(m) {
+    var btn = document.getElementById('vtog-' + m);
+    if (btn) btn.className = 'btn btn-sm' + (m === mode ? ' btn-primary' : '');
+    var panel = document.getElementById('vvoice-' + m);
+    if (panel) panel.style.display = m === mode ? '' : 'none';
+  });
+  updateManualSummary();
+}
+
+function updateManualSummary() {
+  var el = document.getElementById('m-summary');
+  if (!el) return;
+  var visual = manualState.visualMode === 'images' ? '&#128444; 3 auto-gen images (~3 Leonardo credits)' : '&#127909; Uploaded video (0 credits)';
+  var voice  = manualState.voiceMode  === 'ai'     ? '&#129302; AI Voice (~200 ElevenLabs chars)'
+             : manualState.voiceMode  === 'record'  ? '&#127908; Record in Studio after render'
+             : '&#8679; Uploaded audio (0 credits)';
+  var words  = (manualState.script || '').trim().split(/\s+/).filter(Boolean).length;
+  el.innerHTML = '&#128221; Topic: ' + esc(manualState.topic || '—') + '<br>'
+    + '&#127912; Visual: ' + visual + '<br>'
+    + '&#127908; Voice: ' + voice + '<br>'
+    + '&#128196; Script: ' + words + ' words';
+}
+
+async function autoGenManualImg(idx) {
+  var prompts = ['m-img-p1','m-img-p2','m-img-p3'];
+  var prompt  = (document.getElementById(prompts[idx]).value || '').trim();
+  if (!prompt) { alert('Add an image prompt first'); return; }
+  var statusEl = document.getElementById('m-img-status');
+  if (statusEl) statusEl.textContent = 'Generating image ' + (idx+1) + '... (~30s)';
+  // Image generation triggers via the pipeline when job is created
+  // This is a preview trigger only — actual generation happens in pipeline
+  if (statusEl) statusEl.textContent = 'Image ' + (idx+1) + ' will auto-generate when job is created.';
+}
+
+async function autoGenAllManualImgs() {
+  var statusEl = document.getElementById('m-img-status');
+  if (statusEl) statusEl.textContent = 'All 3 images will auto-generate when job is created.';
+}
+
+function uploadManualImg(event, idx) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var statusEl = document.getElementById('m-img-status');
+  if (statusEl) statusEl.textContent = 'Image ' + (idx+1) + ' ready: ' + file.name;
+  manualState.imgUrls[idx] = file;
+}
+
+function handleManualVideoUpload(event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var statusEl = document.getElementById('m-video-status');
+  var sizeMB = (file.size / 1024 / 1024).toFixed(1);
+  if (statusEl) statusEl.textContent = '&#10003; ' + file.name + ' (' + sizeMB + ' MB) ready to upload';
+  manualState.videoFile = file;
+}
+
+function handleManualVoiceUpload(event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var statusEl = document.getElementById('m-voice-status');
+  if (statusEl) statusEl.textContent = '&#10003; ' + file.name + ' ready';
+  manualState.voiceFile = file;
+}
+
+async function doManualCreate(action) {
+  var topic  = manualState.topic;
+  var script = (document.getElementById('m-script') ? document.getElementById('m-script').value : '').trim();
+  var result = document.getElementById('m-result');
+
+  if (!topic)  { if (result) result.innerHTML = '<span style="color:var(--red)">Select a topic first</span>'; return; }
+  if (!script) { if (result) result.innerHTML = '<span style="color:var(--red)">Script is required</span>'; return; }
+
+  var words = script.split(/\s+/).filter(Boolean).length;
+  if (words > 70) { if (result) result.innerHTML = '<span style="color:var(--red)">Script too long: ' + words + ' words (max 65)</span>'; return; }
+
+  if (result) result.innerHTML = '<span style="color:var(--muted)">Creating job...</span>';
+
+  try {
+    // Step 1: Create the job
     var r = await fetch(API_BASE + '/create-manual-job', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, script, cluster: manualCat || 'AI' })
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topic, script, cluster: manualState.cluster || 'AI' })
     });
     var d = await r.json();
     if (d.error) throw new Error(d.error);
-    result.innerHTML = '<div class="debug-box">'
-      + '<span class="dg">&#10003; Job created — ID: ' + d.job_id + '</span><br>'
-      + '<span class="dk">Now go to Queue \u2192 Manual Upload to upload the video</span>'
-      + '</div>';
-    // Reset form
-    document.getElementById('m-topic').value = '';
-    document.getElementById('m-script').value = '';
-    updateWordCount();
-    loadManualJobs();
+    var jobId = d.job_id;
+
+    // Step 2: Handle video upload if video mode
+    if (manualState.visualMode === 'video' && manualState.videoFile) {
+      if (result) result.innerHTML = '<span style="color:var(--muted)">Uploading video...</span>';
+      var vr = await fetch(API_BASE + '/upload-manual-video?job_id=' + jobId, {
+        method: 'POST', headers: { 'content-type': 'video/mp4' },
+        body: manualState.videoFile
+      });
+      var vd = await vr.json();
+      if (vd.error) throw new Error('Video upload: ' + vd.error);
+    }
+
+    // Step 3: Trigger pipeline based on visual + voice mode
+    if (manualState.visualMode === 'images') {
+      // Images mode — get image prompts from textareas
+      var imgPrompts = [
+        document.getElementById('m-img-p1')?.value || '',
+        document.getElementById('m-img-p2')?.value || '',
+        document.getElementById('m-img-p3')?.value || '',
+      ];
+      // Trigger full pipeline with script override
+      var pr = await fetch(API_BASE + '/run-topic', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ topic_id: manualState.topicId || null, topic, script })
+      });
+    }
+
+    if (manualState.voiceMode === 'ai' && manualState.visualMode === 'video') {
+      // Video uploaded + AI voice
+      var ar = await fetch(API_BASE + '/add-voice-and-publish', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId })
+      });
+    }
+
+    var successMsg = action === 'stage'
+      ? '&#10003; Staged — go to Queue to record or review'
+      : '&#10003; Job created — pipeline is running';
+
+    if (result) result.innerHTML = '<span style="color:var(--green)">' + successMsg + ' (ID: ' + jobId + ')</span>';
+
+    // Reset state
+    manualState.topicId = null; manualState.topic = ''; manualState.scriptPkg = null;
+    manualState.videoFile = null; manualState.voiceFile = null; manualState.imgUrls = [null,null,null];
+    clearManualTopic();
+    setTimeout(function() { loadJobs(); loadTopicsCount(); }, 1500);
+
   } catch(e) {
-    result.innerHTML = '<div class="debug-box"><span class="dr">&#10007; ' + e.message + '</span></div>';
-  } finally {
-    btn.disabled = false; btn.innerHTML = '&#10003; Create Job';
+    if (result) result.innerHTML = '<span style="color:var(--red)">&#10007; ' + e.message + '</span>';
   }
 }
+
+function updateWordCount() { updateManualWordCount(); } // backward compat alias
 
 // ── QUEUE PAGE ──────────────────────────────────────────────────
 async function loadQueue_panel() {
