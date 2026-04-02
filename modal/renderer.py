@@ -367,7 +367,8 @@ def _apply_xfade(job_id: str, clip_paths: list, scene_dur: float, mood: str) -> 
         )
 
     transitions_used = [get_transition(i) for i in range(n - 1)]
-    print(f"  xfade: {' \u2192 '.join(transitions_used)}")
+    sep = ' \u2192 '
+    print(f"  xfade: {sep.join(transitions_used)}")
 
     try:
         _run_ffmpeg([

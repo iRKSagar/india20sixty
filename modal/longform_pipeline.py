@@ -207,12 +207,20 @@ def _handle_segment_voice(data: dict):
             job_id=f"{job_id}_seg{segment_idx}",
             reviewed_script=segs[0]["script"],
         )
-        audio_path = voice_result["audio_path"]
-        audio_dur  = voice_result["duration"]
+        # Voice ran in separate container — use bytes not path
+        audio_bytes = voice_result.get("audio_bytes")
+        audio_dur   = voice_result["duration"]
+
+        audio_local = f"{TMP_DIR}/{job_id}_seg{segment_idx}_voice.mp3"
+        if audio_bytes:
+            with open(audio_local, "wb") as f:
+                f.write(audio_bytes)
+        else:
+            raise Exception("Voice worker returned no audio bytes")
 
         r2_key    = f"longform/{job_id}/seg{segment_idx}_voice.mp3"
-        voice_url = _r2_upload().remote(audio_path, r2_key)
-        try: os.remove(audio_path)
+        voice_url = _r2_upload().remote(audio_local, r2_key)
+        try: os.remove(audio_local)
         except Exception: pass
 
         log(job_id, f"Seg {segment_idx} voice: {audio_dur:.1f}s")
@@ -263,12 +271,19 @@ def _handle_segment_images(data: dict):
 
         media = []
         for res in results:
-            if res["success"] and res["local_path"]:
-                r2_key     = f"longform/{job_id}/seg{segment_idx}_img{res['scene_idx']}.png"
-                public_url = _r2_upload().remote(res["local_path"], r2_key)
+            if res["success"] and res.get("image_bytes"):
+                r2_key = f"longform/{job_id}/seg{segment_idx}_img{res['scene_idx']}.png"
+                # Write bytes to this container's /tmp/ then upload to R2
+                local_p = f"{TMP_DIR}/{job_id}_seg{segment_idx}_img{res['scene_idx']}.png"
+                with open(local_p, "wb") as f:
+                    f.write(res["image_bytes"])
+                public_url = _r2_upload().remote(local_p, r2_key)
                 media.append({"type":"image","r2_url":r2_key,"public_url":public_url,"order":res["scene_idx"]})
-                try: os.remove(res["local_path"])
+                try: os.remove(local_p)
                 except Exception: pass
+            elif res.get("r2_url"):
+                # Already on R2 from auto-save
+                media.append({"type":"image","r2_url":res["r2_url"],"public_url":res["r2_url"],"order":res["scene_idx"]})
 
         log(job_id, f"Seg {segment_idx} images: {len(media)}/{len(image_prompts)}")
         ping_worker(job_id, segment_idx, "segment_images_ready", {"media": media})

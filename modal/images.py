@@ -107,6 +107,7 @@ secrets = [modal.Secret.from_name("india20sixty-secrets")]
     gpu="A10G",
     timeout=180,
     secrets=secrets,
+    allow_concurrent_inputs=1,   # one image per container — prevents CUDA OOM
 )
 def generate_single_image(
     prompt: str,
@@ -178,10 +179,14 @@ def generate_single_image(
     if not tier_used:
         print(f"  ✗ All tiers failed for scene {scene_idx}")
         return {"success": False, "local_path": None, "tier_used": None,
-                "scene_idx": scene_idx, "r2_url": None}
+                "scene_idx": scene_idx, "r2_url": None, "image_bytes": None}
 
     size = os.path.getsize(output_path)
     print(f"  ✓ {tier_used} — {size//1024}KB")
+
+    # Read bytes to return — renderer runs in different container, can't share /tmp/
+    with open(output_path, "rb") as f:
+        image_bytes = f.read()
 
     # ── AUTO-SAVE TO R2 + image_cache ─────────────────────────
     r2_url = None
@@ -194,7 +199,7 @@ def generate_single_image(
         )
 
     return {"success": True, "local_path": output_path, "tier_used": tier_used,
-            "scene_idx": scene_idx, "r2_url": r2_url}
+            "scene_idx": scene_idx, "r2_url": r2_url, "image_bytes": image_bytes}
 
 
 # ==========================================
@@ -205,7 +210,6 @@ def _try_flux(prompt: str, output_path: str) -> bool:
     import torch
     from diffusers import FluxPipeline
 
-    # Build the full cinematic prompt
     full_prompt = f"{STYLE_PREFIX} {prompt}"
     print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
 
@@ -214,22 +218,28 @@ def _try_flux(prompt: str, output_path: str) -> bool:
         torch_dtype=torch.bfloat16,
     )
     pipe = pipe.to("cuda")
-
-    # Enable memory optimizations
     pipe.enable_attention_slicing()
 
-    result = pipe(
-        prompt=full_prompt,
-        width=IMG_WIDTH,
-        height=IMG_HEIGHT,
-        num_inference_steps=INFERENCE_STEPS,  # 8 steps — best quality/speed balance
-        guidance_scale=GUIDANCE_SCALE,
-        generator=torch.Generator("cuda").manual_seed(random.randint(0, 2**32 - 1)),
-    )
+    try:
+        result = pipe(
+            prompt=full_prompt,
+            width=IMG_WIDTH,
+            height=IMG_HEIGHT,
+            num_inference_steps=INFERENCE_STEPS,
+            guidance_scale=GUIDANCE_SCALE,
+            generator=torch.Generator("cuda").manual_seed(random.randint(0, 2**32 - 1)),
+        )
+        img = result.images[0]
+        img.save(output_path, format="PNG", optimize=True)
+        success = os.path.getsize(output_path) > 100_000
+    finally:
+        # Always free VRAM — critical for parallel spawns on same GPU
+        del pipe
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
 
-    img = result.images[0]
-    img.save(output_path, format="PNG", optimize=True)
-    return os.path.getsize(output_path) > 100_000
+    return success
 
 
 # ==========================================
@@ -352,8 +362,9 @@ def _extract_keywords(prompt: str, n: int = 4) -> list:
 
 def _try_pollinations(prompt: str, output_path: str) -> bool:
     import urllib.parse
-    full_prompt = f"{STYLE_PREFIX} {prompt}"
-    safe = urllib.parse.quote(full_prompt[:400])
+    # Pollinations has URL length limit — keep prompt short
+    short_prompt = f"{STYLE_PREFIX} {prompt}"[:300]
+    safe = urllib.parse.quote(short_prompt)
     url = (f"https://image.pollinations.ai/prompt/{safe}"
            f"?width={IMG_WIDTH}&height={IMG_HEIGHT}"
            f"&model=flux&nologo=true&seed={random.randint(1,99999)}")

@@ -92,7 +92,8 @@ def generate_voice(
             with open(audio_path, "wb") as f: f.write(audio_bytes)
             duration = _get_duration(audio_path)
             print(f"  ✓ Chatterbox: {duration:.1f}s")
-            return {"audio_path": audio_path, "duration": duration, "engine": "chatterbox"}
+            return {"audio_path": audio_path, "duration": duration,
+                    "engine": "chatterbox", "audio_bytes": audio_bytes}
         except Exception as e:
             print(f"  Chatterbox failed: {e}")
 
@@ -103,7 +104,8 @@ def generate_voice(
             with open(audio_path, "wb") as f: f.write(audio_bytes)
             duration = _get_duration(audio_path)
             print(f"  ✓ Kokoro: {duration:.1f}s")
-            return {"audio_path": audio_path, "duration": duration, "engine": "kokoro"}
+            return {"audio_path": audio_path, "duration": duration,
+                    "engine": "kokoro", "audio_bytes": audio_bytes}
         except Exception as e:
             print(f"  Kokoro failed: {e}")
 
@@ -133,10 +135,12 @@ def generate_voice(
                 timeout=60,
             )
             r.raise_for_status()
-            with open(audio_path, "wb") as f: f.write(r.content)
+            audio_bytes = r.content
+            with open(audio_path, "wb") as f: f.write(audio_bytes)
             duration = _get_duration(audio_path)
             print(f"  ✓ ElevenLabs: {duration:.1f}s")
-            return {"audio_path": audio_path, "duration": duration, "engine": "elevenlabs"}
+            return {"audio_path": audio_path, "duration": duration,
+                    "engine": "elevenlabs", "audio_bytes": audio_bytes}
         except Exception as e:
             print(f"  ElevenLabs failed: {e}")
 

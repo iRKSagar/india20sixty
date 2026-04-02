@@ -190,15 +190,20 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             ]
             results = [f.get() for f in futures]
             image_paths = []
-            for res in results:
-                if res["success"] and res["local_path"]:
-                    image_paths.append(res["local_path"])
+            for res in sorted(results, key=lambda x: x["scene_idx"]):
+                p = f"{TMP_DIR}/{job_id}_{res['scene_idx']}.png"
+                if res["success"] and res.get("image_bytes"):
+                    # Write bytes into THIS container's /tmp/
+                    with open(p, "wb") as f:
+                        f.write(res["image_bytes"])
+                    image_paths.append(p)
                 else:
-                    p = f"{TMP_DIR}/{job_id}_{res['scene_idx']}_black.png"
+                    # Black frame fallback
+                    bp = f"{TMP_DIR}/{job_id}_{res['scene_idx']}_black.png"
                     subprocess.run(["ffmpeg","-y","-f","lavfi",
                         "-i","color=c=0x0d1117:s=864x1536:d=1",
-                        "-frames:v","1",p], capture_output=True, timeout=15)
-                    image_paths.append(p)
+                        "-frames:v","1", bp], capture_output=True, timeout=15)
+                    image_paths.append(bp)
 
         log(f"Images: {len(image_paths)}")
 
@@ -225,9 +230,16 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             update_status("voice")
             voice_result = _voice_gen().remote(job_id=job_id,
                                                reviewed_script=script_pkg["reviewed_script"])
-            audio_path = voice_result["audio_path"]
-            audio_dur  = voice_result["duration"]
-            log(f"Voice: {audio_dur:.1f}s")
+            # Write audio bytes into THIS container's /tmp/ — voice ran in separate container
+            audio_bytes = voice_result.get("audio_bytes")
+            audio_dur   = voice_result["duration"]
+            audio_path  = f"{TMP_DIR}/{job_id}.mp3"
+            if audio_bytes:
+                with open(audio_path, "wb") as f:
+                    f.write(audio_bytes)
+            else:
+                raise Exception("Voice worker returned no audio bytes")
+            log(f"Voice: {audio_dur:.1f}s engine={voice_result.get('engine','?')}")
 
             print("\n--- Render ---")
             update_status("render")
