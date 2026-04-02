@@ -34,28 +34,28 @@ TMP_DIR = "/tmp/india20sixty-longform"
 
 # Cross-app function references
 def _lf_script():
-    return modal.Function.lookup("india20sixty-longform-scriptwriter", "generate_longform_script")
+    return modal.Function.from_name("india20sixty-longform-scriptwriter", "generate_longform_script")
 
 def _lf_renderer():
-    return modal.Function.lookup("india20sixty-longform-renderer", "render_longform")
+    return modal.Function.from_name("india20sixty-longform-renderer", "render_longform")
 
 def _image_gen():
-    return modal.Function.lookup("india20sixty-images", "generate_single_image")
+    return modal.Function.from_name("india20sixty-images", "generate_single_image")
 
 def _voice_gen():
-    return modal.Function.lookup("india20sixty-voice", "generate_voice")
+    return modal.Function.from_name("india20sixty-voice", "generate_voice")
 
 def _r2_upload():
-    return modal.Function.lookup("india20sixty-publisher", "upload_to_r2")
+    return modal.Function.from_name("india20sixty-publisher", "upload_to_r2")
 
 def _yt_upload():
-    return modal.Function.lookup("india20sixty-publisher", "upload_to_youtube")
+    return modal.Function.from_name("india20sixty-publisher", "upload_to_youtube")
 
 def _title_gen():
-    return modal.Function.lookup("india20sixty-publisher", "generate_title")
+    return modal.Function.from_name("india20sixty-publisher", "generate_title")
 
 def _research():
-    return modal.Function.lookup("india20sixty-research", "run_research")
+    return modal.Function.from_name("india20sixty-research", "run_research")
 
 
 # ── SUPABASE HELPERS ──────────────────────────────────────────

@@ -2,59 +2,152 @@ import modal
 import os
 import re
 import json
-import random
 import requests
 
 # ==========================================
 # MODAL APP — SCRIPTWRITER
-# GPT calls only. No ffmpeg. No image work.
-# Returns everything the renderer needs:
-#   script, reviewed_script, captions, mood, scene_prompts
+# Handles: script generation, pronunciation fix,
+#          caption extraction, mood classification
+# Pure GPT calls + deterministic text ops.
+# No ffmpeg. No ElevenLabs. No images.
 # ==========================================
 
 app = modal.App("india20sixty-scriptwriter")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("requests")
+    .pip_install("requests", "fastapi[standard]")
 )
 
 secrets = [modal.Secret.from_name("india20sixty-secrets")]
 
-VISUAL_STYLES = [
-    "cinematic ultra-realistic photography, golden hour, warm saffron and ochre palette, 8K India",
-    "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic Indian urban setting",
-    "aerial drone perspective, sweeping wide angle, vibrant India, bustling cityscape below",
-    "close-up editorial photography, shallow depth of field, Indian faces, soft bokeh, expressive",
-    "epic establishing shot, atmospheric haze, moody cinematic film grain, Indian landscape",
-    "futuristic neon-lit Indian megacity, rain-slicked streets, autorickshaws and flying drones",
-    "bright optimistic daylight, clean futuristic Indian architecture, hopeful vibrant, lotus motifs",
-    "golden sunset silhouettes over Indian skyline, dust particles, emotionally powerful cinematic",
-    "blue hour twilight, Indian city lights reflecting in water, serene futuristic, ultra sharp",
-    "hyperrealistic Indian scientist or engineer, modern lab with traditional motifs, ARRI cinematic",
-]
+# ==========================================
+# MOOD PRESETS REGISTRY
+# Imported by renderer.py too.
+# Defined here as the single source of truth.
+# ==========================================
 
-SHOT_TYPES = [
-    ["extreme wide establishing shot of Indian city or landscape",
-     "dramatic low angle hero shot of Indian technology",
-     "sweeping panoramic view of India from above"],
-    ["medium shot of Indian engineers or workers in action",
-     "intimate human-scale scene in Indian context",
-     "detailed view of Indian technology or infrastructure"],
-    ["soaring aerial overview of transformed Indian landscape",
-     "golden hour wide shot of Indian achievement",
-     "emotional cinematic close-up of Indian people"],
-]
-
-SCENE_FALLBACKS = [
-    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, cinematic",
-    "Indian scientists in smart attire, holographic displays, IIT-style campus, temple meets lab",
-    "aerial green India, solar farms, rural fibre internet, diverse communities, hopeful sunrise",
-]
-
-MOOD_VALID = {
-    "cinematic_epic", "breaking_news", "hopeful_future", "dark_serious",
-    "cold_tech", "vibrant_pop", "nostalgic_film", "warm_human",
+MOOD_PRESETS = {
+    "cinematic_epic": {
+        "label": "Cinematic Epic",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.05:rg=0.0:rb=-0.05:gr=0.0:gg=0.95:gb=0.05:br=-0.10:bg=0.03:bb=1.07",
+            "eq":      "eq=contrast=1.38:brightness=-0.03:saturation=0.82",
+            "sharp":   "unsharp=7:7:1.2:3:3:0.0",
+            "noise":   "noise=c0s=18:c0f=t+u",
+            "vignette":"vignette=angle=0.6",
+        },
+        "scenes": [
+            {"motion_a":"diagonal_bl_tr",  "motion_b":"zoom_in_sim",   "transition":"wiperight",  "energy":"high",   "caption":"box"},
+            {"motion_a":"pan_right_fast",   "motion_b":"pan_up",        "transition":"slideright", "energy":"high",   "caption":"box"},
+            {"motion_a":"diagonal_br_tl",   "motion_b":"pull_back_sim", "transition":"dissolve",   "energy":"medium", "caption":"plain"},
+        ],
+    },
+    "breaking_news": {
+        "label": "Breaking News",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=0.90:rg=0.05:rb=0.05:gr=0.0:gg=0.95:gb=0.05:br=0.05:bg=0.08:bb=0.87",
+            "eq":      "eq=contrast=1.28:brightness=0.0:saturation=0.68",
+            "sharp":   "unsharp=5:5:1.1:3:3:0.0",
+            "noise":   "noise=c0s=10:c0f=t+u",
+            "vignette":"vignette=angle=0.45",
+        },
+        "scenes": [
+            {"motion_a":"pan_right_fast",  "motion_b":"diagonal_tl_br", "transition":"slideleft", "energy":"high",   "caption":"box"},
+            {"motion_a":"pan_left_fast",   "motion_b":"pan_up",          "transition":"wipeleft",  "energy":"high",   "caption":"box"},
+            {"motion_a":"diagonal_tr_bl",  "motion_b":"static_hold",     "transition":"fadeblack", "energy":"medium", "caption":"plain"},
+        ],
+    },
+    "hopeful_future": {
+        "label": "Hopeful Future",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.08:rg=0.05:rb=-0.03:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=-0.02:bb=0.97",
+            "eq":      "eq=contrast=1.12:brightness=0.04:saturation=1.45",
+            "sharp":   "unsharp=3:3:0.7:3:3:0.0",
+            "noise":   "noise=c0s=8:c0f=t+u",
+            "vignette":"vignette=angle=0.30",
+        },
+        "scenes": [
+            {"motion_a":"pan_right_slow",  "motion_b":"zoom_in_sim",   "transition":"dissolve", "energy":"medium", "caption":"plain"},
+            {"motion_a":"diagonal_bl_tr",  "motion_b":"pan_up",        "transition":"fade",     "energy":"medium", "caption":"plain"},
+            {"motion_a":"drift_slow",       "motion_b":"pull_back_sim", "transition":"dissolve", "energy":"low",    "caption":"plain"},
+        ],
+    },
+    "dark_serious": {
+        "label": "Dark Serious",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=0.95:rg=0.0:rb=0.05:gr=0.0:gg=0.88:gb=0.12:br=0.08:bg=0.05:bb=0.87",
+            "eq":      "eq=contrast=1.45:brightness=-0.06:saturation=0.52",
+            "sharp":   "unsharp=7:7:1.0:3:3:0.0",
+            "noise":   "noise=c0s=24:c0f=t+u",
+            "vignette":"vignette=angle=0.70",
+        },
+        "scenes": [
+            {"motion_a":"drift_slow",       "motion_b":"pan_left_slow",  "transition":"fadeblack", "energy":"low",  "caption":"box"},
+            {"motion_a":"diagonal_tr_bl",   "motion_b":"static_hold",    "transition":"dissolve",  "energy":"low",  "caption":"box"},
+            {"motion_a":"pan_up",           "motion_b":"pull_back_sim",  "transition":"fade",      "energy":"low",  "caption":"plain"},
+        ],
+    },
+    "cold_tech": {
+        "label": "Cold Tech",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=0.88:rg=0.05:rb=0.07:gr=-0.03:gg=0.95:gb=0.08:br=0.0:bg=0.05:bb=1.15",
+            "eq":      "eq=contrast=1.22:brightness=0.0:saturation=0.88",
+            "sharp":   "unsharp=5:5:1.0:3:3:0.0",
+            "noise":   "noise=c0s=12:c0f=t+u",
+            "vignette":"vignette=angle=0.42",
+        },
+        "scenes": [
+            {"motion_a":"diagonal_tl_br",  "motion_b":"zoom_in_sim",   "transition":"slideleft", "energy":"medium", "caption":"box"},
+            {"motion_a":"pan_right_fast",   "motion_b":"diagonal_br_tl","transition":"wipeleft",  "energy":"medium", "caption":"box"},
+            {"motion_a":"pull_back_sim",    "motion_b":"drift_slow",    "transition":"dissolve",  "energy":"low",    "caption":"plain"},
+        ],
+    },
+    "vibrant_pop": {
+        "label": "Vibrant Pop",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.05:rg=0.0:rb=0.0:gr=0.05:gg=1.08:gb=0.0:br=0.0:bg=0.0:bb=1.05",
+            "eq":      "eq=contrast=1.08:brightness=0.06:saturation=1.72",
+            "sharp":   "unsharp=3:3:0.6:3:3:0.0",
+            "noise":   "noise=c0s=6:c0f=t+u",
+            "vignette":"vignette=angle=0.22",
+        },
+        "scenes": [
+            {"motion_a":"diagonal_tl_br",  "motion_b":"diagonal_br_tl", "transition":"wiperight",  "energy":"high",   "caption":"box"},
+            {"motion_a":"pan_right_fast",   "motion_b":"zoom_in_sim",    "transition":"slideright", "energy":"high",   "caption":"box"},
+            {"motion_a":"diagonal_bl_tr",   "motion_b":"pan_up",         "transition":"dissolve",   "energy":"medium", "caption":"plain"},
+        ],
+    },
+    "nostalgic_film": {
+        "label": "Nostalgic Film",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.12:rg=0.05:rb=-0.08:gr=0.05:gg=1.0:gb=-0.05:br=-0.03:bg=0.0:bb=0.93",
+            "eq":      "eq=contrast=1.18:brightness=0.03:saturation=1.12",
+            "sharp":   "unsharp=3:3:0.5:3:3:0.0",
+            "noise":   "noise=c0s=26:c0f=t+u",
+            "vignette":"vignette=angle=0.65",
+        },
+        "scenes": [
+            {"motion_a":"pan_right_slow",   "motion_b":"drift_slow",    "transition":"dissolve", "energy":"low",    "caption":"plain"},
+            {"motion_a":"diagonal_bl_tr",   "motion_b":"pan_up",        "transition":"fade",     "energy":"medium", "caption":"plain"},
+            {"motion_a":"zoom_in_sim",       "motion_b":"static_hold",   "transition":"dissolve", "energy":"low",    "caption":"plain"},
+        ],
+    },
+    "warm_human": {
+        "label": "Warm Human",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.10:rg=0.05:rb=-0.05:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=0.0:bb=0.95",
+            "eq":      "eq=contrast=1.10:brightness=0.05:saturation=1.32",
+            "sharp":   "unsharp=3:3:0.5:3:3:0.0",
+            "noise":   "noise=c0s=8:c0f=t+u",
+            "vignette":"vignette=angle=0.28",
+        },
+        "scenes": [
+            {"motion_a":"pan_right_slow",  "motion_b":"zoom_in_sim",   "transition":"dissolve", "energy":"low", "caption":"plain"},
+            {"motion_a":"drift_slow",       "motion_b":"pan_up",        "transition":"fade",     "energy":"low", "caption":"plain"},
+            {"motion_a":"static_hold",      "motion_b":"pull_back_sim", "transition":"dissolve", "energy":"low", "caption":"plain"},
+        ],
+    },
 }
 
 CLUSTER_MOOD_DEFAULTS = {
@@ -67,22 +160,45 @@ CLUSTER_MOOD_DEFAULTS = {
 }
 
 
+# ==========================================
+# MAIN SCRIPTWRITER FUNCTION
+# ==========================================
+
 @app.function(image=image, secrets=secrets, cpu=0.25, memory=256, timeout=90)
-def run_scriptwriter(
-    topic:         str,
-    cluster:       str,
-    fact_package:  dict,
-    subscribe_cta: bool = False,
-) -> dict:
+def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, subscribe_cta: bool = False) -> dict:
     """
-    Returns {
+    Generate script, fix pronunciation, extract captions, classify mood.
+    Returns:
+    {
         script, reviewed_script, script_lines,
         captions, mood, mood_label, scene_prompts
     }
     """
     OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+    print(f"\n[Scriptwriter] job={job_id} cluster={cluster} cta={subscribe_cta}")
 
-    # ── 1. SCRIPT ─────────────────────────────────────────────────
+    script, script_lines   = _generate_script(OPENAI_API_KEY, topic, fact_package, subscribe_cta)
+    reviewed_script        = _pronunciation_fix(script)
+    captions               = _extract_captions(OPENAI_API_KEY, script_lines)
+    mood                   = _mood_classifier(OPENAI_API_KEY, script, cluster)
+    scene_prompts          = _generate_scene_prompts(OPENAI_API_KEY, topic, fact_package)
+
+    return {
+        "script":          script,
+        "reviewed_script": reviewed_script,
+        "script_lines":    script_lines,
+        "captions":        captions,
+        "mood":            mood,
+        "mood_label":      MOOD_PRESETS[mood]["label"],
+        "scene_prompts":   scene_prompts,
+    }
+
+
+# ==========================================
+# INTERNAL FUNCTIONS
+# ==========================================
+
+def _generate_script(api_key: str, topic: str, fact_package: dict, subscribe_cta: bool) -> tuple:
     fact_section = ""
     if fact_package and fact_package.get("found"):
         fact_section = f"\nREAL FACT ANCHOR:\nFact: {fact_package['key_fact']}\nSource: {fact_package['source']}"
@@ -95,15 +211,15 @@ Topic: {topic}
 {fact_section}
 
 STRICT RULES:
-- Maximum 55 words total. Count every word.
-- Language: Indian English. Direct, warm, modern. NOT American or British tone.
+- Maximum 55 words total.
+- Indian English. Clear, confident, modern. Not American or British.
 - NO Hindi words. NO Hinglish. Pure English only.
-- Every sentence max 12 words.
+- Max 12 words per sentence.
 - Open with a fact that stops the scroll.
-- NEVER start with "Fact:" — state the fact directly.{cta}
+- NEVER start with "Fact:" — state facts directly.{cta}
 
 6 sentences:
-1. Hook — real fact or number, make it land hard
+1. Hook — the real fact or number
 2. What is happening right now in India
 3. The scale — money, reach, jobs, impact
 4. What this means for ordinary Indians
@@ -112,217 +228,264 @@ STRICT RULES:
 
 Return ONLY the script as plain text. No labels. No JSON."""
 
-    script = ""
-    script_lines = []
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
                   "messages": [{"role": "user", "content": prompt}],
                   "temperature": 0.75, "max_tokens": 200},
             timeout=30,
         )
         r.raise_for_status()
-        raw          = r.json()["choices"][0]["message"]["content"].strip()
-        script_lines = [re.sub(r'^[\d]+[.)]\s*|^[-•]\s*', '', l.strip())
-                        for l in raw.split('\n') if l.strip()]
-        script = ' '.join(script_lines)
-        print(f"  Script ({len(script.split())}w): {script[:80]}...")
+        raw   = r.json()["choices"][0]["message"]["content"].strip()
+        lines = [re.sub(r"^[\d]+[.)]\s*|^[-\u2022]\s*", "", l.strip())
+                 for l in raw.split("\n") if l.strip()]
+        script = " ".join(lines)
+        print(f"  Script ({len(script.split())} words): {script[:80]}...")
+        return script, lines
     except Exception as e:
         print(f"  Script failed: {e}")
-        script = (f"India is building something that will change everything. "
-                  f"{topic} is no longer a dream — work has already started. "
-                  f"The government has committed serious money and a real deadline. "
-                  f"Thousands of skilled jobs will follow. "
-                  f"But execution is the real test. Will India deliver on time?")
-        script_lines = [script]
+        fallback = (f"India is building something that will change everything. "
+                    f"{topic} is no longer a dream — work has already started. "
+                    f"The government has committed serious money and a real deadline. "
+                    f"Thousands of skilled jobs will follow. "
+                    f"But execution is the real test. Will India deliver on time?")
+        return fallback, [fallback]
 
-    # ── 2. PRONUNCIATION FIX ─────────────────────────────────────
-    # Pure deterministic find-and-replace. NO GPT. NO rewriting.
+
+def _pronunciation_fix(script: str) -> str:
+    """Pure deterministic find-and-replace. NO GPT. NO rewriting."""
     fixed = script
-    for wrong, right in [
-        ("ISRO",       "I.S.R.O."), ("ISRO's",      "I.S.R.O.'s"),
-        ("DRDO",       "D.R.D.O."), ("DRDO's",      "D.R.D.O.'s"),
-        ("IIT",        "I.I.T."),   ("IITs",         "I.I.T.s"),
-        ("IIM",        "I.I.M."),   ("AIIMS",        "A.I.I.M.S."),
-        ("UPI",        "U.P.I."),   ("NASSCOM",      "NAS-com"),
-        ("SEBI",       "SEE-bi"),
-        ("Chandrayaan","Chandra-yaan"), ("Gaganyaan",  "Gagan-yaan"),
-        ("Mangalyaan", "Mangal-yaan"), ("Aditya-L1",  "Aditya L-one"),
-        ("\u20b9",     "rupees "),  ("%",            " percent"),
-        ("&",          " and "),    ("\u2192",       " to "),
-    ]:
+
+    acronyms = [
+        ("ISRO",    "I.S.R.O."), ("DRDO",    "D.R.D.O."),
+        ("DRDO's",  "D.R.D.O.'s"), ("ISRO's", "I.S.R.O.'s"),
+        ("IIT",     "I.I.T."), ("IITs",    "I.I.T.s"),
+        ("IIM",     "I.I.M."), ("AIIMS",   "A.I.I.M.S."),
+        ("UPI",     "U.P.I."), ("NDTV",    "N.D.T.V."),
+        ("NASSCOM", "NAS-com"), ("SEBI",    "SEE-bi"),
+    ]
+    for wrong, right in acronyms:
         fixed = fixed.replace(wrong, right)
 
+    missions = [
+        ("Chandrayaan", "Chandra-yaan"), ("Gaganyaan",  "Gagan-yaan"),
+        ("Mangalyaan",  "Mangal-yaan"),  ("Aditya-L1",  "Aditya L-one"),
+    ]
+    for wrong, right in missions:
+        fixed = fixed.replace(wrong, right)
+
+    fixed = fixed.replace("\u20b9", "rupees ").replace("%", " percent")
+    fixed = fixed.replace("&", " and ").replace("\u2192", " to ").replace("~", " approximately ")
+
     # Indian number formats
-    fixed = re.sub(r'(\d+),00,00,000', lambda m: m.group(1)+' crore', fixed)
-    fixed = re.sub(r'(\d+),00,000',    lambda m: m.group(1)+' lakh',  fixed)
-    fixed = re.sub(r'(\d+),000',       lambda m: m.group(1)+' thousand', fixed)
+    fixed = re.sub(r"(\d+),00,00,000", lambda m: m.group(1) + " crore", fixed)
+    fixed = re.sub(r"(\d+),00,000",    lambda m: m.group(1) + " lakh",  fixed)
+    fixed = re.sub(r"(\d+),000",       lambda m: m.group(1) + " thousand", fixed)
 
-    # Emotion tags at sentence boundaries only
-    sentences = fixed.split('. ')
-    if len(sentences) >= 1 and any(c.isdigit() for c in sentences[0]):
-        sentences[0] = '<excited>' + sentences[0] + '</excited>'
-    if len(sentences) >= 2 and sentences[-1].strip().endswith('?'):
-        sentences[-1] = '<happy>' + sentences[-1].strip() + '</happy>'
-    reviewed_script = '. '.join(sentences)
-    print(f"  Reviewed: {reviewed_script[:100]}...")
+    # Add emotion tags at sentence boundaries only
+    sentences = fixed.split(". ")
+    if sentences and any(c.isdigit() for c in sentences[0]):
+        sentences[0] = "<excited>" + sentences[0] + "</excited>"
+    if len(sentences) >= 2 and sentences[-1].strip().endswith("?"):
+        sentences[-1] = "<happy>" + sentences[-1].strip() + "</happy>"
+    fixed = ". ".join(sentences)
 
-    # ── 3. CAPTIONS ───────────────────────────────────────────────
-    clean_for_captions = re.sub(r'<[^>]+>', '', script)
-    cap_prompt = f"""Extract exactly 9 caption phrases from this script.
+    print(f"  Pronunciation fix done: {fixed[:80]}...")
+    return fixed
+
+
+def _extract_captions(api_key: str, script_lines: list) -> list:
+    full  = " ".join(script_lines)
+    clean = re.sub(r"<[^>]+>", "", full)
+    prompt = f"""Extract exactly 9 caption phrases from this script.
 Rules: 3-5 words each, ALL CAPS, punchy, in order, no punctuation except ! or ?
 Output exactly 9 lines, one phrase per line only.
-Script: {clean_for_captions}"""
-
-    captions = []
+Script: {clean}"""
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": cap_prompt}],
+                  "messages": [{"role": "user", "content": prompt}],
                   "temperature": 0.3, "max_tokens": 200},
             timeout=20,
         )
         r.raise_for_status()
         raw      = r.json()["choices"][0]["message"]["content"].strip()
-        captions = [re.sub(r'^[\d]+[.)]\s*', '', l.strip()).upper()
-                    for l in raw.split('\n') if l.strip()][:9]
+        captions = [re.sub(r"^[\d]+[.)]\s*", "", l.strip()).upper()
+                    for l in raw.split("\n") if l.strip()][:9]
         while len(captions) < 9:
             captions.append(captions[-1] if captions else "INDIA KA FUTURE")
+        print(f"  Captions: {captions[:3]}...")
+        return captions
     except Exception as e:
-        print(f"  Captions failed: {e}")
-        words = clean_for_captions.upper().split()
-        step  = max(1, len(words) // 9)
-        captions = [' '.join(words[i*step: i*step+4]) or "INDIA KA FUTURE" for i in range(9)]
-    print(f"  Captions: {captions}")
+        print(f"  Caption failed: {e}")
+        words = clean.upper().split()
+        caps, step = [], max(1, len(words) // 9)
+        for i in range(9):
+            chunk = words[i * step: i * step + 4]
+            caps.append(" ".join(chunk) if chunk else "INDIA KA FUTURE")
+        return caps[:9]
 
-    # ── 4. MOOD CLASSIFIER ────────────────────────────────────────
-    clean_script = re.sub(r'<[^>]+>', '', script).strip()
-    mood_prompt  = f"""Read this script and pick ONE mood that best matches.
+
+def _mood_classifier(api_key: str, script: str, cluster: str) -> str:
+    """
+    GPT picks ONE of 8 mood keys. Nothing else.
+    Returns a valid key from MOOD_PRESETS.
+    Falls back to cluster default if GPT fails.
+    """
+    clean = re.sub(r"<[^>]+>", "", script).strip()
+    prompt = f"""Read this script and pick ONE mood that best matches.
 
 MOODS:
-cinematic_epic   — powerful, dramatic, milestone, space/defence/scale
+cinematic_epic   — powerful, dramatic, milestone achievement, space/defence/scale
 breaking_news    — urgent, shocking fact, current event, time-sensitive
-hopeful_future   — optimistic, innovation solving problems, new beginning
-dark_serious     — challenge, warning, crisis, difficult truth
-cold_tech        — analytical, data-driven, AI/chips/infrastructure
-vibrant_pop      — exciting, consumer, youth energy, product launch
-nostalgic_film   — cultural pride, heritage meets future, emotional
-warm_human       — people-first, healthcare/education, community
+hopeful_future   — optimistic, new beginning, innovation solving problems
+dark_serious     — challenge, warning, problem, crisis, difficult truth
+cold_tech        — analytical, data-driven, AI/chips/infrastructure, precise
+vibrant_pop      — exciting, consumer, youth energy, product launch, fun
+nostalgic_film   — cultural pride, heritage meets future, emotional journey
+warm_human       — people-first, healthcare/education, community, empathy
 
-SCRIPT: {clean_script}
+SCRIPT:
+{clean}
+
 CLUSTER: {cluster}
 
-Return ONLY the mood key. Nothing else. No explanation."""
+Return ONLY the mood key. One word. No explanation. No quotes."""
 
-    mood = CLUSTER_MOOD_DEFAULTS.get(cluster, "hopeful_future")
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": mood_prompt}],
+                  "messages": [{"role": "user", "content": prompt}],
                   "temperature": 0.3, "max_tokens": 20},
             timeout=15,
         )
         r.raise_for_status()
-        raw_mood = r.json()["choices"][0]["message"]["content"].strip().lower()
-        raw_mood = raw_mood.replace('"','').replace("'",'').split()[0]
-        if raw_mood in MOOD_VALID:
-            mood = raw_mood
-        else:
-            for key in MOOD_VALID:
-                if key in raw_mood or raw_mood in key:
-                    mood = key
-                    break
+        raw  = r.json()["choices"][0]["message"]["content"].strip().lower()
+        mood = raw.strip().replace('"', "").replace("'", "").split()[0]
+        if mood in MOOD_PRESETS:
+            print(f"  Mood: {mood} [{MOOD_PRESETS[mood]['label']}]")
+            return mood
+        # Partial match fallback
+        for key in MOOD_PRESETS:
+            if key in mood or mood in key:
+                print(f"  Mood (partial match): {key}")
+                return key
     except Exception as e:
-        print(f"  Mood classifier failed ({e}), using cluster default: {mood}")
-    print(f"  Mood: {mood}")
+        print(f"  Mood classifier failed: {e}")
 
-    # ── 5. SCENE PROMPTS ──────────────────────────────────────────
-    style_a   = random.choice(VISUAL_STYLES)
-    style_b   = random.choice([s for s in VISUAL_STYLES if s != style_a])
-    shot_mid  = random.choice(SHOT_TYPES[1])
-    shot_end  = random.choice(SHOT_TYPES[2])
-    fact_hint = f"\nReal context: {fact_package.get('key_fact','')}" if fact_package and fact_package.get("found") else ""
+    fallback = CLUSTER_MOOD_DEFAULTS.get(cluster, "hopeful_future")
+    print(f"  Mood (cluster fallback): {fallback}")
+    return fallback
 
-    hook_prompt = f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
 
-Channel: India20Sixty — India's near future
-Topic: "{topic}"{fact_hint}
+# ── VISUAL STYLES ───────────────────────────────────────────────
+_VISUAL_STYLES = [
+    "cinematic ultra-realistic photography, golden hour, warm saffron and ochre palette, 8K India",
+    "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic Indian urban setting",
+    "aerial drone perspective, sweeping wide angle, vibrant India, bustling cityscape below",
+    "close-up editorial photography, shallow depth of field, Indian faces, soft bokeh, expressive",
+    "epic establishing shot, atmospheric haze, moody cinematic film grain, Indian landscape",
+    "futuristic neon-lit Indian megacity, rain-slicked streets, autorickshaws and flying drones",
+    "bright optimistic daylight, clean futuristic Indian architecture, hopeful vibrant, lotus motifs",
+    "golden sunset silhouettes over Indian skyline, dust particles, emotionally powerful cinematic",
+    "blue hour twilight, Indian city lights reflecting in water, serene futuristic, ultra sharp",
+    "dramatic overcast monsoon sky, god rays through clouds, epic Indian landscape, hopeful",
+    "hyperrealistic Indian scientist or engineer, modern lab with traditional motifs, ARRI cinematic",
+    "vibrant street-level India, mix of ancient and ultra-modern, people of all ages, optimistic",
+]
 
-REQUIREMENTS:
-- Unmistakably Indian — Indian faces, architecture, landscape, or technology
-- ONE dominant subject filling 70% of frame
-- Extreme contrast — old India vs new India, or dramatic futuristic scene
-- Hyperrealistic ARRI Alexa cinematic quality, 8K, film grain
+_SHOT_TYPES = [
+    ["extreme wide establishing shot", "dramatic low angle hero shot", "sweeping panoramic view", "epic aerial wide shot"],
+    ["medium shot of Indian engineers in action", "intimate human-scale scene", "detailed view of Indian technology", "focused mid-shot with Indian faces"],
+    ["soaring aerial overview", "wide hopeful scene of India's future", "golden hour wide shot of Indian achievement", "emotional cinematic close-up"],
+]
 
-Return ONLY the image prompt as a single string. No labels."""
+_FALLBACKS = [
+    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, marigold hues, cinematic",
+    "Indian scientists in smart traditional attire, holographic displays, IIT-style research campus, temple meets lab",
+    "aerial view of transformed green India, solar farms, villages with fibre internet, hopeful sunrise",
+]
 
-    scenes_prompt = f"""Create 2 cinematic image prompts for an Indian tech/innovation YouTube Short.
 
-Topic: "{topic}"{fact_hint}
-Scene 2 (Insight): {style_a}, {shot_mid} — technology IN Indian context
-Scene 3 (Ending): {style_b}, {shot_end} — wide, hopeful, emotional
+def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict) -> list:
+    import random
+    fact_hint = ""
+    if fact_package and fact_package.get("found"):
+        fact_hint = f"\nReal context: {fact_package.get('key_fact', '')}"
 
-Both must feel distinctly Indian. Return ONLY: ["scene2_prompt", "scene3_prompt"]"""
+    style1 = random.choice(_VISUAL_STYLES)
+    style2 = random.choice([s for s in _VISUAL_STYLES if s != style1])
+    shot1  = random.choice(_SHOT_TYPES[1])
+    shot2  = random.choice(_SHOT_TYPES[2])
 
-    hook = None
-    scene_2_3 = None
-
+    hook_prompt = None
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": hook_prompt}],
+                  "messages": [{"role": "user", "content":
+                    f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
+Channel: India20Sixty — India's near future (tech, space, innovation, startups)
+Topic: "{topic}"{fact_hint}
+Requirements: unmistakably Indian — Indian faces/architecture/landscape/technology.
+ONE dominant subject 70% of frame. Extreme contrast. ARRI cinematic 8K.
+Return ONLY the prompt as a single descriptive string."""}],
                   "temperature": 0.95, "max_tokens": 200},
             timeout=20,
         )
         r.raise_for_status()
-        hook = r.json()["choices"][0]["message"]["content"].strip().strip('"')
-        print(f"  Hook: {hook[:70]}...")
+        hook_prompt = r.json()["choices"][0]["message"]["content"].strip().strip('"')
+        print(f"  Hook prompt: {hook_prompt[:60]}...")
     except Exception as e:
         print(f"  Hook prompt failed: {e}")
-        hook = (f"Extreme cinematic contrast — crumbling old India vs gleaming futuristic India, "
-                f"{topic} transformation, Indian engineers at work, ARRI lighting, saffron sky, 8K")
+        hook_prompt = f"Extreme cinematic contrast — crumbling old India vs gleaming futuristic India, {topic}, ARRI 8K"
 
+    scene_2_3 = None
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
-                     "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": scenes_prompt}],
+                  "messages": [{"role": "user", "content":
+                    f"""Create 2 cinematic image prompts for Indian tech/innovation YouTube Short.
+Topic: "{topic}"{fact_hint}
+Scene 2 (Insight/Story): {style1}, {shot1} — technology in Indian context
+Scene 3 (Hopeful Ending): {style2}, {shot2} — optimistic wide India shot
+Both must feel distinctly Indian.
+Return ONLY: ["scene2_prompt", "scene3_prompt"]"""}],
                   "temperature": 0.9, "max_tokens": 250},
             timeout=20,
         )
         r.raise_for_status()
         content   = r.json()["choices"][0]["message"]["content"].strip()
-        scene_2_3 = json.loads(content[content.find('['):content.rfind(']')+1])
+        scene_2_3 = json.loads(content[content.find("["):content.rfind("]") + 1])
     except Exception as e:
-        print(f"  Scene 2+3 failed: {e}")
-        scene_2_3 = [SCENE_FALLBACKS[1], SCENE_FALLBACKS[2]]
+        print(f"  Scene prompts 2+3 failed: {e}")
+        scene_2_3 = [_FALLBACKS[1], _FALLBACKS[2]]
 
-    scene_prompts = [
-        hook,
-        scene_2_3[0] if scene_2_3 else SCENE_FALLBACKS[1],
-        scene_2_3[1] if scene_2_3 and len(scene_2_3) > 1 else SCENE_FALLBACKS[2],
+    return [
+        hook_prompt,
+        scene_2_3[0] if scene_2_3 else _FALLBACKS[1],
+        scene_2_3[1] if scene_2_3 and len(scene_2_3) > 1 else _FALLBACKS[2],
     ]
 
-    return {
-        "script":          script,
-        "reviewed_script": reviewed_script,
-        "script_lines":    script_lines,
-        "captions":        captions,
-        "mood":            mood,
-        "mood_label":      mood.replace("_", " ").title(),
-        "scene_prompts":   scene_prompts,
-    }
+
+@app.local_entrypoint()
+def main():
+    result = run_scriptwriter.remote(
+        job_id="test-001",
+        topic="ISRO space station India 2035",
+        fact_package={"found": True, "headline": "ISRO announces 2035 space station", "source": "PIB", "key_fact": "India will launch its own space station by 2035"},
+        cluster="Space",
+        subscribe_cta=False,
+    )
+    print("Script:", result["script"])
+    print("Mood:", result["mood"])
+    print("Captions:", result["captions"][:3])

@@ -1,39 +1,462 @@
 import modal
+import io
 import os
 import re
 import time
 import random
 import requests
 from pathlib import Path
+from datetime import datetime
 
 # ==========================================
 # MODAL APP — IMAGES
-# 6-tier fallback chain for a SINGLE image.
-# The orchestrator (pipeline.py) calls generate_one_image.spawn()
-# three times simultaneously → 3x speedup vs sequential.
+# india20sixty channel
 #
-# Tier order (free → paid):
-#   1. Pollinations.ai   — free, no key
-#   2. HuggingFace       — free key
-#   3. Pixabay           — free key, stock photos
-#   4. Together AI       — cheap ~$0.01/img
-#   5. Replicate         — cheap ~$0.003/img
-#   6. Leonardo          — paid API credits, best quality
-#   F. R2 Library        — fallback from saved images
+# Tier 0:  FLUX.1-schnell on A10G GPU     free, ~16s, Apache 2.0
+# Tier 1:  Pollinations.ai               free, no key
+# Tier 2:  HuggingFace Inference API     free key
+# Tier 3:  Pixabay                       free key, stock fallback
+# Tier 4:  Together AI                   ~$0.01/image
+# Tier 5:  Replicate                     ~$0.003/image
+# Tier 6:  Leonardo AI                   paid, highest quality
+# Final:   R2 Library                    saved from past runs
+#
+# Every successful image → auto-saved to R2 + image_cache table
+# Organized by cluster for the Library tab.
 # ==========================================
 
 app = modal.App("india20sixty-images")
 
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install("requests")
+# ── CHANNEL VISUAL IDENTITY ───────────────────────────────────
+# This is what makes india20sixty images look distinct.
+# Crafted specifically for Indian tech/innovation documentary content.
+# Edit STYLE_PREFIX to change the visual character of this channel.
+
+CHANNEL_NAME = "india20sixty"
+
+STYLE_PREFIX = (
+    "hyperrealistic cinematic documentary photograph, "
+    "Indian subject matter, Indian faces and landscapes, "
+    "ARRI Alexa cinema camera, anamorphic lens flare, "
+    "dramatic volumetric lighting, golden hour warmth, "
+    "rich saffron and deep blue color palette, "
+    "sharp foreground subject with atmospheric depth of field, "
+    "professional photojournalism quality, National Geographic style, "
+    "4K HDR, high dynamic range, film grain texture, "
+    "emotionally resonant composition, "
+)
+
+NEGATIVE_PROMPT = (
+    "blurry, cartoon, anime, painting, illustration, watermark, "
+    "text overlay, logo, western faces, white skin, european, "
+    "low quality, overexposed, underexposed, grainy, noisy, "
+    "nsfw, ugly, distorted anatomy, extra limbs, deformed hands, "
+    "stock photo look, generic, corporate clipart, "
+    "jpeg artifacts, chromatic aberration, lens distortion"
+)
+
+IMG_WIDTH        = 864
+IMG_HEIGHT       = 1536
+INFERENCE_STEPS  = 8      # 8 steps: significantly better than 4, ~16s on A10G
+GUIDANCE_SCALE   = 0.0    # schnell requires 0 guidance — do not change
+# ─────────────────────────────────────────────────────────────
+
+TMP_DIR = "/tmp/india20sixty-images"
+
+# ── FLUX MODEL — baked into container at build time ───────────
+
+def _download_flux():
+    import os
+    from diffusers import FluxPipeline
+    import torch
+    hf_token = os.environ.get("HF_TOKEN", "")
+    print("Downloading FLUX.1-schnell weights...")
+    FluxPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-schnell",
+        torch_dtype=torch.bfloat16,
+        token=hf_token or None,
+    )
+    print("FLUX.1-schnell cached in container.")
+
+flux_image = (
+    modal.Image.from_registry("pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime")
+    .pip_install(
+        "diffusers>=0.32.0",
+        "transformers>=4.48.0",
+        "accelerate>=1.3.0",
+        "safetensors>=0.4.5",
+        "sentencepiece>=0.2.0",
+        "Pillow",
+        "requests",
+    )
+    .run_function(
+        _download_flux,
+        secrets=[modal.Secret.from_name("india20sixty-secrets")],
+    )
 )
 
 secrets = [modal.Secret.from_name("india20sixty-secrets")]
 
-TMP_DIR    = "/tmp/images"
-IMG_WIDTH  = 864
-IMG_HEIGHT = 1536
+
+# ==========================================
+# MAIN — called by pipeline.py
+# ==========================================
+
+@app.function(
+    image=flux_image,
+    gpu="A10G",
+    timeout=180,
+    secrets=secrets,
+)
+def generate_single_image(
+    prompt: str,
+    scene_idx: int,
+    job_id: str,
+    cluster: str = "AI",
+    job_type: str = "shorts",    # "shorts" | "longform"
+    engine_mode: str = "inbuilt", # "inbuilt" | "external"
+) -> dict:
+    """
+    Generate one image. Auto-saves to R2 + image_cache after success.
+    Returns: { success, local_path, tier_used, scene_idx, r2_url }
+    """
+    Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
+    output_path = f"{TMP_DIR}/{job_id}_{scene_idx}.png"
+
+    HF_API_KEY        = os.environ.get("HF_API_KEY", "")
+    TOGETHER_API_KEY  = os.environ.get("TOGETHER_API_KEY", "")
+    REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")
+    LEONARDO_API_KEY  = os.environ.get("LEONARDO_API_KEY", "")
+    PIXABAY_API_KEY   = os.environ.get("PIXABAY_API_KEY", "")
+    SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
+    SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+    R2_BASE_URL       = os.environ.get("R2_BASE_URL", "").rstrip("/")
+    R2_ACCOUNT_ID     = os.environ.get("R2_ACCOUNT_ID", "")
+    R2_ACCESS_KEY_ID  = os.environ.get("R2_ACCESS_KEY_ID", "")
+    R2_SECRET_KEY     = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    R2_BUCKET         = os.environ.get("R2_BUCKET", "india20sixty")
+
+    print(f"\n[Image {scene_idx+1}] job={job_id} cluster={cluster} mode={engine_mode}")
+    print(f"  Prompt: {prompt[:80]}...")
+
+    tier_used = None
+
+    if engine_mode == "inbuilt":
+        # ── TIER 0: FLUX on-device ────────────────────────────
+        print("  [Tier 0: FLUX.1-schnell × 8 steps on A10G]")
+        try:
+            if _try_flux(prompt, output_path):
+                tier_used = "FLUX-A10G"
+        except Exception as e:
+            print(f"  FLUX exception: {e}")
+
+    if not tier_used:
+        # ── TIERS 1–6: External fallbacks ─────────────────────
+        tiers = [
+            ("Pollinations", lambda p,o: _try_pollinations(p, o)),
+            ("HuggingFace",  lambda p,o: _try_huggingface(p, o, HF_API_KEY)),
+            ("Pixabay",      lambda p,o: _try_pixabay(p, o, PIXABAY_API_KEY)),
+            ("Together",     lambda p,o: _try_together(p, o, TOGETHER_API_KEY)),
+            ("Replicate",    lambda p,o: _try_replicate(p, o, REPLICATE_API_KEY)),
+            ("Leonardo",     lambda p,o: _try_leonardo(p, o, LEONARDO_API_KEY)),
+        ]
+        for name, fn in tiers:
+            print(f"  [Tier: {name}]")
+            try:
+                if fn(prompt, output_path):
+                    tier_used = name
+                    break
+            except Exception as e:
+                print(f"  {name} exception: {e}")
+
+    if not tier_used:
+        # ── FINAL: R2 Library ──────────────────────────────────
+        print("  [Tier: R2 Library]")
+        if _try_r2_library(prompt, output_path, SUPABASE_URL, SUPABASE_ANON_KEY, R2_BASE_URL):
+            tier_used = "R2Library"
+
+    if not tier_used:
+        print(f"  ✗ All tiers failed for scene {scene_idx}")
+        return {"success": False, "local_path": None, "tier_used": None,
+                "scene_idx": scene_idx, "r2_url": None}
+
+    size = os.path.getsize(output_path)
+    print(f"  ✓ {tier_used} — {size//1024}KB")
+
+    # ── AUTO-SAVE TO R2 + image_cache ─────────────────────────
+    r2_url = None
+    if R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and tier_used != "R2Library":
+        r2_url = _save_to_r2_and_cache(
+            output_path, job_id, scene_idx, cluster, job_type,
+            prompt, tier_used,
+            R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY, R2_BUCKET,
+            R2_BASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY
+        )
+
+    return {"success": True, "local_path": output_path, "tier_used": tier_used,
+            "scene_idx": scene_idx, "r2_url": r2_url}
+
+
+# ==========================================
+# TIER 0 — FLUX ON-DEVICE
+# ==========================================
+
+def _try_flux(prompt: str, output_path: str) -> bool:
+    import torch
+    from diffusers import FluxPipeline
+
+    # Build the full cinematic prompt
+    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
+
+    pipe = FluxPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-schnell",
+        torch_dtype=torch.bfloat16,
+    )
+    pipe = pipe.to("cuda")
+
+    # Enable memory optimizations
+    pipe.enable_attention_slicing()
+
+    result = pipe(
+        prompt=full_prompt,
+        width=IMG_WIDTH,
+        height=IMG_HEIGHT,
+        num_inference_steps=INFERENCE_STEPS,  # 8 steps — best quality/speed balance
+        guidance_scale=GUIDANCE_SCALE,
+        generator=torch.Generator("cuda").manual_seed(random.randint(0, 2**32 - 1)),
+    )
+
+    img = result.images[0]
+    img.save(output_path, format="PNG", optimize=True)
+    return os.path.getsize(output_path) > 100_000
+
+
+# ==========================================
+# AUTO-SAVE TO R2 + IMAGE_CACHE
+# ==========================================
+
+def _save_to_r2_and_cache(
+    local_path, job_id, scene_idx, cluster, job_type,
+    prompt, engine, r2_account_id, r2_access_key, r2_secret,
+    r2_bucket, r2_base, supabase_url, supabase_key
+) -> str:
+    """Upload image to R2 under images/{cluster}/ and record in image_cache."""
+    import hmac
+    import hashlib
+    import urllib.parse
+
+    # Build R2 key — organized by cluster
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    r2_key    = f"images/{cluster}/{job_id}_{scene_idx}_{timestamp}.png"
+    endpoint  = f"https://{r2_account_id}.r2.cloudflarestorage.com"
+    url       = f"{endpoint}/{r2_bucket}/{r2_key}"
+    now       = datetime.utcnow()
+    date_str  = now.strftime("%Y%m%d")
+    time_str  = now.strftime("%Y%m%dT%H%M%SZ")
+
+    try:
+        with open(local_path, "rb") as f:
+            data = f.read()
+
+        payload_hash   = hashlib.sha256(data).hexdigest()
+        signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date"
+        canonical = "\n".join([
+            "PUT",
+            f"/{r2_bucket}/{urllib.parse.quote(r2_key, safe='/')}",
+            "",
+            f"content-type:image/png",
+            f"host:{r2_account_id}.r2.cloudflarestorage.com",
+            f"x-amz-content-sha256:{payload_hash}",
+            f"x-amz-date:{time_str}",
+            "",
+            signed_headers,
+            payload_hash,
+        ])
+        cred_scope     = f"{date_str}/auto/s3/aws4_request"
+        string_to_sign = "\n".join([
+            "AWS4-HMAC-SHA256", time_str, cred_scope,
+            hashlib.sha256(canonical.encode()).hexdigest(),
+        ])
+
+        def sign(key, msg):
+            return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+        signing_key = sign(
+            sign(sign(sign(f"AWS4{r2_secret}".encode(), date_str), "auto"), "s3"),
+            "aws4_request"
+        )
+        signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+
+        r = requests.put(url, data=data, headers={
+            "Content-Type":         "image/png",
+            "x-amz-content-sha256": payload_hash,
+            "x-amz-date":           time_str,
+            "Host":                 f"{r2_account_id}.r2.cloudflarestorage.com",
+            "Authorization": (
+                f"AWS4-HMAC-SHA256 Credential={r2_access_key}/{cred_scope},"
+                f"SignedHeaders={signed_headers},Signature={signature}"
+            ),
+        }, timeout=60)
+        r.raise_for_status()
+
+        public_url = f"{r2_base}/{r2_key}" if r2_base else url
+        print(f"  R2: {len(data)//1024}KB → {r2_key}")
+
+        # Insert into image_cache with cluster tag
+        if supabase_url:
+            requests.post(
+                f"{supabase_url}/rest/v1/image_cache",
+                headers={"apikey": supabase_key,
+                         "Authorization": f"Bearer {supabase_key}",
+                         "Content-Type": "application/json",
+                         "Prefer": "return=minimal"},
+                json={
+                    "job_id":    job_id,
+                    "r2_key":    r2_key,
+                    "public_url":public_url,
+                    "cluster":   cluster,
+                    "prompt":    prompt[:500],
+                    "engine":    engine,
+                    "job_type":  job_type,
+                    "scene_idx": scene_idx,
+                    "created_at":datetime.utcnow().isoformat(),
+                },
+                timeout=8,
+            )
+
+        return public_url
+
+    except Exception as e:
+        print(f"  R2 save failed (non-fatal): {e}")
+        return None
+
+
+# ==========================================
+# TIER 1–6 EXTERNAL FALLBACKS
+# ==========================================
+
+def _extract_keywords(prompt: str, n: int = 4) -> list:
+    skip = {
+        "cinematic","ultra","realistic","dramatic","hyperrealistic","photorealistic",
+        "epic","wide","shot","arri","alexa","grain","film","8k","4k","high","contrast",
+        "indian","india","futuristic","vibrant","moody","golden","hour","aerial",
+        "stunning","beautiful","detailed","sharp","focus","bokeh","lighting",
+        "dark","bright","colorful","create","image","prompt","scene","showing",
+        "featuring","depicting","must","look","documentary","quality","saffron",
+        "camera","lens","hdr","hyperrealistic","anamorphic","volumetric",
+    }
+    words = re.sub(r"[^a-zA-Z\s]", "", prompt).lower().split()
+    return [w for w in words if len(w) > 3 and w not in skip][:n]
+
+
+def _try_pollinations(prompt: str, output_path: str) -> bool:
+    import urllib.parse
+    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    safe = urllib.parse.quote(full_prompt[:400])
+    url = (f"https://image.pollinations.ai/prompt/{safe}"
+           f"?width={IMG_WIDTH}&height={IMG_HEIGHT}"
+           f"&model=flux&nologo=true&seed={random.randint(1,99999)}")
+    r = requests.get(url, timeout=90, stream=True)
+    r.raise_for_status()
+    with open(output_path, "wb") as f:
+        for chunk in r.iter_content(8192): f.write(chunk)
+    return os.path.getsize(output_path) > 50_000
+
+
+def _try_huggingface(prompt: str, output_path: str, api_key: str) -> bool:
+    if not api_key: return False
+    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    for model in ["black-forest-labs/FLUX.1-schnell",
+                  "stabilityai/stable-diffusion-xl-base-1.0"]:
+        try:
+            r = requests.post(
+                f"https://api-inference.huggingface.co/models/{model}",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"inputs": full_prompt[:500],
+                      "parameters": {"width": IMG_WIDTH, "height": IMG_HEIGHT}},
+                timeout=90,
+            )
+            if r.status_code in (503, 429): continue
+            if r.status_code != 200: continue
+            with open(output_path, "wb") as f: f.write(r.content)
+            if os.path.getsize(output_path) > 50_000: return True
+        except Exception: continue
+    return False
+
+
+def _try_pixabay(prompt: str, output_path: str, api_key: str) -> bool:
+    if not api_key: return False
+    keywords = _extract_keywords(prompt)
+    query = " ".join(keywords) if keywords else "india technology innovation"
+    r = requests.get("https://pixabay.com/api/", params={
+        "key": api_key, "q": query, "image_type": "photo",
+        "orientation": "vertical", "min_width": 800, "min_height": 1200,
+        "safesearch": "true", "per_page": 5}, timeout=15)
+    r.raise_for_status()
+    hits = r.json().get("hits", [])
+    if not hits: return False
+    img_url = hits[0].get("largeImageURL") or hits[0].get("webformatURL")
+    if not img_url: return False
+    img_r = requests.get(img_url, timeout=30, stream=True); img_r.raise_for_status()
+    with open(output_path, "wb") as f:
+        for chunk in img_r.iter_content(8192): f.write(chunk)
+    return os.path.getsize(output_path) > 50_000
+
+
+def _try_together(prompt: str, output_path: str, api_key: str) -> bool:
+    if not api_key: return False
+    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    r = requests.post(
+        "https://api.together.xyz/v1/images/generations",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": "black-forest-labs/FLUX.1-schnell-Free",
+              "prompt": full_prompt[:500], "width": IMG_WIDTH,
+              "height": IMG_HEIGHT, "steps": 4, "n": 1},
+        timeout=90,
+    )
+    if r.status_code != 200: return False
+    data = r.json()
+    img_url = data.get("data", [{}])[0].get("url")
+    if not img_url:
+        b64 = data.get("data", [{}])[0].get("b64_json")
+        if b64:
+            import base64
+            with open(output_path, "wb") as f: f.write(base64.b64decode(b64))
+            return os.path.getsize(output_path) > 50_000
+        return False
+    img_r = requests.get(img_url, timeout=30, stream=True); img_r.raise_for_status()
+    with open(output_path, "wb") as f:
+        for chunk in img_r.iter_content(8192): f.write(chunk)
+    return os.path.getsize(output_path) > 50_000
+
+
+def _try_replicate(prompt: str, output_path: str, api_key: str) -> bool:
+    if not api_key: return False
+    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    r = requests.post(
+        "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
+        headers={"Authorization": f"Token {api_key}", "Content-Type": "application/json"},
+        json={"input": {"prompt": full_prompt[:500], "aspect_ratio": "9:16",
+                        "output_format": "png", "num_outputs": 1}}, timeout=30)
+    if r.status_code not in (200, 201): return False
+    pred_id = r.json().get("id")
+    if not pred_id: return False
+    for _ in range(30):
+        time.sleep(2)
+        poll = requests.get(f"https://api.replicate.com/v1/predictions/{pred_id}",
+                            headers={"Authorization": f"Token {api_key}"}, timeout=10)
+        data = poll.json(); status = data.get("status")
+        if status == "succeeded":
+            urls = data.get("output", [])
+            if not urls: return False
+            img_r = requests.get(urls[0], timeout=30, stream=True); img_r.raise_for_status()
+            with open(output_path, "wb") as f:
+                for chunk in img_r.iter_content(8192): f.write(chunk)
+            return os.path.getsize(output_path) > 50_000
+        elif status in ("failed", "canceled"): return False
+    return False
+
 
 LEONARDO_MODELS = [
     "aa77f04e-3eec-4034-9c07-d0f619684628",
@@ -41,414 +464,79 @@ LEONARDO_MODELS = [
     "6bef9f1b-29cb-40c7-b9df-32b51c1f67d3",
 ]
 
-
-# ==========================================
-# GENERATE ONE IMAGE
-# Called 3x in parallel by the orchestrator.
-# Returns: local path to downloaded image file.
-# ==========================================
-
-@app.function(
-    image=image,
-    secrets=secrets,
-    cpu=0.5,
-    memory=512,
-    timeout=120,
-)
-def generate_one_image(
-    prompt:      str,
-    scene_idx:   int,
-    job_id:      str,
-    topic:       str,
-    exclude_r2:  list = None,
-) -> str:
-    Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
-
-    LEONARDO_API_KEY  = os.environ.get("LEONARDO_API_KEY", "")
-    HF_API_KEY        = os.environ.get("HF_API_KEY", "")
-    TOGETHER_API_KEY  = os.environ.get("TOGETHER_API_KEY", "")
-    REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")
-    PIXABAY_API_KEY   = os.environ.get("PIXABAY_API_KEY", "")
-    SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
-    SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-    R2_BASE_URL       = os.environ.get("R2_BASE_URL", "")
-
-    output_path = f"{TMP_DIR}/{job_id}_{scene_idx}.png"
-    print(f"\n[Image {scene_idx+1}] {prompt[:70]}...")
-
-    # ── KEYWORD EXTRACTOR ────────────────────────────────────────
-    def extract_keywords(p, n=4):
-        skip = {
-            'cinematic','ultra','realistic','dramatic','hyperrealistic',
-            'photorealistic','epic','wide','shot','arri','alexa','grain',
-            'film','8k','4k','high','contrast','indian','india','futuristic',
-            'vibrant','moody','golden','hour','aerial','stunning','detailed',
-            'sharp','focus','bokeh','lighting','dark','bright','color',
-            'create','image','prompt','scene','showing','depicting',
-        }
-        words = re.sub(r'[^a-zA-Z\s]', '', p).lower().split()
-        return [w for w in words if len(w) > 3 and w not in skip][:n]
-
-    # ── TIER 1: POLLINATIONS ─────────────────────────────────────
-    def try_pollinations():
-        try:
-            import urllib.parse
-            safe = urllib.parse.quote(prompt[:400])
-            url  = (f"https://image.pollinations.ai/prompt/{safe}"
-                    f"?width={IMG_WIDTH}&height={IMG_HEIGHT}"
-                    f"&model=flux&nologo=true&seed={random.randint(1,99999)}")
-            r = requests.get(url, timeout=60, stream=True)
-            r.raise_for_status()
-            with open(output_path, "wb") as f:
-                for chunk in r.iter_content(8192):
-                    f.write(chunk)
-            size = os.path.getsize(output_path)
-            if size < 50_000:
-                return False
-            print(f"  [1/Pollinations] OK {size//1024}KB")
-            return True
-        except Exception as e:
-            print(f"  [1/Pollinations] failed: {e}")
-            return False
-
-    # ── TIER 2: HUGGING FACE ─────────────────────────────────────
-    def try_huggingface():
-        if not HF_API_KEY:
-            return False
-        models = [
-            "black-forest-labs/FLUX.1-schnell",
-            "stabilityai/stable-diffusion-xl-base-1.0",
-        ]
-        for model in models:
-            try:
-                r = requests.post(
-                    f"https://api-inference.huggingface.co/models/{model}",
-                    headers={"Authorization": f"Bearer {HF_API_KEY}"},
-                    json={"inputs": prompt[:500],
-                          "parameters": {"width": IMG_WIDTH, "height": IMG_HEIGHT}},
-                    timeout=60,
-                )
-                if r.status_code in (503, 429):
-                    continue
-                if r.status_code != 200:
-                    continue
-                with open(output_path, "wb") as f:
-                    f.write(r.content)
-                size = os.path.getsize(output_path)
-                if size < 50_000:
-                    continue
-                print(f"  [2/HuggingFace:{model.split('/')[-1]}] OK {size//1024}KB")
-                return True
-            except Exception as e:
-                print(f"  [2/HuggingFace] {e}")
-                continue
-        return False
-
-    # ── TIER 3: PIXABAY ──────────────────────────────────────────
-    def try_pixabay():
-        if not PIXABAY_API_KEY:
-            return False
-        try:
-            keywords = extract_keywords(prompt)
-            query    = ' '.join(keywords) if keywords else 'technology india'
-            r = requests.get(
-                "https://pixabay.com/api/",
-                params={
-                    "key": PIXABAY_API_KEY, "q": query,
-                    "image_type": "photo", "orientation": "vertical",
-                    "min_width": 800, "min_height": 1200,
-                    "safesearch": "true", "per_page": 5,
-                },
-                timeout=15,
-            )
-            r.raise_for_status()
-            hits = r.json().get("hits", [])
-            if not hits:
-                return False
-            img_url = hits[0].get("largeImageURL") or hits[0].get("webformatURL")
-            if not img_url:
-                return False
-            img_r = requests.get(img_url, timeout=30, stream=True)
-            img_r.raise_for_status()
-            with open(output_path, "wb") as f:
-                for chunk in img_r.iter_content(8192):
-                    f.write(chunk)
-            size = os.path.getsize(output_path)
-            if size < 50_000:
-                return False
-            print(f"  [3/Pixabay:'{query}'] OK {size//1024}KB")
-            return True
-        except Exception as e:
-            print(f"  [3/Pixabay] {e}")
-            return False
-
-    # ── TIER 4: TOGETHER AI ──────────────────────────────────────
-    def try_together():
-        if not TOGETHER_API_KEY:
-            return False
+def _try_leonardo(prompt: str, output_path: str, api_key: str) -> bool:
+    if not api_key: return False
+    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    for model_id in LEONARDO_MODELS:
         try:
             r = requests.post(
-                "https://api.together.xyz/v1/images/generations",
-                headers={"Authorization": f"Bearer {TOGETHER_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={"model": "black-forest-labs/FLUX.1-schnell-Free",
-                      "prompt": prompt[:500],
+                "https://cloud.leonardo.ai/api/rest/v1/generations",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"prompt": full_prompt, "modelId": model_id,
                       "width": IMG_WIDTH, "height": IMG_HEIGHT,
-                      "steps": 4, "n": 1},
-                timeout=60,
-            )
-            if r.status_code != 200:
-                return False
-            data    = r.json()
-            img_url = data.get("data", [{}])[0].get("url")
-            if not img_url:
-                b64 = data.get("data", [{}])[0].get("b64_json")
-                if b64:
-                    import base64
-                    with open(output_path, "wb") as f:
-                        f.write(base64.b64decode(b64))
-                    size = os.path.getsize(output_path)
-                    if size > 50_000:
-                        print(f"  [4/Together] OK b64 {size//1024}KB")
-                        return True
-                return False
-            img_r = requests.get(img_url, timeout=30, stream=True)
-            img_r.raise_for_status()
-            with open(output_path, "wb") as f:
-                for chunk in img_r.iter_content(8192):
-                    f.write(chunk)
-            size = os.path.getsize(output_path)
-            if size < 50_000:
-                return False
-            print(f"  [4/Together] OK {size//1024}KB")
-            return True
+                      "num_images": 1, "presetStyle": "CINEMATIC"}, timeout=30)
+            if r.status_code == 402: return False
+            if r.status_code != 200: time.sleep(5); continue
+            data = r.json()
+            if "sdGenerationJob" not in data: continue
+            gen_id = data["sdGenerationJob"]["generationId"]
+            for _ in range(80):
+                time.sleep(3)
+                pr = requests.get(
+                    f"https://cloud.leonardo.ai/api/rest/v1/generations/{gen_id}",
+                    headers={"Authorization": f"Bearer {api_key}"}, timeout=15)
+                pr.raise_for_status()
+                gen = pr.json().get("generations_by_pk", {})
+                if gen.get("status") == "FAILED": raise Exception("Leonardo FAILED")
+                if gen.get("status") == "COMPLETE":
+                    imgs = gen.get("generated_images", [])
+                    if not imgs: raise Exception("No images")
+                    img_r = requests.get(imgs[0]["url"], timeout=30); img_r.raise_for_status()
+                    with open(output_path, "wb") as f: f.write(img_r.content)
+                    return os.path.getsize(output_path) > 50_000
         except Exception as e:
-            print(f"  [4/Together] {e}")
-            return False
-
-    # ── TIER 5: REPLICATE ────────────────────────────────────────
-    def try_replicate():
-        if not REPLICATE_API_KEY:
-            return False
-        try:
-            r = requests.post(
-                "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
-                headers={"Authorization": f"Token {REPLICATE_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={"input": {"prompt": prompt[:500], "aspect_ratio": "9:16",
-                                "output_format": "png", "num_outputs": 1}},
-                timeout=30,
-            )
-            if r.status_code not in (200, 201):
-                return False
-            pred_id = r.json().get("id")
-            if not pred_id:
-                return False
-            for _ in range(30):
-                time.sleep(2)
-                poll   = requests.get(
-                    f"https://api.replicate.com/v1/predictions/{pred_id}",
-                    headers={"Authorization": f"Token {REPLICATE_API_KEY}"},
-                    timeout=10,
-                )
-                data   = poll.json()
-                status = data.get("status")
-                if status == "succeeded":
-                    urls = data.get("output", [])
-                    if not urls:
-                        return False
-                    img_r = requests.get(urls[0], timeout=30, stream=True)
-                    img_r.raise_for_status()
-                    with open(output_path, "wb") as f:
-                        for chunk in img_r.iter_content(8192):
-                            f.write(chunk)
-                    size = os.path.getsize(output_path)
-                    if size < 50_000:
-                        return False
-                    print(f"  [5/Replicate] OK {size//1024}KB")
-                    return True
-                elif status in ("failed", "canceled"):
-                    return False
-            return False
-        except Exception as e:
-            print(f"  [5/Replicate] {e}")
-            return False
-
-    # ── TIER 6: LEONARDO ─────────────────────────────────────────
-    def try_leonardo():
-        if not LEONARDO_API_KEY:
-            return False
-        for model_id in LEONARDO_MODELS:
-            try:
-                r = requests.post(
-                    "https://cloud.leonardo.ai/api/rest/v1/generations",
-                    headers={"Authorization": f"Bearer {LEONARDO_API_KEY}",
-                             "Content-Type": "application/json"},
-                    json={"prompt": prompt, "modelId": model_id,
-                          "width": IMG_WIDTH, "height": IMG_HEIGHT,
-                          "num_images": 1, "presetStyle": "CINEMATIC"},
-                    timeout=30,
-                )
-                if r.status_code == 402:
-                    print("  [6/Leonardo] API credits exhausted")
-                    return False
-                if r.status_code != 200:
-                    print(f"  [6/Leonardo] {r.status_code}")
-                    time.sleep(5)
-                    continue
-                data = r.json()
-                if "sdGenerationJob" not in data:
-                    continue
-                gen_id = data["sdGenerationJob"]["generationId"]
-                print(f"  [6/Leonardo] gen_id={gen_id}")
-                # Poll for completion
-                for poll in range(80):
-                    time.sleep(3)
-                    pr = requests.get(
-                        f"https://cloud.leonardo.ai/api/rest/v1/generations/{gen_id}",
-                        headers={"Authorization": f"Bearer {LEONARDO_API_KEY}"},
-                        timeout=15,
-                    )
-                    pr.raise_for_status()
-                    gen    = pr.json().get("generations_by_pk", {})
-                    status = gen.get("status", "UNKNOWN")
-                    if status == "FAILED":
-                        raise Exception("Leonardo generation FAILED")
-                    if status == "COMPLETE":
-                        imgs = gen.get("generated_images", [])
-                        if not imgs:
-                            raise Exception("No images in response")
-                        img_r = requests.get(imgs[0]["url"], timeout=30)
-                        img_r.raise_for_status()
-                        with open(output_path, "wb") as f:
-                            f.write(img_r.content)
-                        size = os.path.getsize(output_path)
-                        print(f"  [6/Leonardo] OK {size//1024}KB")
-                        return True
-                raise Exception("Leonardo polling timeout")
-            except Exception as e:
-                if "credits_exhausted" in str(e) or "402" in str(e):
-                    return False
-                print(f"  [6/Leonardo] model failed: {str(e)[:60]}")
-                time.sleep(5)
-        return False
-
-    # ── FALLBACK: R2 LIBRARY ─────────────────────────────────────
-    def try_r2_library():
-        if not SUPABASE_URL:
-            return False
-        try:
-            words = extract_keywords(prompt)
-            rows  = []
-            for term in words[:2]:
-                r = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/image_cache"
-                    f"?topic=ilike.*{term}*&select=r2_key,public_url,topic"
-                    f"&limit=5&order=created_at.desc",
-                    headers={"apikey": SUPABASE_ANON_KEY,
-                             "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
-                    timeout=5,
-                )
-                if r.status_code == 200:
-                    rows.extend(r.json())
-            if not rows:
-                r = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/image_cache"
-                    f"?select=r2_key,public_url,topic&limit=10&order=created_at.desc",
-                    headers={"apikey": SUPABASE_ANON_KEY,
-                             "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
-                    timeout=5,
-                )
-                if r.status_code == 200:
-                    rows = r.json()
-            seen, unique = set(), []
-            for row in rows:
-                k = row.get("r2_key", "")
-                if k and k not in seen and k not in (exclude_r2 or []):
-                    seen.add(k)
-                    unique.append(row)
-            if not unique:
-                return False
-            chosen  = unique[0]
-            img_url = chosen.get("public_url") or f"{R2_BASE_URL.rstrip('/')}/{chosen['r2_key']}"
-            print(f"  [F/R2Library] '{chosen.get('topic','?')[:40]}'")
-            img_r = requests.get(img_url, timeout=30, stream=True)
-            img_r.raise_for_status()
-            with open(output_path, "wb") as f:
-                for chunk in img_r.iter_content(8192):
-                    f.write(chunk)
-            return os.path.getsize(output_path) > 10_000
-        except Exception as e:
-            print(f"  [F/R2Library] {e}")
-            return False
-
-    # ── FALLBACK: BLACK FRAME ─────────────────────────────────────
-    def make_black_frame():
-        import subprocess as sp
-        sp.run([
-            "ffmpeg", "-y", "-f", "lavfi",
-            "-i", f"color=c=0x0d1117:s={IMG_WIDTH}x{IMG_HEIGHT}:d=1",
-            "-frames:v", "1", output_path,
-        ], capture_output=True, timeout=15)
-        print("  [F/BlackFrame] using placeholder")
-
-    # ── RUN CHAIN ────────────────────────────────────────────────
-    TIERS = [
-        try_pollinations,
-        try_huggingface,
-        try_pixabay,
-        try_together,
-        try_replicate,
-        try_leonardo,
-    ]
-    for fn in TIERS:
-        try:
-            if fn():
-                break
-        except Exception as e:
-            print(f"  tier exception: {e}")
-    else:
-        # All tiers failed — try R2 library
-        if not try_r2_library():
-            make_black_frame()
-
-    return output_path
+            if "402" in str(e) or "credits" in str(e): return False
+            time.sleep(5)
+    return False
 
 
-# ==========================================
-# SAVE IMAGE TO R2
-# Called after successful generation to build the image library.
-# Non-fatal — pipeline continues even if this fails.
-# ==========================================
-
-@app.function(image=image, secrets=secrets, timeout=60)
-def save_image_to_r2(local_path: str, topic: str, job_id: str, scene_idx: int) -> tuple:
-    """Upload generated image to R2 and record in image_cache. Returns (key, url)."""
-    from workers.publisher import upload_to_r2
-    import re as _re
-
-    SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
-    SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-
+def _try_r2_library(prompt: str, output_path: str,
+                    supabase_url: str, supabase_key: str, r2_base: str) -> bool:
+    if not supabase_url: return False
     try:
-        topic_slug = _re.sub(r'[^a-z0-9]+', '-', topic.lower())[:40]
-        key        = f"images/{topic_slug}/{job_id}_{scene_idx}.png"
-        public_url = upload_to_r2.remote(local_path, key)
-
-        requests.post(
-            f"{SUPABASE_URL}/rest/v1/image_cache",
-            headers={"apikey": SUPABASE_ANON_KEY,
-                     "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                     "Content-Type": "application/json",
-                     "Prefer": "return=minimal"},
-            json={"job_id": job_id, "topic": topic,
-                  "r2_key": key, "public_url": public_url,
-                  "scene_idx": scene_idx,
-                  "created_at": datetime.utcnow().isoformat()},
-            timeout=5,
-        )
-        print(f"  Saved to R2 library: {key}")
-        return key, public_url
+        words = _extract_keywords(prompt)
+        rows = []
+        for term in words[:2]:
+            r = requests.get(
+                f"{supabase_url}/rest/v1/image_cache"
+                f"?topic=ilike.*{term}*&select=r2_key,public_url&limit=5&order=created_at.desc",
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+                timeout=5)
+            if r.status_code == 200: rows.extend(r.json())
+        if not rows:
+            r = requests.get(
+                f"{supabase_url}/rest/v1/image_cache"
+                f"?select=r2_key,public_url&limit=10&order=created_at.desc",
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+                timeout=5)
+            if r.status_code == 200: rows = r.json()
+        if not rows: return False
+        img_url = rows[0].get("public_url") or f"{r2_base.rstrip('/')}/{rows[0]['r2_key']}"
+        img_r = requests.get(img_url, timeout=30, stream=True); img_r.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in img_r.iter_content(8192): f.write(chunk)
+        return os.path.getsize(output_path) > 10_000
     except Exception as e:
-        print(f"  R2 library save failed (non-fatal): {e}")
-        return None, None
+        print(f"  R2 Library: {e}"); return False
+
+
+@app.local_entrypoint()
+def main():
+    result = generate_single_image.remote(
+        prompt="ISRO scientists celebrating successful spacecraft launch, mission control room, "
+               "screens showing rocket trajectory, Indian engineers in celebration, "
+               "dramatic red and gold lighting",
+        scene_idx=0, job_id="test-flux-001",
+        cluster="Space", job_type="shorts", engine_mode="inbuilt",
+    )
+    print(f"Tier: {result['tier_used']} | R2: {result['r2_url']}")

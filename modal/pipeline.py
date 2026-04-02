@@ -11,7 +11,7 @@ from datetime import datetime
 # MODAL APP — PIPELINE ORCHESTRATOR v5.0
 #
 # NO direct imports of other Modal apps.
-# All cross-app calls use modal.Function.lookup()
+# All cross-app calls use modal.Function.from_name()
 # so Modal doesn't try to find .app on imports.
 # ==========================================
 
@@ -31,31 +31,31 @@ TMP_DIR = "/tmp/india20sixty"
 # This is the correct pattern for calling across Modal apps.
 
 def _research():
-    return modal.Function.lookup("india20sixty-research", "run_research")
+    return modal.Function.from_name("india20sixty-research", "run_research")
 
 def _scriptwriter():
-    return modal.Function.lookup("india20sixty-scriptwriter", "run_scriptwriter")
+    return modal.Function.from_name("india20sixty-scriptwriter", "run_scriptwriter")
 
 def _image_gen():
-    return modal.Function.lookup("india20sixty-images", "generate_single_image")
+    return modal.Function.from_name("india20sixty-images", "generate_single_image")
 
 def _voice_gen():
-    return modal.Function.lookup("india20sixty-voice", "generate_voice")
+    return modal.Function.from_name("india20sixty-voice", "generate_voice")
 
 def _render_audio():
-    return modal.Function.lookup("india20sixty-renderer", "render_with_audio")
+    return modal.Function.from_name("india20sixty-renderer", "render_with_audio")
 
 def _render_silent():
-    return modal.Function.lookup("india20sixty-renderer", "render_silent")
+    return modal.Function.from_name("india20sixty-renderer", "render_silent")
 
 def _r2_upload():
-    return modal.Function.lookup("india20sixty-publisher", "upload_to_r2")
+    return modal.Function.from_name("india20sixty-publisher", "upload_to_r2")
 
 def _yt_upload():
-    return modal.Function.lookup("india20sixty-publisher", "upload_to_youtube")
+    return modal.Function.from_name("india20sixty-publisher", "upload_to_youtube")
 
 def _title_gen():
-    return modal.Function.lookup("india20sixty-publisher", "generate_title")
+    return modal.Function.from_name("india20sixty-publisher", "generate_title")
 
 
 # ==========================================
