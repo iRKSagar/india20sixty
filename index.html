@@ -764,6 +764,18 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
           <button class="btn" id="lf-dur-12" onclick="setLfDur(12,this)" style="flex:1;font-size:.75rem">12 min</button>
         </div>
       </div>
+      <!-- PRECURSOR — updates live on duration change -->
+      <div id="lf-precursor" style="margin-bottom:12px;padding:12px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.15);border-radius:10px;font-family:var(--mono);font-size:.65rem">
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <div><span style="color:var(--muted)">&#128444; Images</span> <span id="lf-pre-imgs" style="color:var(--accent);font-weight:700">10</span></div>
+          <div><span style="color:var(--muted)">&#127908; Voice clips</span> <span id="lf-pre-voice" style="color:var(--purple);font-weight:700">6</span></div>
+          <div><span style="color:var(--muted)">&#8987; Render</span> <span id="lf-pre-render" style="color:var(--yellow);font-weight:700">~12 min</span></div>
+        </div>
+        <div style="margin-top:6px;display:flex;gap:16px;flex-wrap:wrap">
+          <div id="lf-pre-engine-img" style="color:var(--green)">&#9889; FLUX — free</div>
+          <div id="lf-pre-engine-voice" style="color:var(--green)">&#9889; Chatterbox — free</div>
+        </div>
+      </div>
       <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
       <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
     </div>
@@ -809,7 +821,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
       <div style="font-size:.95rem;font-weight:700">Image Library
         <span id="lib-count2" style="font-family:var(--mono);font-size:.68rem;background:rgba(0,229,255,.12);color:var(--accent);padding:2px 8px;border-radius:4px;margin-left:6px">0</span>
       </div>
-      <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:2px">All images saved from pipeline runs. Select 3 → Create Video to use them.</div>
+      <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:2px">Every generated image auto-saved here. Select 3 → Create Video.</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="lib-sel-count2" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 / 3 selected</span>
@@ -817,7 +829,22 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
       <button class="btn btn-ghost btn-sm" onclick="loadLibrary()">&#8635; Refresh</button>
     </div>
   </div>
-  <div id="lib-filter2" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+  <!-- Cluster tabs -->
+  <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px">
+    <button class="tab active" id="libtab-all"      onclick="setLibCluster('all',this)">All</button>
+    <button class="tab"        id="libtab-Space"     onclick="setLibCluster('Space',this)">&#128640; Space</button>
+    <button class="tab"        id="libtab-AI"        onclick="setLibCluster('AI',this)">&#129302; AI</button>
+    <button class="tab"        id="libtab-DeepTech"  onclick="setLibCluster('DeepTech',this)">&#128300; Deep Tech</button>
+    <button class="tab"        id="libtab-GreenTech" onclick="setLibCluster('GreenTech',this)">&#9889; Green</button>
+    <button class="tab"        id="libtab-Gadgets"   onclick="setLibCluster('Gadgets',this)">&#128241; Gadgets</button>
+    <button class="tab"        id="libtab-Startups"  onclick="setLibCluster('Startups',this)">&#128161; Startups</button>
+  </div>
+  <!-- Job type filter -->
+  <div style="display:flex;gap:4px;margin-bottom:12px">
+    <button class="tab active" id="libjt-all"      onclick="setLibJobType('all',this)" style="font-size:.68rem">All</button>
+    <button class="tab"        id="libjt-shorts"   onclick="setLibJobType('shorts',this)" style="font-size:.68rem">Shorts</button>
+    <button class="tab"        id="libjt-longform" onclick="setLibJobType('longform',this)" style="font-size:.68rem">Long-form</button>
+  </div>
   <div id="lib-grid2" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px"></div>
 </div>
 
@@ -943,6 +970,45 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
           <div class="vpd-opt" id="vpd-2" onclick="setVPD(2)">2</div>
           <div class="vpd-opt" id="vpd-3" onclick="setVPD(3)">3</div>
         </div>
+      </div>
+    </div>
+
+    <!-- AI Engines -->
+    <div class="settings-section">
+      <div class="settings-head">&#9889; AI Engines</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Image Engine</div>
+          <div class="setting-desc">
+            <b>Inbuilt</b> — FLUX.1-schnell on Modal A10G GPU. Free, ~16s, cinematic quality.<br>
+            <b>External</b> — Pollinations → HuggingFace → Pixabay → Together → Replicate → Leonardo API chain.
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" id="ie-inbuilt-btn" onclick="setEngineMode('image','inbuilt')">&#9889; Inbuilt FLUX</button>
+          <button class="btn btn-ghost btn-sm" id="ie-external-btn" onclick="setEngineMode('image','external')">&#9729; External APIs</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Voice Engine</div>
+          <div class="setting-desc">
+            <b>Inbuilt</b> — Chatterbox (beats ElevenLabs 63.75% blind tests) + Kokoro fallback. Free, GPU.<br>
+            <b>External</b> — ElevenLabs eleven_multilingual_v2 directly. Uses API quota.
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" id="ve-inbuilt-btn" onclick="setEngineMode('voice','inbuilt')">&#9889; Inbuilt Chatterbox</button>
+          <button class="btn btn-ghost btn-sm" id="ve-external-btn" onclick="setEngineMode('voice','external')">&#9729; ElevenLabs</button>
+        </div>
+      </div>
+
+      <div style="padding:10px 14px;font-family:var(--mono);font-size:.62rem;color:var(--muted);line-height:1.8;border-top:1px solid var(--border)">
+        <div>&#9889; Inbuilt costs: ~$1.50/month for 100 images + 100 voice clips/day</div>
+        <div>&#9729; External costs: depends on tier reached (Pollinations free → Leonardo paid)</div>
+        <div style="margin-top:4px;color:var(--accent)">Current engines apply to all modes: Full Auto, Manual, Long-form</div>
       </div>
     </div>
 
