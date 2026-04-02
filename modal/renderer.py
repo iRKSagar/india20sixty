@@ -96,7 +96,24 @@ def render_with_audio(
     """
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     video_path = f"{TMP_DIR}/{job_id}.mp4"
-    scene_dur  = audio_dur / len(image_paths)
+
+    # Resolve None image paths — generate black frames in THIS container
+    resolved_paths = []
+    for i, img in enumerate(image_paths):
+        if img is None:
+            black = f"{TMP_DIR}/{job_id}_{i}_black.png"
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "lavfi",
+                "-i", "color=c=0x0d1117:s=864x1536:d=1",
+                "-frames:v", "1", black
+            ], capture_output=True, timeout=15)
+            resolved_paths.append(black)
+            print(f"  Scene {i}: black frame fallback")
+        else:
+            resolved_paths.append(img)
+    image_paths = resolved_paths
+
+    scene_dur = audio_dur / len(image_paths)
 
     print(f"\n[Render] job={job_id} mood={mood} dur={audio_dur:.1f}s")
     print(f"  {len(image_paths)} scenes x {scene_dur:.1f}s")

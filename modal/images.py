@@ -107,8 +107,8 @@ secrets = [modal.Secret.from_name("india20sixty-secrets")]
     gpu="A10G",
     timeout=180,
     secrets=secrets,
-    allow_concurrent_inputs=1,   # one image per container — prevents CUDA OOM
 )
+@modal.concurrent(max_inputs=1)   # one image per container — prevents CUDA OOM
 def generate_single_image(
     prompt: str,
     scene_idx: int,
@@ -213,27 +213,31 @@ def _try_flux(prompt: str, output_path: str) -> bool:
     full_prompt = f"{STYLE_PREFIX} {prompt}"
     print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
 
+    # Clear any cached memory before loading
+    torch.cuda.empty_cache()
+
     pipe = FluxPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-schnell",
         torch_dtype=torch.bfloat16,
     )
-    pipe = pipe.to("cuda")
-    pipe.enable_attention_slicing()
+
+    # CPU offload: keeps model on CPU, moves layers to GPU only during forward pass
+    # Uses ~6GB VRAM instead of ~22GB — reliable on A10G 24GB
+    pipe.enable_model_cpu_offload()
 
     try:
         result = pipe(
             prompt=full_prompt,
             width=IMG_WIDTH,
             height=IMG_HEIGHT,
-            num_inference_steps=INFERENCE_STEPS,
+            num_inference_steps=4,       # schnell designed for 4 steps
             guidance_scale=GUIDANCE_SCALE,
-            generator=torch.Generator("cuda").manual_seed(random.randint(0, 2**32 - 1)),
+            generator=torch.Generator("cpu").manual_seed(random.randint(0, 2**32 - 1)),
         )
         img = result.images[0]
         img.save(output_path, format="PNG", optimize=True)
         success = os.path.getsize(output_path) > 100_000
     finally:
-        # Always free VRAM — critical for parallel spawns on same GPU
         del pipe
         import gc
         gc.collect()

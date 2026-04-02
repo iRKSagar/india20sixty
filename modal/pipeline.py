@@ -193,17 +193,13 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             for res in sorted(results, key=lambda x: x["scene_idx"]):
                 p = f"{TMP_DIR}/{job_id}_{res['scene_idx']}.png"
                 if res["success"] and res.get("image_bytes"):
-                    # Write bytes into THIS container's /tmp/
                     with open(p, "wb") as f:
                         f.write(res["image_bytes"])
                     image_paths.append(p)
                 else:
-                    # Black frame fallback
-                    bp = f"{TMP_DIR}/{job_id}_{res['scene_idx']}_black.png"
-                    subprocess.run(["ffmpeg","-y","-f","lavfi",
-                        "-i","color=c=0x0d1117:s=864x1536:d=1",
-                        "-frames:v","1", bp], capture_output=True, timeout=15)
-                    image_paths.append(bp)
+                    # Image failed — pass None, renderer will generate black frame
+                    print(f"  Image {res['scene_idx']} failed — renderer will use black frame")
+                    image_paths.append(None)
 
         log(f"Images: {len(image_paths)}")
 
