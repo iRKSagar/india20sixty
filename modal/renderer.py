@@ -83,24 +83,32 @@ CLUSTER_MOOD_DEFAULTS = {"Space":"cinematic_epic","DeepTech":"cold_tech","AI":"c
 @app.function(image=image, secrets=secrets, cpu=4.0, memory=4096, timeout=360)
 def render_with_audio(
     job_id: str,
-    image_paths: list,
-    audio_path: str,
+    image_paths: list,       # list of local paths OR None per scene
+    audio_path: str,         # local path (may not exist in this container)
     audio_dur: float,
     captions: list,
     mood: str,
+    image_bytes_list: list = None,   # list of bytes per scene (preferred)
+    audio_bytes: bytes = None,       # audio bytes (preferred over path)
 ) -> str:
     """
     Render 3 images + audio into a final MP4.
+    Accepts bytes directly — no cross-container /tmp/ sharing needed.
     Returns path to rendered video.
-    Uses MOOD_PRESETS for all visual decisions.
     """
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     video_path = f"{TMP_DIR}/{job_id}.mp4"
 
-    # Resolve None image paths — generate black frames in THIS container
+    # Write image bytes to THIS container's /tmp/
     resolved_paths = []
-    for i, img in enumerate(image_paths):
-        if img is None:
+    for i in range(len(image_paths)):
+        p = f"{TMP_DIR}/{job_id}_{i}.png"
+        img_bytes = (image_bytes_list[i] if image_bytes_list and i < len(image_bytes_list) else None)
+        if img_bytes:
+            with open(p, "wb") as f: f.write(img_bytes)
+            resolved_paths.append(p)
+        else:
+            # Black frame fallback
             black = f"{TMP_DIR}/{job_id}_{i}_black.png"
             subprocess.run([
                 "ffmpeg", "-y", "-f", "lavfi",
@@ -109,9 +117,12 @@ def render_with_audio(
             ], capture_output=True, timeout=15)
             resolved_paths.append(black)
             print(f"  Scene {i}: black frame fallback")
-        else:
-            resolved_paths.append(img)
     image_paths = resolved_paths
+
+    # Write audio bytes to THIS container's /tmp/
+    if audio_bytes:
+        audio_path = f"{TMP_DIR}/{job_id}.mp3"
+        with open(audio_path, "wb") as f: f.write(audio_bytes)
 
     scene_dur = audio_dur / len(image_paths)
 
@@ -173,6 +184,7 @@ def render_silent(
     image_paths: list,
     captions: list,
     mood: str,
+    image_bytes_list: list = None,
 ) -> str:
     """
     Render 3 images into a silent MP4 (no audio track).
@@ -181,9 +193,25 @@ def render_silent(
     """
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     video_path = f"{TMP_DIR}/{job_id}_silent.mp4"
-    scene_dur  = 8.6  # default scene length for silent renders
+    scene_dur  = 8.6
 
     print(f"\n[Render Silent] job={job_id} mood={mood}")
+
+    # Write image bytes to THIS container's /tmp/
+    resolved_paths = []
+    for i in range(len(image_paths)):
+        p = f"{TMP_DIR}/{job_id}_{i}.png"
+        img_bytes = (image_bytes_list[i] if image_bytes_list and i < len(image_bytes_list) else None)
+        if img_bytes:
+            with open(p, "wb") as f: f.write(img_bytes)
+            resolved_paths.append(p)
+        else:
+            black = f"{TMP_DIR}/{job_id}_{i}_black.png"
+            subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
+                "-i", "color=c=0x0d1117:s=864x1536:d=1",
+                "-frames:v", "1", black], capture_output=True, timeout=15)
+            resolved_paths.append(black)
+    image_paths = resolved_paths
 
     clip_paths = []
     for i, img in enumerate(image_paths):

@@ -208,9 +208,11 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
         if voice_mode == "human":
             print("\n--- Render Silent ---")
             update_status("render")
+            image_bytes_list = [res.get("image_bytes") for res in sorted(results, key=lambda x: x["scene_idx"])]
             silent_path = _render_silent().remote(
-                job_id=job_id, image_paths=image_paths,
+                job_id=job_id, image_paths=[None] * 3,
                 captions=script_pkg["captions"], mood=script_pkg["mood"],
+                image_bytes_list=image_bytes_list,
             )
             r2_key       = f"staged/{job_id}/video.mp4"
             video_r2_url = _r2_upload().remote(silent_path, r2_key)
@@ -239,10 +241,21 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
 
             print("\n--- Render ---")
             update_status("render")
+
+            # Collect image bytes for renderer
+            image_bytes_list = []
+            for res in sorted(results, key=lambda x: x["scene_idx"]):
+                image_bytes_list.append(res.get("image_bytes"))
+
             video_path = _render_audio().remote(
-                job_id=job_id, image_paths=image_paths,
-                audio_path=audio_path, audio_dur=audio_dur,
-                captions=script_pkg["captions"], mood=script_pkg["mood"],
+                job_id=job_id,
+                image_paths=[None] * 3,      # renderer ignores paths when bytes provided
+                audio_path="",               # renderer ignores path when bytes provided
+                audio_dur=audio_dur,
+                captions=script_pkg["captions"],
+                mood=script_pkg["mood"],
+                image_bytes_list=image_bytes_list,
+                audio_bytes=audio_bytes,
             )
             log("Video rendered")
 

@@ -213,7 +213,6 @@ def _try_flux(prompt: str, output_path: str) -> bool:
     full_prompt = f"{STYLE_PREFIX} {prompt}"
     print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
 
-    # Clear any cached memory before loading
     torch.cuda.empty_cache()
 
     pipe = FluxPipeline.from_pretrained(
@@ -221,16 +220,16 @@ def _try_flux(prompt: str, output_path: str) -> bool:
         torch_dtype=torch.bfloat16,
     )
 
-    # CPU offload: keeps model on CPU, moves layers to GPU only during forward pass
-    # Uses ~6GB VRAM instead of ~22GB — reliable on A10G 24GB
-    pipe.enable_model_cpu_offload()
+    # Sequential CPU offload: keeps model on CPU, streams one layer at a time to GPU
+    # Peak VRAM ~2-4GB instead of 22GB — reliable on any GPU
+    pipe.enable_sequential_cpu_offload()
 
     try:
         result = pipe(
             prompt=full_prompt,
             width=IMG_WIDTH,
             height=IMG_HEIGHT,
-            num_inference_steps=4,       # schnell designed for 4 steps
+            num_inference_steps=4,
             guidance_scale=GUIDANCE_SCALE,
             generator=torch.Generator("cpu").manual_seed(random.randint(0, 2**32 - 1)),
         )
