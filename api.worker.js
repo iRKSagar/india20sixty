@@ -224,52 +224,57 @@ export default {
         const jobType = url.searchParams.get("job_type") || "";
         const r2Base  = (env.R2_BASE_URL||"").replace(/\/$/,"");
 
-        // Primary: query image_cache table (has cluster + engine metadata)
+        // Primary: query image_cache table
         try {
-          let ep = "image_cache?select=*&order=created_at.desc&limit=200";
+          // Use basic columns first — works even without migration
+          let ep = "image_cache?select=r2_key,public_url,topic,scene_idx,created_at,cluster,engine,job_type&order=created_at.desc&limit=300";
           if (cluster) ep += "&cluster=eq." + cluster;
           if (jobType) ep += "&job_type=eq." + jobType;
           const rows = await sbGet(env, ep);
-          return cors({
-            images: rows.map(r => ({
-              key:      r.r2_key,
-              url:      r.public_url || (r2Base + "/" + r.r2_key),
-              topic:    r.topic || r.r2_key?.split("/")[2]?.replace(/-/g," ") || "unknown",
-              cluster:  r.cluster || "AI",
-              engine:   r.engine  || "unknown",
-              job_type: r.job_type || "shorts",
-              prompt:   r.prompt  || "",
-              scene_idx:r.scene_idx || 0,
-              uploaded: r.created_at,
-            })),
-            total: rows.length,
-            source: "image_cache",
-          });
-        } catch(e) {}
+          if (rows.length > 0) {
+            return cors({
+              images: rows.map(r => ({
+                key:      r.r2_key,
+                url:      r.public_url || (r2Base + "/" + r.r2_key),
+                topic:    r.topic || "India Tech",
+                cluster:  r.cluster || "AI",
+                engine:   r.engine  || "FLUX",
+                job_type: r.job_type || "shorts",
+                scene_idx:r.scene_idx || 0,
+                uploaded: r.created_at,
+              })),
+              total: rows.length,
+              source: "image_cache",
+            });
+          }
+        } catch(e) {
+          console.error("image_cache query failed:", e.message);
+        }
 
-        // Fallback: scan R2 directly
-        if (!env.R2) return cors({error:"R2 not bound",images:[]});
-        const prefix = cluster ? `images/${cluster}/` : "images/";
-        const listed = await env.R2.list({prefix, limit:500});
-        const images = (listed.objects||[])
-          .filter(o => o.key.match(/\.(png|jpg|jpeg)$/i))
-          .sort((a,b) => new Date(b.uploaded) - new Date(a.uploaded))
-          .map(o => {
-            const parts   = o.key.split("/");
-            const clust   = parts[1] || "AI";
-            const fname   = parts[parts.length-1] || "";
-            const topic   = fname.replace(/[_-]/g," ").replace(/\.(png|jpg)$/i,"");
-            return {
-              key:      o.key,
-              url:      r2Base + "/" + o.key,
-              cluster:  clust,
-              topic,
-              engine:   "unknown",
-              job_type: parts[2] === "longform" ? "longform" : "shorts",
-              uploaded: o.uploaded,
-            };
-          });
-        return cors({images, total:images.length, source:"r2"});
+        // Fallback: scan R2 under images/ prefix
+        if (env.R2) {
+          const prefix = cluster ? `images/${cluster}/` : "images/";
+          const listed = await env.R2.list({prefix, limit:500});
+          const images = (listed.objects||[])
+            .filter(o => o.key.match(/\.(png|jpg|jpeg)$/i))
+            .sort((a,b) => new Date(b.uploaded) - new Date(a.uploaded))
+            .map(o => {
+              const parts = o.key.split("/");
+              return {
+                key:      o.key,
+                url:      r2Base + "/" + o.key,
+                cluster:  parts[1] || "AI",
+                topic:    parts[2] ? parts[2].split("_")[0].replace(/-/g," ") : "India Tech",
+                engine:   "FLUX",
+                job_type: "shorts",
+                uploaded: o.uploaded,
+              };
+            });
+          return cors({images, total:images.length, source:"r2"});
+        }
+
+        return cors({images:[], total:0, source:"empty",
+          note:"Run Supabase migration and configure R2 binding to see images"});
       } catch(e) { return cors({error:e.message,images:[]}); }
     }
 
@@ -774,7 +779,18 @@ async function _fetchBestTopic(env,cluster){
   return {topic:t[0].topic,script_package:t[0].script_package,council_score:t[0].council_score,category:t[0].cluster||"AI",source:"db_approved"};
 }
 async function callCouncil(env,topic,source,category){if(!env.TOPIC_COUNCIL_URL)throw new Error("TOPIC_COUNCIL_URL not set");const r=await fetch(env.TOPIC_COUNCIL_URL+"/full-pipeline",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({topic,source,category})});if(!r.ok)throw new Error("Council returned "+r.status);return r.json();}
-async function triggerReplenish(env,target,categories){if(!env.TOPIC_COUNCIL_URL)return;try{await fetch(env.TOPIC_COUNCIL_URL+"/replenish",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({target,categories:categories||ALL_CATS})});}catch(e){console.error("Replenish:",e.message);}}
+async function triggerReplenish(env,target,categories){
+  if(!env.TOPIC_COUNCIL_URL)return;
+  try{
+    // Fire and forget — Render cold starts take 30-60s, don't await
+    fetch(env.TOPIC_COUNCIL_URL+"/replenish",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({target,categories:categories||ALL_CATS}),
+      signal:AbortSignal.timeout(90000)
+    }).catch(e=>console.error("Replenish:",e.message));
+  }catch(e){console.error("Replenish:",e.message);}
+}
 async function createJob(t,env){return await sbInsert(env,"jobs",{topic:t.topic,cluster:t.category||"AI",status:"pending",script_package:t.script_package||null,council_score:t.council_score||0,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});}
 async function processQueue(env,ctx){const ago=new Date(Date.now()-15*60000).toISOString();try{for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=lt.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"pending",retries:(j.retries||0)+1,updated_at:new Date().toISOString()});for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=gte.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"max_retries_exceeded",updated_at:new Date().toISOString()});const pending=await sbGet(env,"jobs?status=eq.pending&order=created_at.asc&limit=1");if(!pending.length)return;await sbPatch(env,"jobs?id=eq."+pending[0].id,{status:"processing",started_at:new Date().toISOString(),updated_at:new Date().toISOString()});ctx.waitUntil(triggerRender(pending[0],env));}catch(e){console.error("Queue:",e.message);}}
 async function triggerRender(job,env,image_urls){if(!env.RENDER_PIPELINE_URL){await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:"RENDER_PIPELINE_URL not set",updated_at:new Date().toISOString()});return;}const renderUrl=env.RENDER_PIPELINE_URL.trim().replace(/\/$/,"");try{const body={job_id:job.id,topic:job.topic,script_package:job.script_package,webhook_url:(env.WORKER_URL||"").trim().replace(/\/$/,"")+"/webhook"};if(image_urls&&image_urls.length>=3)body.image_urls=image_urls;const r=await fetch(renderUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});if(!r.ok)throw new Error(r.status+": "+(await r.text()).slice(0,100));}catch(e){console.error("Render trigger:",e.message);await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:e.message,updated_at:new Date().toISOString()});}}

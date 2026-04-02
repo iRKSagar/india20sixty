@@ -35,24 +35,27 @@ app = modal.App("india20sixty-images")
 CHANNEL_NAME = "india20sixty"
 
 STYLE_PREFIX = (
-    "hyperrealistic cinematic documentary photograph, "
-    "Indian subject matter, Indian faces and landscapes, "
-    "ARRI Alexa cinema camera, anamorphic lens flare, "
-    "dramatic volumetric lighting, golden hour warmth, "
-    "rich saffron and deep blue color palette, "
-    "sharp foreground subject with atmospheric depth of field, "
-    "professional photojournalism quality, National Geographic style, "
-    "4K HDR, high dynamic range, film grain texture, "
-    "emotionally resonant composition, "
+    "photorealistic modern India, "
+    "contemporary Indian professionals and urban environments, "
+    "Indian faces diverse ages natural expressions, "
+    "real Indian cities tech parks metro stations offices labs, "
+    "natural daylight or soft indoor lighting no forced golden hour, "
+    "sharp focus 4K high detail, "
+    "cinematic wide or medium shot composition, "
+    "subtle depth of field clean background, "
+    "authentic grounded visual style not documentary dramatic, "
+    "no text no watermarks no orange tint no forced traditional attire, "
 )
 
 NEGATIVE_PROMPT = (
-    "blurry, cartoon, anime, painting, illustration, watermark, "
-    "text overlay, logo, western faces, white skin, european, "
-    "low quality, overexposed, underexposed, grainy, noisy, "
+    "blurry, cartoon, anime, painting, watermark, text overlay, logo, "
+    "forced saffron orange tint, excessive warm color grade, "
+    "traditional religious imagery unless topic requires it, "
+    "western faces, european, low quality, overexposed, "
     "nsfw, ugly, distorted anatomy, extra limbs, deformed hands, "
-    "stock photo look, generic, corporate clipart, "
-    "jpeg artifacts, chromatic aberration, lens distortion"
+    "stock photo look, generic clipart, cheesy composition, "
+    "dramatic fire explosions unless topic, "
+    "jpeg artifacts, chromatic aberration"
 )
 
 IMG_WIDTH        = 864

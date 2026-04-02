@@ -1245,13 +1245,21 @@ async function doReplenish() {
     .map(function(d) { return d.dataset.cat; });
   var target = parseInt(document.getElementById('tgt-slider').value);
   closeReplenishModal();
+  showDebug('debug-create', '<span style="color:var(--yellow)">&#8635; Replenishing topics... (Render may take 30s to wake up)</span>');
   try {
-    await fetch(API_BASE + '/replenish', {
+    var r = await fetch(API_BASE + '/replenish', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ categories: cats, target })
     });
-    setTimeout(loadTopicsCount, 5000);
-  } catch(e) { alert('Replenish failed: ' + e.message); }
+    var d = await r.json();
+    showDebug('debug-create', '<span style="color:var(--green)">&#10003; Replenish triggered — topics will appear in ~60s. Categories: ' + (cats.join(', ') || 'all') + '</span>');
+    // Check multiple times as council takes time
+    setTimeout(loadTopicsCount, 15000);
+    setTimeout(loadTopicsCount, 30000);
+    setTimeout(loadTopicsCount, 60000);
+  } catch(e) {
+    showDebug('debug-create', '<span style="color:var(--red)">&#10007; Replenish failed: ' + e.message + '</span>');
+  }
 }
 
 // ── STUDIO ─────────────────────────────────────────────────────

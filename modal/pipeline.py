@@ -209,13 +209,16 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             print("\n--- Render Silent ---")
             update_status("render")
             image_bytes_list = [res.get("image_bytes") for res in sorted(results, key=lambda x: x["scene_idx"])]
-            silent_path = _render_silent().remote(
+            silent_bytes = _render_silent().remote(
                 job_id=job_id, image_paths=[None] * 3,
                 captions=script_pkg["captions"], mood=script_pkg["mood"],
                 image_bytes_list=image_bytes_list,
             )
+            silent_local = f"{TMP_DIR}/{job_id}_silent.mp4"
+            with open(silent_local, "wb") as f:
+                f.write(silent_bytes)
             r2_key       = f"staged/{job_id}/video.mp4"
-            video_r2_url = _r2_upload().remote(silent_path, r2_key)
+            video_r2_url = _r2_upload().remote(silent_local, r2_key)
             update_status("staged", {
                 "video_r2_url": video_r2_url, "video_r2_key": r2_key,
                 "script_package": _make_pkg(script_pkg, fact_package),
@@ -257,7 +260,13 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
                 image_bytes_list=image_bytes_list,
                 audio_bytes=audio_bytes,
             )
-            log("Video rendered")
+            # video_path is now bytes returned from renderer
+            video_bytes = video_path  # rename for clarity
+            local_video = f"{TMP_DIR}/{job_id}.mp4"
+            with open(local_video, "wb") as f:
+                f.write(video_bytes)
+            video_path = local_video
+            log(f"Video rendered: {len(video_bytes)//1024}KB")
 
             if TEST_MODE:
                 update_status("test_complete", {"script_package": _make_pkg(script_pkg, fact_package)})
@@ -274,7 +283,7 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             if not publish_enabled:
                 print("\n[PUBLISH OFF — review queue]")
                 r2_key       = f"review/{job_id}/video.mp4"
-                video_r2_url = _r2_upload().remote(video_path, r2_key)
+                video_r2_url = _r2_upload().remote("", r2_key, file_bytes=video_bytes)
                 title        = _title_gen().remote(topic, fact_package.get("key_fact","") if fact_package else "")
                 update_status("review", {
                     "video_r2_url": video_r2_url,
@@ -293,8 +302,9 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
                     "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
                 )
                 video_id = _yt_upload().remote(
-                    video_path=video_path, title=title, description=description,
+                    video_path="", title=title, description=description,
                     tags=["Future India","India innovation","AI","Technology","Shorts"],
+                    video_bytes=video_bytes,
                 )
                 log(f"Uploaded: {video_id}")
                 try:

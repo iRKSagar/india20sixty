@@ -171,7 +171,11 @@ def render_with_audio(
     if size < 100_000:
         raise Exception(f"Rendered video too small: {size} bytes")
     print(f"  Final: {size // 1024}KB → {video_path}")
-    return video_path
+
+    # Return bytes — renderer and pipeline/publisher run in different containers
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+    return video_bytes
 
 
 # ==========================================
@@ -236,7 +240,8 @@ def render_silent(
 
     size = os.path.getsize(video_path)
     print(f"  Silent: {size // 1024}KB → {video_path}")
-    return video_path
+    with open(video_path, "rb") as f:
+        return f.read()
 
 
 # ==========================================
