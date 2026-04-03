@@ -87,42 +87,55 @@ BLACKLIST = [
 ]
 
 
-@app.function(image=image, secrets=secrets, cpu=1.0, memory=1024, timeout=30)
-@modal.fastapi_endpoint(method="GET")
-def council():
-    return _health()
-
-
 @app.function(image=image, secrets=secrets, cpu=1.0, memory=1024, timeout=300)
-@modal.fastapi_endpoint(method="POST")
-async def council_post(request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+@modal.asgi_app(label="india20sixty-topic-council")
+def council_app():
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
 
-    action = body.get("action", "replenish")
-    print(f"[Council] action={action}")
+    web = FastAPI()
 
-    if action == "health":
+    @web.get("/")
+    def health():
         return _health()
 
-    if action == "full-pipeline":
-        topic    = body.get("topic","")
-        category = body.get("category","AI")
-        source   = body.get("source","manual")
-        if not topic:
-            return {"error":"Missing topic"}
-        r = _council_score(topic, "", category)
-        if not r:
-            return {"error":"Score below 70"}
-        return {"topic":r["video_angle"],"cluster":r["cluster"],
-                "council_score":r["council_score"],"script_package":r.get("script_package"),"source":source}
+    @web.get("/health")
+    def health2():
+        return _health()
 
-    # Default: replenish
-    categories = [c for c in (body.get("categories") or ALL_CATS) if c in ALL_CATS] or ALL_CATS
-    target = int(body.get("target") or 12)
-    return _replenish(categories, target)
+    @web.post("/")
+    async def post(request: Request):
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+
+        action = body.get("action", "replenish")
+        print(f"[Council] action={action}")
+
+        if action == "health":
+            return _health()
+
+        if action == "full-pipeline":
+            topic    = body.get("topic", "")
+            category = body.get("category", "AI")
+            source   = body.get("source", "manual")
+            if not topic:
+                return JSONResponse({"error": "Missing topic"}, status_code=400)
+            r = _council_score(topic, "", category)
+            if not r:
+                return JSONResponse({"error": "Score below 65"}, status_code=422)
+            return {"topic": r["video_angle"], "cluster": r["cluster"],
+                    "council_score": r["council_score"],
+                    "script_package": r.get("script_package"), "source": source}
+
+        # Default: replenish
+        cats   = [c for c in (body.get("categories") or ALL_CATS) if c in ALL_CATS] or ALL_CATS
+        target = int(body.get("target") or 12)
+        return _replenish(cats, target)
+
+    return web
 
 
 def _health() -> dict:
@@ -147,7 +160,11 @@ def _replenish(categories: list, target: int) -> dict:
             all_headlines.extend(hs)
     pib = _fetch_pib()
     all_headlines.extend(pib)
-    print(f"  RSS total: {len(all_headlines)} headlines")
+
+    # Reddit RSS — no API key needed, server-friendly
+    reddit = _fetch_reddit(categories)
+    all_headlines.extend(reddit)
+    print(f"  Total headlines: {len(all_headlines)} (Google+PIB+Reddit)")
 
     # If RSS failed/blocked, use seed headlines
     if len(all_headlines) < 5:
@@ -264,7 +281,88 @@ def _fetch_pib() -> list:
         return []
 
 
-def _council_score(headline: str, summary: str, category_hint: str):
+# Subreddits mapped to categories
+REDDIT_SOURCES = {
+    "Space":    ["ISRO", "india", "space"],
+    "AI":       ["artificial", "MachineLearning", "developersIndia"],
+    "Gadgets":  ["india", "IndianGaming", "developersIndia"],
+    "DeepTech": ["india", "science", "developersIndia"],
+    "GreenTech":["india", "environment", "renewable"],
+    "Startups": ["india", "indianstartups", "entrepreneur"],
+}
+
+REDDIT_SEARCH = {
+    "Space":    "ISRO space India 2026",
+    "AI":       "India AI technology 2026",
+    "Gadgets":  "India tech gadget launch 2026",
+    "DeepTech": "India research innovation breakthrough",
+    "GreenTech":"India solar renewable energy",
+    "Startups": "India startup funding 2026",
+}
+
+def _fetch_reddit(categories: list) -> list:
+    import requests
+    items = []
+    headers = {
+        "User-Agent": "india20sixty-bot/1.0 (content curation for YouTube; contact@india20sixty.com)",
+        "Accept": "application/json",
+    }
+
+    # 1. Fetch from specific subreddits top posts
+    subreddits_done = set()
+    for cat in categories:
+        for sub in REDDIT_SOURCES.get(cat, [])[:2]:
+            if sub in subreddits_done: continue
+            subreddits_done.add(sub)
+            try:
+                url = f"https://www.reddit.com/r/{sub}/top.json?t=week&limit=10"
+                r = requests.get(url, headers=headers, timeout=10)
+                if not r.ok:
+                    print(f"  Reddit r/{sub}: {r.status_code}")
+                    continue
+                posts = r.json().get("data", {}).get("children", [])
+                for p in posts:
+                    d = p.get("data", {})
+                    title = d.get("title", "").strip()
+                    selftext = d.get("selftext", "")[:200]
+                    score = d.get("score", 0)
+                    if title and score > 50 and not d.get("is_video"):
+                        items.append({
+                            "title": title,
+                            "summary": selftext,
+                            "source": f"reddit.com/r/{sub}",
+                            "category_hint": cat,
+                            "reddit_score": score,
+                        })
+                print(f"  Reddit r/{sub}: {len(posts)} posts")
+            except Exception as e:
+                print(f"  Reddit r/{sub} error: {e}")
+
+    # 2. Search Reddit for India tech topics
+    for cat in categories[:3]:  # Limit to avoid rate limits
+        query = REDDIT_SEARCH.get(cat, "India technology 2026")
+        try:
+            url = f"https://www.reddit.com/search.json?q={query.replace(' ','+')}&sort=top&t=week&limit=8"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.ok:
+                posts = r.json().get("data", {}).get("children", [])
+                for p in posts:
+                    d = p.get("data", {})
+                    title = d.get("title", "").strip()
+                    score = d.get("score", 0)
+                    if title and score > 30:
+                        items.append({
+                            "title": title,
+                            "summary": d.get("selftext", "")[:200],
+                            "source": f"reddit.com/r/{d.get('subreddit','')}",
+                            "category_hint": cat,
+                        })
+                print(f"  Reddit search [{cat}]: {len(posts)} posts")
+        except Exception as e:
+            print(f"  Reddit search error: {e}")
+
+    print(f"  Reddit total: {len(items)} posts")
+    return items
     from openai import OpenAI
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
