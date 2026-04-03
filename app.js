@@ -1043,6 +1043,10 @@ async function loadSettings() {
 }
 
 function applySettingsUI(s) {
+  // Theme buttons
+  var savedTheme = localStorage.getItem('i20_theme') || 'dark';
+  setTheme(savedTheme);
+
   // Mode buttons
   var autoBtn  = document.getElementById('mode-auto-btn');
   var stgBtn   = document.getElementById('mode-stage-btn');
@@ -1245,12 +1249,10 @@ async function doReplenish() {
     .map(function(d) { return d.dataset.cat; });
   var target = parseInt(document.getElementById('tgt-slider').value);
   closeReplenishModal();
-  // Show status on both pages
-  var pending = '<span style="color:var(--yellow)">&#8635; Replenishing topics... (10-30s)</span>';
+  var pending = '<span style="color:var(--yellow)">&#8635; Replenishing topics... (10-30s on Modal)</span>';
   showDebug('debug-topics', pending);
   showDebug('debug-create', pending);
-  // Switch to topics tab so user can see results appear
-  showPage('topics', document.querySelector('[onclick*="topics"]'));
+  showPage('topics', document.querySelector('.nav-btn[onclick*="topics"]'));
   try {
     var r = await fetch(API_BASE + '/replenish', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1262,7 +1264,8 @@ async function doReplenish() {
     showDebug('debug-create', ok);
     setTimeout(loadTopicsCount, 20000);
     setTimeout(loadTopicsCount, 40000);
-    setTimeout(function() { loadTopicsCount(); if (currentPage === 'topics') loadTopics(); }, 65000);
+    setTimeout(function() { loadTopicsCount(); loadTopics(); }, 65000);
+    setTimeout(function() { loadTopicsCount(); loadTopics(); }, 120000);
   } catch(e) {
     var err = '<span style="color:var(--red)">&#10007; Replenish failed: ' + e.message + '</span>';
     showDebug('debug-topics', err);
@@ -1678,19 +1681,21 @@ function renderTopicsPage() {
   if (topicCat !== 'all')      topics = topics.filter(function(t) { return t.cluster === topicCat; });
   setText('topics-count', topics.length + ' topics');
   var el = document.getElementById('topics-list');
-  if (!topics.length) { el.innerHTML = '<div class="empty"><span class="empty-icon">\uD83D\uDCEB</span>No topics.</div>'; return; }
+  if (!topics.length) { el.innerHTML = '<div class="empty"><span class="empty-icon">\uD83D\uDCEB</span>No topics. Use Replenish to fetch new ones.</div>'; return; }
   el.innerHTML = topics.map(function(t) {
     var cat    = CATS[t.cluster] || null;
     var canGen = !t.used && t.council_score >= 70;
+    var dateStr = t.created_at ? ago(t.created_at) + ' ago' : '';
     return '<div class="topic-row">'
       + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">'
       + '<div style="flex:1;min-width:0">'
       + '<div class="topic-text">' + t.topic + '</div>'
-      + '<div style="display:flex;align-items:center;gap:7px;margin-top:4px">'
+      + '<div style="display:flex;align-items:center;gap:7px;margin-top:4px;flex-wrap:wrap">'
       + '<span class="score-pill ' + scClass(t.council_score) + '">' + t.council_score + '</span>'
       + (t.used ? '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(0,230,118,.1);color:var(--green);padding:1px 6px;border-radius:3px">Used</span>'
                 : '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(255,82,82,.1);color:var(--red);padding:1px 6px;border-radius:3px">Ready</span>')
       + (cat ? '<span style="font-size:.63rem;color:' + cat.color + '">' + cat.emoji + ' ' + cat.label + '</span>' : '')
+      + (dateStr ? '<span style="font-family:var(--mono);font-size:.56rem;color:var(--muted)">&#128337; ' + dateStr + '</span>' : '')
       + '</div></div>'
       + (canGen ? '<button class="btn btn-primary btn-sm" data-tid="' + t.id + '" onclick="generateNow(this.dataset.tid,this)">\u25B6 Now</button>' : '')
       + '</div></div>';
@@ -2263,3 +2268,24 @@ async function triggerLfRender() {
     }
   } catch(e) { alert('Error: ' + e.message); }
 }
+
+// ── THEME ───────────────────────────────────────────────────────
+function setTheme(mode) {
+  if (mode === 'light') {
+    document.body.classList.add('light-mode');
+    localStorage.setItem('i20_theme', 'light');
+  } else {
+    document.body.classList.remove('light-mode');
+    localStorage.setItem('i20_theme', 'dark');
+  }
+  var darkBtn  = document.getElementById('theme-dark-btn');
+  var lightBtn = document.getElementById('theme-light-btn');
+  if (darkBtn)  darkBtn.className  = 'btn btn-sm ' + (mode === 'dark'  ? 'btn-primary' : 'btn-ghost');
+  if (lightBtn) lightBtn.className = 'btn btn-sm ' + (mode === 'light' ? 'btn-primary' : 'btn-ghost');
+}
+
+// Init theme from localStorage immediately on script load
+(function() {
+  var saved = localStorage.getItem('i20_theme') || 'dark';
+  if (saved === 'light') document.body.classList.add('light-mode');
+})();
