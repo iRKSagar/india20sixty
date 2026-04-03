@@ -718,7 +718,7 @@ export default {
     if (cron==="* * * * *") {
       await processQueue(env,ctx);
       if (env.MODAL_HEALTH_URL) fetch(env.MODAL_HEALTH_URL).catch(()=>{});
-      if (env.TOPIC_COUNCIL_URL) fetch(env.TOPIC_COUNCIL_URL+"/health").catch(()=>{});
+      if (env.TOPIC_COUNCIL_HEALTH_URL) fetch(env.TOPIC_COUNCIL_HEALTH_URL).catch(()=>{});
     }
     if (cron==="30 0,6,12 * * *") {
       try {
