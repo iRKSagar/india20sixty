@@ -18,19 +18,21 @@ body.light-mode{
   --bg:#f0f2f7;--surface:#ffffff;--surface2:#f5f7fc;--surface3:#ebeef5;
   --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.15);
   --text:#0d1320;--muted:#6b7280;--muted2:#9ca3af;
+  --topbar-bg:rgba(240,242,247,0.97);
+  --grid-color:rgba(0,0,0,0.03);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
 body{background:var(--bg);color:var(--text);font-family:var(--font);display:flex;flex-direction:column}
 body::before{content:'';position:fixed;inset:0;z-index:0;
-  background-image:linear-gradient(rgba(0,229,255,0.015) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(0,229,255,0.015) 1px,transparent 1px);
+  background-image:linear-gradient(var(--grid-color,rgba(0,229,255,0.015)) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid-color,rgba(0,229,255,0.015)) 1px,transparent 1px);
   background-size:48px 48px;pointer-events:none}
 
 /* ── TOPBAR ───────────────────────────────────────────────── */
 .topbar{position:relative;z-index:10;display:flex;align-items:center;
   justify-content:space-between;padding:0 20px;height:52px;
-  border-bottom:1px solid var(--border);background:rgba(8,12,20,0.97);
+  border-bottom:1px solid var(--border);background:var(--topbar-bg,rgba(8,12,20,0.97));
   backdrop-filter:blur(12px);flex-shrink:0}
 .logo{display:flex;flex-direction:column;gap:1px}
 .logo-name{font-size:1.05rem;font-weight:800;letter-spacing:-0.02em}
@@ -1214,7 +1216,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 <!-- ══════════════════════════════════════════════════════════
      LOGS OVERLAY (failed + history — level deep)
 ════════════════════════════════════════════════════════════ -->
-<div id="logs-overlay" style="display:none;position:fixed;inset:0;background:rgba(8,12,20,.97);z-index:300;overflow:auto">
+<div id="logs-overlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:300;overflow:auto">
   <div style="max-width:900px;margin:0 auto;padding:20px">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
       <button class="btn" onclick="closeLogs()">&#8592; Back</button>
