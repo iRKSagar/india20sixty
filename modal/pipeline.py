@@ -65,13 +65,28 @@ def _title_gen():
 @app.function(image=image, secrets=secrets)
 @modal.fastapi_endpoint(method="POST")
 def trigger(data: dict):
+    action = data.get("action", "run")
+
+    # Route add-voice-and-publish
+    if action == "add-voice-and-publish":
+        add_voice_and_publish.spawn(data)
+        return {"status": "started", "action": action, "job_id": data.get("job_id")}
+
+    # Route retry-upload
+    if action == "retry-upload":
+        retry_upload.spawn(data)
+        return {"status": "started", "action": action, "job_id": data.get("job_id")}
+
+    # Default: run pipeline
     job_id      = data.get("job_id") or str(uuid.uuid4())
     topic       = data.get("topic", "Future India")
     webhook_url = data.get("webhook_url", "")
     image_urls  = data.get("image_urls") or []
+    script_package = data.get("script_package")
     print(f"Trigger: {job_id} | {topic}")
     run_pipeline.spawn(job_id=job_id, topic=topic,
-                       webhook_url=webhook_url, image_urls=image_urls)
+                       webhook_url=webhook_url, image_urls=image_urls,
+                       script_package=script_package)
     return {"status": "started", "job_id": job_id, "topic": topic}
 
 
@@ -340,7 +355,6 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=2.0, memory=1024, timeout=300)
-@modal.fastapi_endpoint(method="POST")
 def add_voice_and_publish(data: dict):
     job_id = data.get("job_id")
     if not job_id: return {"status":"error","message":"Missing job_id"}
@@ -430,7 +444,6 @@ def add_voice_and_publish(data: dict):
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=180)
-@modal.fastapi_endpoint(method="POST")
 def retry_upload(data: dict):
     job_id = data.get("job_id")
     if not job_id: return {"status":"error","message":"Missing job_id"}

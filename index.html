@@ -14,6 +14,11 @@
   --green:#00e676;--yellow:#ffd740;--red:#ff5252;--purple:#b388ff;--pink:#ff6b9d;
   --font:'Syne',sans-serif;--mono:'DM Mono',monospace;
 }
+body.light-mode{
+  --bg:#f0f2f7;--surface:#ffffff;--surface2:#f5f7fc;--surface3:#ebeef5;
+  --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.15);
+  --text:#0d1320;--muted:#6b7280;--muted2:#9ca3af;
+}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow:hidden}
 body{background:var(--bg);color:var(--text);font-family:var(--font);display:flex;flex-direction:column}
@@ -903,6 +908,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 
 <!-- TOPICS ──────────────────────────────────────────────────── -->
 <div class="page" id="page-topics">
+  <div id="debug-topics"></div>
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="btn btn-ghost btn-sm"   id="bt-all"   onclick="filterTopics('all')">All</button>
     <button class="btn btn-primary btn-sm" id="bt-ready" onclick="filterTopics('ready')">Ready</button>
@@ -923,6 +929,21 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 <div class="page" id="page-settings">
   <div id="debug-settings"></div>
   <div class="settings-grid">
+
+    <!-- Appearance -->
+    <div class="settings-section">
+      <div class="settings-head">&#127775; Appearance</div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">Theme</div>
+          <div class="setting-desc">Switch between dark mode (default) and light mode.</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" id="theme-dark-btn" onclick="setTheme('dark')">&#127761; Dark</button>
+          <button class="btn btn-ghost btn-sm" id="theme-light-btn" onclick="setTheme('light')">&#9728; Light</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Pipeline -->
     <div class="settings-section">

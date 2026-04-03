@@ -1245,20 +1245,28 @@ async function doReplenish() {
     .map(function(d) { return d.dataset.cat; });
   var target = parseInt(document.getElementById('tgt-slider').value);
   closeReplenishModal();
-  showDebug('debug-create', '<span style="color:var(--yellow)">&#8635; Replenishing topics... (Render may take 30s to wake up)</span>');
+  // Show status on both pages
+  var pending = '<span style="color:var(--yellow)">&#8635; Replenishing topics... (10-30s)</span>';
+  showDebug('debug-topics', pending);
+  showDebug('debug-create', pending);
+  // Switch to topics tab so user can see results appear
+  showPage('topics', document.querySelector('[onclick*="topics"]'));
   try {
     var r = await fetch(API_BASE + '/replenish', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ categories: cats, target })
+      body: JSON.stringify({ categories: cats, target: target })
     });
     var d = await r.json();
-    showDebug('debug-create', '<span style="color:var(--green)">&#10003; Replenish triggered — topics will appear in ~60s. Categories: ' + (cats.join(', ') || 'all') + '</span>');
-    // Check multiple times as council takes time
-    setTimeout(loadTopicsCount, 15000);
-    setTimeout(loadTopicsCount, 30000);
-    setTimeout(loadTopicsCount, 60000);
+    var ok = '<span style="color:var(--green)">&#10003; Replenish triggered — topics appear in ~60s. Categories: ' + (cats.join(', ') || 'all') + '</span>';
+    showDebug('debug-topics', ok);
+    showDebug('debug-create', ok);
+    setTimeout(loadTopicsCount, 20000);
+    setTimeout(loadTopicsCount, 40000);
+    setTimeout(function() { loadTopicsCount(); if (currentPage === 'topics') loadTopics(); }, 65000);
   } catch(e) {
-    showDebug('debug-create', '<span style="color:var(--red)">&#10007; Replenish failed: ' + e.message + '</span>');
+    var err = '<span style="color:var(--red)">&#10007; Replenish failed: ' + e.message + '</span>';
+    showDebug('debug-topics', err);
+    showDebug('debug-create', err);
   }
 }
 

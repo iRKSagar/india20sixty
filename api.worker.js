@@ -151,11 +151,12 @@ export default {
       try {
         const {job_id} = await request.json();
         if (!job_id) return cors({error:"Missing job_id"},400);
-        const baseUrl = (env.RENDER_PIPELINE_URL||"").replace(/\/[^/]+$/,"");
+        const triggerUrl = (env.RENDER_PIPELINE_URL||"").trim().replace(/\/$/,"");
         await sbPatch(env,"jobs?id=eq."+job_id,{status:"voice",error:null,updated_at:new Date().toISOString()});
-        ctx.waitUntil(fetch(baseUrl+"/add-voice-and-publish",{
+        ctx.waitUntil(fetch(triggerUrl,{
           method:"POST",headers:{"content-type":"application/json"},
-          body:JSON.stringify({job_id}),signal:AbortSignal.timeout(60000)
+          body:JSON.stringify({action:"add-voice-and-publish",job_id}),
+          signal:AbortSignal.timeout(60000)
         }).catch(e=>console.error("add-voice:",e.message)));
         return cors({status:"started",job_id});
       } catch(e) { return cors({error:e.message},500); }
@@ -389,10 +390,10 @@ export default {
       try {
         const {job_id}=await request.json();
         if (!job_id) return cors({error:"Missing job_id"},400);
-        const retryUrl=env.RETRY_UPLOAD_URL||"";
-        if (!retryUrl) return cors({error:"RETRY_UPLOAD_URL not set"},500);
+        const triggerUrl=(env.RENDER_PIPELINE_URL||"").trim().replace(/\/$/,"");
         await sbPatch(env,"jobs?id=eq."+job_id,{status:"upload",error:null,updated_at:new Date().toISOString()});
-        ctx.waitUntil(fetch(retryUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({job_id})}).catch(e=>console.error("retry:",e.message)));
+        ctx.waitUntil(fetch(triggerUrl,{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({action:"retry-upload",job_id})}).catch(e=>console.error("retry:",e.message)));
         return cors({status:"retry_triggered",job_id});
       } catch(e){return cors({error:e.message},500);}
     }
@@ -495,7 +496,7 @@ export default {
       try {
         const results={};
         try { const r=await fetch(env.MODAL_HEALTH_URL||"",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.modal={ok:r.ok,version:d.version||"?"}; } catch(e){results.modal={ok:false,error:e.message};}
-        try { const r=await fetch((env.TOPIC_COUNCIL_URL||"")+"/health",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.topic_council={ok:r.ok,queue_depth:d.queue_depth||0}; } catch(e){results.topic_council={ok:false,error:e.message};}
+        try { const tcUrl=env.TOPIC_COUNCIL_HEALTH_URL||env.TOPIC_COUNCIL_URL||""; if(tcUrl){const healthUrl=tcUrl.replace("council-post","council");const r=await fetch(healthUrl,{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.topic_council={ok:r.ok,queue_depth:d.queue_depth||0,space_ready:d.space_ready||0};} } catch(e){results.topic_council={ok:false,error:e.message};}
         try { const t=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=cluster"); results.topics_ready=t.length; results.space_ready=t.filter(x=>x.cluster==="Space").length; } catch(e){}
         try { const j=await sbGet(env,"jobs?order=created_at.desc&limit=100&select=status,created_at"); const today=new Date(); today.setHours(0,0,0,0); const tj=j.filter(x=>new Date(x.created_at)>=today); results.jobs_today=tj.length; results.running=j.filter(x=>["pending","processing","images","voice","render","upload"].includes(x.status)).length; results.complete_today=tj.filter(x=>x.status==="complete").length; } catch(e){}
         results.time=new Date().toISOString();
@@ -778,15 +779,20 @@ async function _fetchBestTopic(env,cluster){
   await sbPatch(env,"topics?id=eq."+t[0].id,{used:true,used_at:new Date().toISOString()});
   return {topic:t[0].topic,script_package:t[0].script_package,council_score:t[0].council_score,category:t[0].cluster||"AI",source:"db_approved"};
 }
-async function callCouncil(env,topic,source,category){if(!env.TOPIC_COUNCIL_URL)throw new Error("TOPIC_COUNCIL_URL not set");const r=await fetch(env.TOPIC_COUNCIL_URL+"/full-pipeline",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({topic,source,category})});if(!r.ok)throw new Error("Council returned "+r.status);return r.json();}
+async function callCouncil(env,topic,source,category){
+  const url=env.TOPIC_COUNCIL_URL||"";
+  if(!url)throw new Error("TOPIC_COUNCIL_URL not set");
+  const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({action:"full-pipeline",topic,source,category})});
+  if(!r.ok)throw new Error("Council returned "+r.status);
+  return r.json();
+}
 async function triggerReplenish(env,target,categories){
-  if(!env.TOPIC_COUNCIL_URL)return;
+  const url=env.TOPIC_COUNCIL_URL||"";
+  if(!url)return;
   try{
-    // Fire and forget — Render cold starts take 30-60s, don't await
-    fetch(env.TOPIC_COUNCIL_URL+"/replenish",{
-      method:"POST",
-      headers:{"content-type":"application/json"},
-      body:JSON.stringify({target,categories:categories||ALL_CATS}),
+    fetch(url,{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({action:"replenish",target,categories:categories||ALL_CATS}),
       signal:AbortSignal.timeout(90000)
     }).catch(e=>console.error("Replenish:",e.message));
   }catch(e){console.error("Replenish:",e.message);}
