@@ -354,6 +354,9 @@ def _fetch_reddit(categories: list) -> list:
 
     print(f"  Reddit total: {len(items)} posts")
     return items
+
+
+def _council_score(headline: str, summary: str, category_hint: str):
     from openai import OpenAI
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
