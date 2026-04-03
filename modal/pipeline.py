@@ -117,7 +117,7 @@ def health():
 # ==========================================
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=900)
-def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: list = None):
+def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: list = None, script_package: dict = None):
 
     SUPABASE_URL      = os.environ["SUPABASE_URL"]
     SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
@@ -180,13 +180,27 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
 
         # ── STEP 1: RESEARCH ──────────────────────────────────────
         print("\n--- Research ---")
-        fact_package = _research().remote(job_id, topic)
-        log(f"Research: {'found' if fact_package.get('found') else 'no anchor'}")
+        if script_package and script_package.get("text"):
+            # Pre-generated script from topic council — skip research + scriptwriter
+            print("  Using pre-generated script from council")
+            fact_package = {"found": True, "key_fact": script_package.get("key_fact", ""),
+                            "source": script_package.get("source", "council")}
+            script_pkg = {
+                "script":          script_package.get("text", ""),
+                "reviewed_script": script_package.get("reviewed_script", script_package.get("text", "")),
+                "mood":            script_package.get("mood", "hopeful_future"),
+                "scene_prompts":   script_package.get("scene_prompts", [f"cinematic modern India scene {i+1}" for i in range(3)]),
+                "captions":        script_package.get("captions", []),
+            }
+            log(f"Script (council): mood={script_pkg['mood']} words={len(script_pkg['script'].split())}")
+        else:
+            fact_package = _research().remote(job_id, topic)
+            log(f"Research: {'found' if fact_package.get('found') else 'no anchor'}")
 
-        # ── STEP 2: SCRIPT ────────────────────────────────────────
-        print("\n--- Script ---")
-        script_pkg = _scriptwriter().remote(job_id, topic, fact_package, cluster, subscribe_cta)
-        log(f"Script mood={script_pkg['mood']} words={len(script_pkg['script'].split())}")
+            # ── STEP 2: SCRIPT ────────────────────────────────────────
+            print("\n--- Script ---")
+            script_pkg = _scriptwriter().remote(job_id, topic, fact_package, cluster, subscribe_cta)
+            log(f"Script mood={script_pkg['mood']} words={len(script_pkg['script'].split())}")
 
         # ── STEP 3: IMAGES — PARALLEL ─────────────────────────────
         update_status("images")

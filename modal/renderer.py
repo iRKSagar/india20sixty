@@ -33,47 +33,311 @@ XFADE_DUR  = 0.3
 
 # ==========================================
 # MOTIONS — confirmed safe on Modal debian ffmpeg 5.x
+# speed: slow | medium | fast — drives how much the frame moves
 # ==========================================
 
 MOTIONS = {
-    "pan_right_slow":  {"hpct": 1.20, "x": lambda dx,dy,n: f"{dx}*n/{n}",             "y": lambda dx,dy,n: f"{dy//2}"},
-    "pan_right_fast":  {"hpct": 1.28, "x": lambda dx,dy,n: f"{dx}*n/{n}",             "y": lambda dx,dy,n: f"{dy//3}"},
-    "pan_left_slow":   {"hpct": 1.20, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",        "y": lambda dx,dy,n: f"{dy//2}"},
-    "pan_left_fast":   {"hpct": 1.28, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",        "y": lambda dx,dy,n: f"{dy//3}"},
-    "pan_up":          {"hpct": 1.22, "x": lambda dx,dy,n: f"{dx//2}",                 "y": lambda dx,dy,n: f"{dy}-{dy}*n/{n}"},
-    "pan_down":        {"hpct": 1.22, "x": lambda dx,dy,n: f"{dx//2}",                 "y": lambda dx,dy,n: f"{dy}*n/{n}"},
-    "diagonal_tl_br":  {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}*n/{n}",              "y": lambda dx,dy,n: f"{dy}*n/{n}"},
-    "diagonal_tr_bl":  {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",         "y": lambda dx,dy,n: f"{dy}*n/{n}"},
-    "diagonal_bl_tr":  {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}*n/{n}",              "y": lambda dx,dy,n: f"{dy}-{dy}*n/{n}"},
-    "diagonal_br_tl":  {"hpct": 1.30, "x": lambda dx,dy,n: f"{dx}-{dx}*n/{n}",         "y": lambda dx,dy,n: f"{dy}-{dy}*n/{n}"},
-    "zoom_in_sim":     {"hpct": 1.35, "x": lambda dx,dy,n: f"{dx//2}-{dx//4}*n/{n}",   "y": lambda dx,dy,n: f"{dy//2}-{dy//4}*n/{n}"},
-    "pull_back_sim":   {"hpct": 1.35, "x": lambda dx,dy,n: f"{dx//4}+{dx//4}*n/{n}",   "y": lambda dx,dy,n: f"{dy//4}+{dy//4}*n/{n}"},
-    "drift_slow":      {"hpct": 1.12, "x": lambda dx,dy,n: f"{dx//3}*n/{n}",            "y": lambda dx,dy,n: f"{dy//4}"},
-    "static_hold":     {"hpct": 1.08, "x": lambda dx,dy,n: f"{dx//2}",                  "y": lambda dx,dy,n: f"{dy//2}"},
+    # ── HORIZONTAL PANS ───────────────────────────────────────
+    "pan_right_slow":   {"hpct":1.18,"x":lambda dx,dy,n:f"{dx}*n/{n}",            "y":lambda dx,dy,n:f"{dy//2}",              "speed":"slow"},
+    "pan_right_med":    {"hpct":1.24,"x":lambda dx,dy,n:f"{dx}*n/{n}",            "y":lambda dx,dy,n:f"{dy//2}",              "speed":"medium"},
+    "pan_right_fast":   {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}",            "y":lambda dx,dy,n:f"{dy//3}",              "speed":"fast"},
+    "pan_left_slow":    {"hpct":1.18,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}",       "y":lambda dx,dy,n:f"{dy//2}",              "speed":"slow"},
+    "pan_left_med":     {"hpct":1.24,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}",       "y":lambda dx,dy,n:f"{dy//2}",              "speed":"medium"},
+    "pan_left_fast":    {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}",       "y":lambda dx,dy,n:f"{dy//3}",              "speed":"fast"},
+
+    # ── VERTICAL PANS ─────────────────────────────────────────
+    "pan_up_slow":      {"hpct":1.22,"x":lambda dx,dy,n:f"{dx//2}",               "y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}",      "speed":"slow"},
+    "pan_up_fast":      {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//2}",               "y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}",      "speed":"fast"},
+    "pan_down_slow":    {"hpct":1.22,"x":lambda dx,dy,n:f"{dx//2}",               "y":lambda dx,dy,n:f"{dy}*n/{n}",           "speed":"slow"},
+    "pan_down_fast":    {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//2}",               "y":lambda dx,dy,n:f"{dy}*n/{n}",           "speed":"fast"},
+
+    # ── DIAGONAL PANS ─────────────────────────────────────────
+    "diagonal_tl_br":   {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}",            "y":lambda dx,dy,n:f"{dy}*n/{n}",           "speed":"medium"},
+    "diagonal_tr_bl":   {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}",       "y":lambda dx,dy,n:f"{dy}*n/{n}",           "speed":"medium"},
+    "diagonal_bl_tr":   {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}",            "y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}",      "speed":"medium"},
+    "diagonal_br_tl":   {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}",       "y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}",      "speed":"medium"},
+    "diagonal_tl_br_fast":{"hpct":1.36,"x":lambda dx,dy,n:f"{dx}*n/{n}",          "y":lambda dx,dy,n:f"{dy}*n/{n}",           "speed":"fast"},
+    "diagonal_bl_tr_fast":{"hpct":1.36,"x":lambda dx,dy,n:f"{dx}*n/{n}",          "y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}",      "speed":"fast"},
+
+    # ── ZOOM SIMULATIONS ──────────────────────────────────────
+    "zoom_in_slow":     {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//2}-{dx//5}*n/{n}", "y":lambda dx,dy,n:f"{dy//2}-{dy//5}*n/{n}","speed":"slow"},
+    "zoom_in_med":      {"hpct":1.35,"x":lambda dx,dy,n:f"{dx//2}-{dx//4}*n/{n}", "y":lambda dx,dy,n:f"{dy//2}-{dy//4}*n/{n}","speed":"medium"},
+    "zoom_in_fast":     {"hpct":1.42,"x":lambda dx,dy,n:f"{dx//2}-{dx//3}*n/{n}", "y":lambda dx,dy,n:f"{dy//2}-{dy//3}*n/{n}","speed":"fast"},
+    "pull_back_slow":   {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//5}+{dx//5}*n/{n}", "y":lambda dx,dy,n:f"{dy//5}+{dy//5}*n/{n}","speed":"slow"},
+    "pull_back_med":    {"hpct":1.35,"x":lambda dx,dy,n:f"{dx//4}+{dx//4}*n/{n}", "y":lambda dx,dy,n:f"{dy//4}+{dy//4}*n/{n}","speed":"medium"},
+    "pull_back_fast":   {"hpct":1.42,"x":lambda dx,dy,n:f"{dx//3}+{dx//3}*n/{n}", "y":lambda dx,dy,n:f"{dy//3}+{dy//3}*n/{n}","speed":"fast"},
+
+    # ── SPECIALTY ─────────────────────────────────────────────
+    "drift_slow":       {"hpct":1.12,"x":lambda dx,dy,n:f"{dx//3}*n/{n}",         "y":lambda dx,dy,n:f"{dy//5}",              "speed":"slow"},
+    "drift_up_right":   {"hpct":1.15,"x":lambda dx,dy,n:f"{dx//4}*n/{n}",         "y":lambda dx,dy,n:f"{dy//3}-{dy//4}*n/{n}","speed":"slow"},
+    "drift_down_left":  {"hpct":1.15,"x":lambda dx,dy,n:f"{dx//3}-{dx//4}*n/{n}", "y":lambda dx,dy,n:f"{dy//4}*n/{n}",        "speed":"slow"},
+    "static_hold":      {"hpct":1.05,"x":lambda dx,dy,n:f"{dx//2}",               "y":lambda dx,dy,n:f"{dy//2}",              "speed":"static"},
+    "static_breathe":   {"hpct":1.08,"x":lambda dx,dy,n:f"{dx//2}",               "y":lambda dx,dy,n:f"{dy//2}",              "speed":"static"},
 }
 
 # Confirmed-working xfade transitions on Modal debian ffmpeg 5.x
-XFADE_TRANSITIONS = [
-    "dissolve", "wipeleft", "wiperight",
-    "slideleft", "slideright", "fade", "fadeblack",
-]
-
-# Import mood presets from scriptwriter (single source of truth)
-# At deploy time Modal resolves this — both files are in the same workspace.
-# If running standalone for testing, define a minimal fallback.
-# MOOD_PRESETS defined inline — do NOT import from scriptwriter.
-# Cross-app imports cause Modal to find two app objects and fail at deploy time.
-MOOD_PRESETS = {
-    "cinematic_epic":  {"label":"Cinematic Epic",  "grade":{"ccm":"colorchannelmixer=rr=1.05:rg=0.0:rb=-0.05:gr=0.0:gg=0.95:gb=0.05:br=-0.10:bg=0.03:bb=1.07","eq":"eq=contrast=1.38:brightness=-0.03:saturation=0.82","sharp":"unsharp=7:7:1.2:3:3:0.0","noise":"noise=c0s=18:c0f=t+u","vignette":"vignette=angle=0.6"},"scenes":[{"motion_a":"diagonal_bl_tr","motion_b":"zoom_in_sim","transition":"wiperight","energy":"high","caption":"box"},{"motion_a":"pan_right_fast","motion_b":"pan_up","transition":"slideright","energy":"high","caption":"box"},{"motion_a":"diagonal_br_tl","motion_b":"pull_back_sim","transition":"dissolve","energy":"medium","caption":"plain"}]},
-    "breaking_news":   {"label":"Breaking News",   "grade":{"ccm":"colorchannelmixer=rr=0.90:rg=0.05:rb=0.05:gr=0.0:gg=0.95:gb=0.05:br=0.05:bg=0.08:bb=0.87","eq":"eq=contrast=1.28:brightness=0.0:saturation=0.68","sharp":"unsharp=5:5:1.1:3:3:0.0","noise":"noise=c0s=10:c0f=t+u","vignette":"vignette=angle=0.45"},"scenes":[{"motion_a":"pan_right_fast","motion_b":"diagonal_tl_br","transition":"slideleft","energy":"high","caption":"box"},{"motion_a":"pan_left_fast","motion_b":"pan_up","transition":"wipeleft","energy":"high","caption":"box"},{"motion_a":"diagonal_tr_bl","motion_b":"static_hold","transition":"fadeblack","energy":"medium","caption":"plain"}]},
-    "hopeful_future":  {"label":"Hopeful Future",  "grade":{"ccm":"colorchannelmixer=rr=1.08:rg=0.05:rb=-0.03:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=-0.02:bb=0.97","eq":"eq=contrast=1.12:brightness=0.04:saturation=1.45","sharp":"unsharp=3:3:0.7:3:3:0.0","noise":"noise=c0s=8:c0f=t+u","vignette":"vignette=angle=0.30"},"scenes":[{"motion_a":"pan_right_slow","motion_b":"zoom_in_sim","transition":"dissolve","energy":"medium","caption":"plain"},{"motion_a":"diagonal_bl_tr","motion_b":"pan_up","transition":"fade","energy":"medium","caption":"plain"},{"motion_a":"drift_slow","motion_b":"pull_back_sim","transition":"dissolve","energy":"low","caption":"plain"}]},
-    "dark_serious":    {"label":"Dark Serious",    "grade":{"ccm":"colorchannelmixer=rr=0.95:rg=0.0:rb=0.05:gr=0.0:gg=0.88:gb=0.12:br=0.08:bg=0.05:bb=0.87","eq":"eq=contrast=1.45:brightness=-0.06:saturation=0.52","sharp":"unsharp=7:7:1.0:3:3:0.0","noise":"noise=c0s=24:c0f=t+u","vignette":"vignette=angle=0.70"},"scenes":[{"motion_a":"drift_slow","motion_b":"pan_left_slow","transition":"fadeblack","energy":"low","caption":"box"},{"motion_a":"diagonal_tr_bl","motion_b":"static_hold","transition":"dissolve","energy":"low","caption":"box"},{"motion_a":"pan_up","motion_b":"pull_back_sim","transition":"fade","energy":"low","caption":"plain"}]},
-    "cold_tech":       {"label":"Cold Tech",       "grade":{"ccm":"colorchannelmixer=rr=0.88:rg=0.05:rb=0.07:gr=-0.03:gg=0.95:gb=0.08:br=0.0:bg=0.05:bb=1.15","eq":"eq=contrast=1.22:brightness=0.0:saturation=0.88","sharp":"unsharp=5:5:1.0:3:3:0.0","noise":"noise=c0s=12:c0f=t+u","vignette":"vignette=angle=0.42"},"scenes":[{"motion_a":"diagonal_tl_br","motion_b":"zoom_in_sim","transition":"slideleft","energy":"medium","caption":"box"},{"motion_a":"pan_right_fast","motion_b":"diagonal_br_tl","transition":"wipeleft","energy":"medium","caption":"box"},{"motion_a":"pull_back_sim","motion_b":"drift_slow","transition":"dissolve","energy":"low","caption":"plain"}]},
-    "vibrant_pop":     {"label":"Vibrant Pop",     "grade":{"ccm":"colorchannelmixer=rr=1.05:rg=0.0:rb=0.0:gr=0.05:gg=1.08:gb=0.0:br=0.0:bg=0.0:bb=1.05","eq":"eq=contrast=1.08:brightness=0.06:saturation=1.72","sharp":"unsharp=3:3:0.6:3:3:0.0","noise":"noise=c0s=6:c0f=t+u","vignette":"vignette=angle=0.22"},"scenes":[{"motion_a":"diagonal_tl_br","motion_b":"diagonal_br_tl","transition":"wiperight","energy":"high","caption":"box"},{"motion_a":"pan_right_fast","motion_b":"zoom_in_sim","transition":"slideright","energy":"high","caption":"box"},{"motion_a":"diagonal_bl_tr","motion_b":"pan_up","transition":"dissolve","energy":"medium","caption":"plain"}]},
-    "nostalgic_film":  {"label":"Nostalgic Film",  "grade":{"ccm":"colorchannelmixer=rr=1.12:rg=0.05:rb=-0.08:gr=0.05:gg=1.0:gb=-0.05:br=-0.03:bg=0.0:bb=0.93","eq":"eq=contrast=1.18:brightness=0.03:saturation=1.12","sharp":"unsharp=3:3:0.5:3:3:0.0","noise":"noise=c0s=26:c0f=t+u","vignette":"vignette=angle=0.65"},"scenes":[{"motion_a":"pan_right_slow","motion_b":"drift_slow","transition":"dissolve","energy":"low","caption":"plain"},{"motion_a":"diagonal_bl_tr","motion_b":"pan_up","transition":"fade","energy":"medium","caption":"plain"},{"motion_a":"zoom_in_sim","motion_b":"static_hold","transition":"dissolve","energy":"low","caption":"plain"}]},
-    "warm_human":      {"label":"Warm Human",      "grade":{"ccm":"colorchannelmixer=rr=1.10:rg=0.05:rb=-0.05:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=0.0:bb=0.95","eq":"eq=contrast=1.10:brightness=0.05:saturation=1.32","sharp":"unsharp=3:3:0.5:3:3:0.0","noise":"noise=c0s=8:c0f=t+u","vignette":"vignette=angle=0.28"},"scenes":[{"motion_a":"pan_right_slow","motion_b":"zoom_in_sim","transition":"dissolve","energy":"low","caption":"plain"},{"motion_a":"drift_slow","motion_b":"pan_up","transition":"fade","energy":"low","caption":"plain"},{"motion_a":"static_hold","motion_b":"pull_back_sim","transition":"dissolve","energy":"low","caption":"plain"}]},
+# Grouped by feel
+XFADE_TRANSITIONS = {
+    "hard":     ["slideleft","slideright","wipeleft","wiperight"],
+    "soft":     ["dissolve","fade"],
+    "dramatic": ["fadeblack","wiperight","wipeleft"],
+    "smooth":   ["dissolve","fade","slideleft"],
 }
-CLUSTER_MOOD_DEFAULTS = {"Space":"cinematic_epic","DeepTech":"cold_tech","AI":"cold_tech","Gadgets":"vibrant_pop","GreenTech":"hopeful_future","Startups":"hopeful_future"}
+
+def _all_xfade():
+    seen = set()
+    result = []
+    for v in XFADE_TRANSITIONS.values():
+        for t in v:
+            if t not in seen:
+                seen.add(t)
+                result.append(t)
+    return result
+
+# ==========================================
+# MOOD PRESETS — redesigned with motion POOLS
+# Each mood defines pools — scenes pick randomly, no consecutive repeats
+# Energy drives clip duration: high=fast cuts, low=slow lingering
+# ==========================================
+
+MOOD_PRESETS = {
+
+    # ── CINEMATIC EPIC ────────────────────────────────────────
+    # Space, defence, scale — powerful, high energy, dramatic
+    "cinematic_epic": {
+        "label": "Cinematic Epic",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.05:rg=0.0:rb=-0.05:gr=0.0:gg=0.95:gb=0.05:br=-0.10:bg=0.03:bb=1.07",
+            "eq":      "eq=contrast=1.38:brightness=-0.03:saturation=0.82",
+            "sharp":   "unsharp=7:7:1.2:3:3:0.0",
+            "noise":   "noise=c0s=18:c0f=t+u",
+            "vignette":"vignette=angle=0.6",
+        },
+        "energy": "high",          # drives pace: high=5-7s clips, medium=7-9s, low=9-12s
+        "motion_pools": {
+            # Scene 0 — hook: aggressive, fast, grab attention
+            0: ["zoom_in_fast","diagonal_bl_tr_fast","diagonal_tl_br_fast","pan_right_fast","pull_back_fast"],
+            # Scene 1 — story: dynamic, directional
+            1: ["pan_left_fast","diagonal_tr_bl","diagonal_br_tl","zoom_in_med","pan_up_fast"],
+            # Scene 2 — resolve: pull back, reveal scale
+            2: ["pull_back_slow","pull_back_med","diagonal_bl_tr","pan_right_med","drift_up_right"],
+        },
+        "transition_pools": {
+            0: ["wiperight","slideleft","slideright"],
+            1: ["wipeleft","wiperight","slideright"],
+            2: ["dissolve","fade"],
+        },
+        "caption": "box",
+    },
+
+    # ── BREAKING NEWS ─────────────────────────────────────────
+    # Urgent, fast, choppy — maximum cuts, nervous energy
+    "breaking_news": {
+        "label": "Breaking News",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=0.90:rg=0.05:rb=0.05:gr=0.0:gg=0.95:gb=0.05:br=0.05:bg=0.08:bb=0.87",
+            "eq":      "eq=contrast=1.28:brightness=0.0:saturation=0.68",
+            "sharp":   "unsharp=5:5:1.1:3:3:0.0",
+            "noise":   "noise=c0s=10:c0f=t+u",
+            "vignette":"vignette=angle=0.45",
+        },
+        "energy": "high",
+        "motion_pools": {
+            0: ["pan_right_fast","diagonal_tl_br_fast","zoom_in_fast","pan_left_fast"],
+            1: ["pan_left_fast","diagonal_tr_bl","diagonal_bl_tr_fast","pan_up_fast"],
+            2: ["diagonal_tr_bl","static_hold","pan_right_med","zoom_in_med"],
+        },
+        "transition_pools": {
+            0: ["slideleft","wipeleft","wiperight"],
+            1: ["wipeleft","slideleft","slideright"],
+            2: ["fadeblack","dissolve"],
+        },
+        "caption": "box",
+    },
+
+    # ── HOPEFUL FUTURE ────────────────────────────────────────
+    # GreenTech, startups, optimistic — slow, breathing, expansive
+    "hopeful_future": {
+        "label": "Hopeful Future",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.08:rg=0.05:rb=-0.03:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=-0.02:bb=0.97",
+            "eq":      "eq=contrast=1.12:brightness=0.04:saturation=1.35",
+            "sharp":   "unsharp=3:3:0.7:3:3:0.0",
+            "noise":   "noise=c0s=8:c0f=t+u",
+            "vignette":"vignette=angle=0.30",
+        },
+        "energy": "low",
+        "motion_pools": {
+            0: ["pan_right_slow","drift_slow","zoom_in_slow","pan_up_slow"],
+            1: ["drift_up_right","pan_left_slow","diagonal_bl_tr","pull_back_slow"],
+            2: ["pull_back_slow","drift_slow","static_breathe","pan_up_slow"],
+        },
+        "transition_pools": {
+            0: ["dissolve","fade"],
+            1: ["fade","dissolve"],
+            2: ["dissolve","fade"],
+        },
+        "caption": "plain",
+    },
+
+    # ── DARK SERIOUS ──────────────────────────────────────────
+    # Heavy topics — slow, weighty, ominous
+    "dark_serious": {
+        "label": "Dark Serious",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=0.95:rg=0.0:rb=0.05:gr=0.0:gg=0.88:gb=0.12:br=0.08:bg=0.05:bb=0.87",
+            "eq":      "eq=contrast=1.45:brightness=-0.06:saturation=0.52",
+            "sharp":   "unsharp=7:7:1.0:3:3:0.0",
+            "noise":   "noise=c0s=24:c0f=t+u",
+            "vignette":"vignette=angle=0.70",
+        },
+        "energy": "low",
+        "motion_pools": {
+            0: ["drift_slow","pan_left_slow","static_hold","drift_down_left"],
+            1: ["diagonal_tr_bl","static_hold","pan_up_slow","drift_slow"],
+            2: ["pull_back_slow","static_breathe","pan_up_slow","drift_down_left"],
+        },
+        "transition_pools": {
+            0: ["fadeblack","dissolve"],
+            1: ["dissolve","fade"],
+            2: ["fadeblack","fade"],
+        },
+        "caption": "box",
+    },
+
+    # ── COLD TECH ─────────────────────────────────────────────
+    # AI, DeepTech — precise, controlled, clinical
+    "cold_tech": {
+        "label": "Cold Tech",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=0.88:rg=0.05:rb=0.07:gr=-0.03:gg=0.95:gb=0.08:br=0.0:bg=0.05:bb=1.15",
+            "eq":      "eq=contrast=1.22:brightness=0.0:saturation=0.88",
+            "sharp":   "unsharp=5:5:1.0:3:3:0.0",
+            "noise":   "noise=c0s=12:c0f=t+u",
+            "vignette":"vignette=angle=0.42",
+        },
+        "energy": "medium",
+        "motion_pools": {
+            0: ["diagonal_tl_br","zoom_in_med","pan_right_med","diagonal_bl_tr"],
+            1: ["pan_left_med","diagonal_br_tl","zoom_in_slow","pan_right_fast"],
+            2: ["pull_back_med","drift_slow","static_hold","pan_up_slow"],
+        },
+        "transition_pools": {
+            0: ["slideleft","wipeleft","dissolve"],
+            1: ["wipeleft","slideright","dissolve"],
+            2: ["dissolve","fade"],
+        },
+        "caption": "box",
+    },
+
+    # ── VIBRANT POP ───────────────────────────────────────────
+    # Gadgets, consumer, energetic — fast, punchy, colourful
+    "vibrant_pop": {
+        "label": "Vibrant Pop",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.05:rg=0.0:rb=0.0:gr=0.05:gg=1.08:gb=0.0:br=0.0:bg=0.0:bb=1.05",
+            "eq":      "eq=contrast=1.08:brightness=0.06:saturation=1.72",
+            "sharp":   "unsharp=3:3:0.6:3:3:0.0",
+            "noise":   "noise=c0s=6:c0f=t+u",
+            "vignette":"vignette=angle=0.22",
+        },
+        "energy": "high",
+        "motion_pools": {
+            0: ["diagonal_tl_br_fast","pan_right_fast","zoom_in_fast","diagonal_bl_tr_fast"],
+            1: ["pan_left_fast","zoom_in_med","diagonal_tr_bl","diagonal_br_tl"],
+            2: ["diagonal_bl_tr","zoom_in_med","pan_up_fast","pan_right_med"],
+        },
+        "transition_pools": {
+            0: ["wiperight","slideright","slideleft"],
+            1: ["slideright","wiperight","wipeleft"],
+            2: ["dissolve","wiperight"],
+        },
+        "caption": "box",
+    },
+
+    # ── NOSTALGIC FILM ────────────────────────────────────────
+    # Heritage, history, emotion — slow, filmic, warm
+    "nostalgic_film": {
+        "label": "Nostalgic Film",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.12:rg=0.05:rb=-0.08:gr=0.05:gg=1.0:gb=-0.05:br=-0.03:bg=0.0:bb=0.93",
+            "eq":      "eq=contrast=1.18:brightness=0.03:saturation=1.12",
+            "sharp":   "unsharp=3:3:0.5:3:3:0.0",
+            "noise":   "noise=c0s=26:c0f=t+u",
+            "vignette":"vignette=angle=0.65",
+        },
+        "energy": "low",
+        "motion_pools": {
+            0: ["pan_right_slow","drift_slow","zoom_in_slow","drift_up_right"],
+            1: ["diagonal_bl_tr","pan_up_slow","drift_down_left","pan_left_slow"],
+            2: ["zoom_in_slow","static_breathe","pull_back_slow","drift_slow"],
+        },
+        "transition_pools": {
+            0: ["dissolve","fade"],
+            1: ["fade","dissolve"],
+            2: ["dissolve","fadeblack"],
+        },
+        "caption": "plain",
+    },
+
+    # ── WARM HUMAN ────────────────────────────────────────────
+    # Healthcare, education, community — gentle, intimate
+    "warm_human": {
+        "label": "Warm Human",
+        "grade": {
+            "ccm":     "colorchannelmixer=rr=1.10:rg=0.05:rb=-0.05:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=0.0:bb=0.95",
+            "eq":      "eq=contrast=1.10:brightness=0.05:saturation=1.32",
+            "sharp":   "unsharp=3:3:0.5:3:3:0.0",
+            "noise":   "noise=c0s=8:c0f=t+u",
+            "vignette":"vignette=angle=0.28",
+        },
+        "energy": "low",
+        "motion_pools": {
+            0: ["pan_right_slow","drift_slow","zoom_in_slow","drift_up_right"],
+            1: ["drift_slow","pan_up_slow","drift_down_left","zoom_in_slow"],
+            2: ["static_breathe","pull_back_slow","drift_slow","pan_up_slow"],
+        },
+        "transition_pools": {
+            0: ["dissolve","fade"],
+            1: ["fade","dissolve"],
+            2: ["dissolve","fade"],
+        },
+        "caption": "plain",
+    },
+}
+
+CLUSTER_MOOD_DEFAULTS = {
+    "Space":    "cinematic_epic",
+    "DeepTech": "cold_tech",
+    "AI":       "cold_tech",
+    "Gadgets":  "vibrant_pop",
+    "GreenTech":"hopeful_future",
+    "Startups": "hopeful_future",
+}
+
+# Energy → clip duration range in seconds (for 25s video / 3 scenes)
+ENERGY_PACE = {
+    "high":   (5.5, 7.5),   # fast cuts — high energy
+    "medium": (7.0, 9.0),   # balanced
+    "low":    (8.5, 11.0),  # slow lingering
+}
+
+def _pick_motion(pool_key: int, preset: dict, used: set) -> str:
+    """Pick a motion from the pool, avoiding recently used ones."""
+    import random
+    pool = preset["motion_pools"].get(pool_key, list(MOTIONS.keys()))
+    available = [m for m in pool if m not in used]
+    if not available:
+        available = pool  # reset if all used
+    choice = random.choice(available)
+    used.add(choice)
+    return choice
+
+def _pick_transition(scene_idx: int, preset: dict) -> str:
+    """Pick transition for this scene from the mood's transition pool."""
+    import random
+    pool = preset["transition_pools"].get(scene_idx, ["dissolve","fade"])
+    return random.choice(pool)
 
 
 # ==========================================
@@ -129,9 +393,26 @@ def render_with_audio(
     print(f"\n[Render] job={job_id} mood={mood} dur={audio_dur:.1f}s")
     print(f"  {len(image_paths)} scenes x {scene_dur:.1f}s")
 
+    import random
+    preset = MOOD_PRESETS.get(mood, MOOD_PRESETS.get("hopeful_future"))
+    used_motions = set()
+
+    # Pre-select varied motions — no consecutive repeats across scenes
+    scene_motions = []
+    for i in range(len(image_paths)):
+        m_a = _pick_motion(i, preset, used_motions)
+        used_motions.add(m_a)
+        m_b = _pick_motion(i, preset, used_motions.copy())
+        used_motions.add(m_b)
+        scene_motions.append((m_a, m_b))
+
+    print(f"  Motions: {' | '.join(a+'+'+b for a,b in scene_motions)}")
+
     clip_paths = []
     for i, img in enumerate(image_paths):
-        clip = _render_scene_clip(job_id, img, scene_dur, i, captions, mood)
+        m_a, m_b = scene_motions[i]
+        clip = _render_scene_clip(job_id, img, scene_dur, i, captions, mood,
+                                  motion_override=m_a, motion_b_override=m_b)
         clip_paths.append(clip)
 
     transitioned = _apply_xfade(job_id, clip_paths, scene_dur, mood)
@@ -250,28 +531,36 @@ def render_silent(
 
 def _render_scene_clip(
     job_id: str, img_path: str, duration: float,
-    scene_idx: int, captions: list, mood: str
+    scene_idx: int, captions: list, mood: str,
+    motion_override: str = None,
+    motion_b_override: str = None,
+    transition_override: str = None,
 ) -> str:
     """
     Render one image as TWO sub-clips with a hard cut between them.
-    All color/motion/caption choices come from MOOD_PRESETS[mood].
+    Motions are picked from mood pools — no two consecutive clips repeat.
     """
+    import random
     clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
     pre_path  = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
     cap_y     = int(OUT_HEIGHT * 0.73)
     cap_size  = 58
     wm        = _escape_dt("@India20Sixty")
 
-    preset     = MOOD_PRESETS.get(mood, MOOD_PRESETS.get("hopeful_future"))
+    preset = MOOD_PRESETS.get(mood, MOOD_PRESETS.get("hopeful_future"))
     if not preset:
         preset = list(MOOD_PRESETS.values())[0]
-    scene_cfg  = preset["scenes"][scene_idx % len(preset["scenes"])]
-    grade      = preset["grade"]
+    grade = preset["grade"]
+    caption_style = preset.get("caption", "plain")
 
-    motion_a      = MOTIONS.get(scene_cfg["motion_a"], MOTIONS["pan_right_fast"])
-    motion_b      = MOTIONS.get(scene_cfg["motion_b"], MOTIONS["diagonal_tl_br"])
-    energy        = scene_cfg.get("energy", "medium")
-    caption_style = scene_cfg.get("caption", "plain")
+    # Pick motions from pool (or use overrides from render_with_audio)
+    motion_a_name = motion_override or _pick_motion(scene_idx, preset, set())
+    motion_b_name = motion_b_override or _pick_motion(scene_idx, preset, {motion_a_name})
+
+    motion_a = MOTIONS.get(motion_a_name, MOTIONS["pan_right_slow"])
+    motion_b = MOTIONS.get(motion_b_name, MOTIONS["diagonal_bl_tr"])
+
+    print(f"  Clip {scene_idx}: [{mood}] {motion_a_name} → {motion_b_name}")
 
     hpct  = max(motion_a["hpct"], motion_b["hpct"])
     pan_w = int(OUT_WIDTH  * hpct)
@@ -279,9 +568,7 @@ def _render_scene_clip(
     dx    = pan_w - OUT_WIDTH
     dy    = pan_h - OUT_HEIGHT
 
-    print(f"  Clip {scene_idx}: [{mood}] {scene_cfg['motion_a']}|{scene_cfg['motion_b']} [{energy}]")
-
-    # PASS 1: Pre-process to scaled JPEG (much faster than re-scaling per frame)
+    # PASS 1: Pre-process to scaled JPEG
     _run_ffmpeg([
         "ffmpeg", "-y", "-i", img_path,
         "-vf", (f"scale={pan_w}:{pan_h}:force_original_aspect_ratio=increase:flags=lanczos,"
@@ -295,14 +582,20 @@ def _render_scene_clip(
     n_a   = int(dur_a * FPS)
     n_b   = int(dur_b * FPS)
 
-    speed = {"high": 1.0, "medium": 0.72, "low": 0.45}.get(energy, 0.72)
-    sdx   = max(1, min(int(dx * speed), dx))
-    sdy   = max(1, min(int(dy * speed), dy))
+    # Motion speed scaling based on motion's own speed tag
+    speed_map = {"fast": 1.0, "medium": 0.72, "slow": 0.45, "static": 0.0}
+    speed_a = speed_map.get(motion_a.get("speed","medium"), 0.72)
+    speed_b = speed_map.get(motion_b.get("speed","medium"), 0.72)
 
-    x_a = motion_a["x"](sdx, sdy, n_a)
-    y_a = motion_a["y"](sdx, sdy, n_a)
-    x_b = motion_b["x"](sdx, sdy, n_b)
-    y_b = motion_b["y"](sdx, sdy, n_b)
+    sdx_a = max(1, min(int(dx * speed_a), dx))
+    sdy_a = max(1, min(int(dy * speed_a), dy))
+    sdx_b = max(1, min(int(dx * speed_b), dx))
+    sdy_b = max(1, min(int(dy * speed_b), dy))
+
+    x_a = motion_a["x"](sdx_a, sdy_a, n_a)
+    y_a = motion_a["y"](sdx_a, sdy_a, n_a)
+    x_b = motion_b["x"](sdx_b, sdy_b, n_b)
+    y_b = motion_b["y"](sdx_b, sdy_b, n_b)
 
     def make_vf(x_expr, y_expr, caps_for_sub, sub_dur):
         third = sub_dur / 3.0
@@ -384,6 +677,7 @@ def _render_scene_clip(
 
 
 def _apply_xfade(job_id: str, clip_paths: list, scene_dur: float, mood: str) -> str:
+    import random
     if len(clip_paths) == 1:
         return clip_paths[0]
 
@@ -396,11 +690,13 @@ def _apply_xfade(job_id: str, clip_paths: list, scene_dur: float, mood: str) -> 
     preset = MOOD_PRESETS.get(mood, list(MOOD_PRESETS.values())[0])
 
     def get_transition(idx: int) -> str:
-        scenes = preset["scenes"]
-        key    = scenes[idx % len(scenes)].get("transition", "dissolve")
-        if key is None or key not in XFADE_TRANSITIONS:
-            return "dissolve"
-        return key
+        # Use new transition_pools if available
+        if "transition_pools" in preset:
+            pool = preset["transition_pools"].get(idx, ["dissolve","fade"])
+            return random.choice(pool)
+        # Legacy fallback
+        all_t = _all_xfade()
+        return random.choice(all_t)
 
     fc_parts = []
     offset   = scene_dur - XFADE_DUR

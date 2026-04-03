@@ -69,35 +69,49 @@ def render_longform(
     job_id: str,
     segments: list,
     mood: str,
-) -> str:
+) -> bytes:
     """
     Render all segments into one final MP4.
-
-    segments format:
-    [
-        {
-            segment_idx: int,
-            type: str,        # hook/context/deepdive/etc
-            label: str,       # chapter title
-            audio_path: str,  # local path to segment audio
-            audio_dur: float, # seconds
-            media: [          # list of {type, local_path}
-                { type: "image", local_path: "/tmp/..." },
-                { type: "video", local_path: "/tmp/..." },
-            ],
-            caption_style: str,  # large or subtitle
-            transition_out: str, # dissolve/fade/fadeblack/hard_cut
-        },
-        ...
-    ]
-
-    Returns path to final rendered MP4.
+    Segments contain R2 URLs — renderer downloads media itself.
+    Returns video bytes.
     """
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     print(f"\n[Longform Render] job={job_id} mood={mood} segments={len(segments)}")
 
-    rendered_segments = []
+    # Download all media into this container's /tmp/
+    resolved = []
     for seg in segments:
+        seg_idx   = seg["segment_idx"]
+        voice_url = seg.get("voice_url","")
+        if not voice_url:
+            print(f"  Seg {seg_idx}: no voice URL — skipping")
+            continue
+
+        audio_local = f"{TMP_DIR}/{job_id}_seg{seg_idx}_audio.mp3"
+        _download(voice_url, audio_local)
+        audio_dur = _get_duration(audio_local)
+
+        media_local = []
+        for m in (seg.get("media_urls") or []):
+            url = m.get("url","")
+            if not url: continue
+            ext  = ".mp4" if m.get("type") == "video" else ".png"
+            path = f"{TMP_DIR}/{job_id}_seg{seg_idx}_m{m.get('order',0)}{ext}"
+            _download(url, path)
+            media_local.append({"type": m.get("type","image"), "local_path": path})
+
+        resolved.append({
+            **seg,
+            "audio_path": audio_local,
+            "audio_dur":  audio_dur,
+            "media":      media_local,
+        })
+
+    if not resolved:
+        raise Exception("No segments could be resolved")
+
+    rendered_segments = []
+    for seg in resolved:
         seg_path = _render_segment(job_id, seg, mood)
         if seg_path:
             rendered_segments.append((seg, seg_path))
@@ -106,13 +120,14 @@ def render_longform(
     if not rendered_segments:
         raise Exception("No segments rendered successfully")
 
-    # Concatenate all segments
     final_path = _concatenate_segments(job_id, rendered_segments)
     size = os.path.getsize(final_path)
-    print(f"\n  Final: {size//1024}KB ({size//1024//1024}MB) → {final_path}")
+    print(f"\n  Final: {size//1024}KB ({size//1024//1024}MB)")
     if size < 500_000:
-        raise Exception(f"Final video suspiciously small: {size} bytes")
-    return final_path
+        raise Exception(f"Final video too small: {size} bytes")
+
+    with open(final_path, "rb") as f:
+        return f.read()
 
 
 # ==========================================
@@ -352,6 +367,25 @@ def _escape_dt(text: str) -> str:
     text = text.replace(":", "\\:")
     text = text.replace("%", "\\%")
     return text
+
+
+def _download(url: str, path: str):
+    import requests as req
+    r = req.get(url, timeout=60, stream=True)
+    r.raise_for_status()
+    with open(path, "wb") as f:
+        for chunk in r.iter_content(8192): f.write(chunk)
+
+
+def _get_duration(path: str) -> float:
+    try:
+        r = subprocess.run(
+            ["ffprobe","-v","error","-show_entries","format=duration",
+             "-of","default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=10)
+        return float(r.stdout.strip())
+    except Exception:
+        return 30.0
 
 
 @app.local_entrypoint()

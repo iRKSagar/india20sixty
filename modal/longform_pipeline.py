@@ -332,43 +332,77 @@ def _handle_render_full(data: dict):
             if not voice_r2:
                 raise Exception(f"Segment {seg_idx} has no voice")
 
-            voice_url   = voice_r2 if voice_r2.startswith("http") else f"{R2_BASE}/{voice_r2}"
-            audio_local = f"{TMP_DIR}/{job_id}_seg{seg_idx}_audio.mp3"
-            _download(voice_url, audio_local)
-            audio_dur = _get_duration(audio_local)
+            # Pass R2 URLs directly — renderer downloads in its own container
+            voice_url = voice_r2 if voice_r2.startswith("http") else f"{R2_BASE}/{voice_r2}"
 
-            media_local = []
+            media_urls = []
             for m in (seg.get("media") or []):
                 url = m.get("public_url") or (f"{R2_BASE}/{m['r2_url']}" if m.get("r2_url") else "")
-                if not url: continue
-                ext  = ".mp4" if m.get("type") == "video" else ".png"
-                path = f"{TMP_DIR}/{job_id}_seg{seg_idx}_m{m.get('order',0)}{ext}"
-                _download(url, path)
-                media_local.append({"type": m.get("type","image"), "local_path": path})
+                if url:
+                    media_urls.append({"type": m.get("type","image"), "url": url, "order": m.get("order",0)})
 
             render_segments.append({
                 "segment_idx":    seg_idx,
                 "type":           seg.get("type","context"),
                 "label":          seg.get("label",""),
-                "audio_path":     audio_local,
-                "audio_dur":      audio_dur,
-                "media":          media_local,
+                "voice_url":      voice_url,      # R2 URL — renderer downloads
+                "media_urls":     media_urls,      # R2 URLs — renderer downloads
                 "caption_style":  seg.get("caption_style","subtitle"),
                 "transition_out": seg.get("transition_out","dissolve"),
             })
 
         log(job_id, f"Rendering {len(render_segments)} segments")
-        final_video = _lf_renderer().remote(
+        video_bytes = _lf_renderer().remote(
             job_id=job_id, segments=render_segments, mood=mood,
         )
-        log(job_id, f"Rendered: {os.path.getsize(final_video)//1024}KB")
+        log(job_id, f"Rendered: {len(video_bytes)//1024}KB")
+
+        # Upload video bytes to R2
+        r2_key = f"longform/{job_id}/final.mp4"
+        video_r2_url = None
+        try:
+            import boto3, hashlib, hmac as hmac_lib, urllib.parse
+            from datetime import datetime as dt
+            R2_ACCT = os.environ.get("R2_ACCOUNT_ID","")
+            R2_KEY  = os.environ.get("R2_ACCESS_KEY_ID","")
+            R2_SEC  = os.environ.get("R2_SECRET_ACCESS_KEY","")
+            R2_BKT  = os.environ.get("R2_BUCKET","india20sixty-videos")
+            if R2_ACCT and R2_KEY:
+                import requests as req
+                now = dt.utcnow()
+                date_str = now.strftime("%Y%m%d")
+                time_str = now.strftime("%Y%m%dT%H%M%SZ")
+                payload_hash = hashlib.sha256(video_bytes).hexdigest()
+                endpoint = f"https://{R2_ACCT}.r2.cloudflarestorage.com"
+                url = f"{endpoint}/{R2_BKT}/{r2_key}"
+                signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date"
+                canonical = "\n".join(["PUT", f"/{R2_BKT}/{urllib.parse.quote(r2_key, safe='/')}","",
+                    f"content-type:video/mp4",f"host:{R2_ACCT}.r2.cloudflarestorage.com",
+                    f"x-amz-content-sha256:{payload_hash}",f"x-amz-date:{time_str}","",
+                    signed_headers,payload_hash])
+                cred_scope = f"{date_str}/auto/s3/aws4_request"
+                string_to_sign = "\n".join(["AWS4-HMAC-SHA256",time_str,cred_scope,
+                    hashlib.sha256(canonical.encode()).hexdigest()])
+                def sign(key, msg): return hmac_lib.new(key, msg.encode(), hashlib.sha256).digest()
+                sk = sign(sign(sign(sign(f"AWS4{R2_SEC}".encode(),date_str),"auto"),"s3"),"aws4_request")
+                sig = hmac_lib.new(sk, string_to_sign.encode(), hashlib.sha256).hexdigest()
+                r = req.put(url, data=video_bytes, headers={
+                    "content-type":"video/mp4","x-amz-content-sha256":payload_hash,
+                    "x-amz-date":time_str,
+                    "Authorization":f"AWS4-HMAC-SHA256 Credential={R2_KEY}/{cred_scope},SignedHeaders={signed_headers},Signature={sig}",
+                }, timeout=120)
+                if r.ok:
+                    video_r2_url = f"{R2_BASE}/{r2_key}"
+                    log(job_id, f"R2: {r2_key}")
+        except Exception as e:
+            log(job_id, f"R2 upload error: {e}")
 
         if TEST_MODE:
             log(job_id, "TEST_MODE — skipping upload")
             sb_patch(f"longform_jobs?id=eq.{job_id}",
                      {"status": "complete", "updated_at": datetime.utcnow().isoformat()})
             ping_worker(job_id, None, "render_complete",
-                        {"youtube_id": "TEST_LONGFORM", "video_r2_url": ""})
+                        {"youtube_id": "TEST_LONGFORM", "video_r2_url": video_r2_url or ""})
             return
 
         title = _title_gen().remote(job.get("topic","India Future"), "")
@@ -389,15 +423,18 @@ def _handle_render_full(data: dict):
             "#IndiaFuture #FutureTech #India #ISRO #Technology #Documentary"
         )
         video_id = _yt_upload().remote(
-            video_path=final_video, title=title, description=description,
+            video_path="", title=title, description=description,
             tags=["Future India","India innovation","ISRO","Technology","Documentary"],
             publish_at=publish_at,
+            video_bytes=video_bytes,
         )
         log(job_id, f"PUBLISHED: https://youtube.com/watch?v={video_id}")
         sb_patch(f"longform_jobs?id=eq.{job_id}",
-                 {"status":"complete","youtube_id":video_id,"updated_at":datetime.utcnow().isoformat()})
+                 {"status":"complete","youtube_id":video_id,
+                  "video_r2_url":video_r2_url or "",
+                  "updated_at":datetime.utcnow().isoformat()})
         ping_worker(job_id, None, "render_complete",
-                    {"youtube_id": video_id, "video_r2_url": ""})
+                    {"youtube_id": video_id, "video_r2_url": video_r2_url or ""})
         try: os.remove(final_video)
         except Exception: pass
 
