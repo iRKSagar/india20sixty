@@ -360,12 +360,19 @@ def _council_score(headline: str, summary: str, category_hint: str):
     from openai import OpenAI
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+    today = datetime.now(timezone.utc).strftime("%B %d, %Y")  # e.g. "April 05, 2026"
+
     prompt = f"""You are a content council for India20Sixty — YouTube Shorts about India's near future.
+Today's date is {today}. Treat anything before this date as PAST history, not future news.
 Evaluate this headline for a 25-second Short.
 
 HEADLINE: {headline}
 SUMMARY: {summary[:200]}
 CATEGORY HINT: {category_hint}
+
+IMPORTANT: If this headline describes something that already happened before {today}, 
+the video_angle must frame it as "India did X" or "How India achieved X" — not as upcoming news.
+Only use future tense if the event genuinely has not happened yet as of {today}.
 
 Respond ONLY with valid JSON (no markdown, no extra text):
 {{
