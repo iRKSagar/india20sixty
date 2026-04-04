@@ -658,6 +658,42 @@ export default {
       catch(e){return cors({error:e.message},500);}
     }
 
+    if (url.pathname === "/longform/topic-ideas") {
+      try {
+        const cluster = url.searchParams.get("cluster") || "Space";
+        const today = new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'});
+        const OPENAI_KEY = env.OPENAI_API_KEY || "";
+        if (!OPENAI_KEY) return cors({error:"OPENAI_API_KEY not set",ideas:[]},500);
+        const prompt = `You are a YouTube documentary topic researcher for India20Sixty.
+Today is ${today}. Generate 6 compelling story angles for a 7-10 minute documentary video about India's ${cluster} sector.
+
+Each topic must:
+- Be a specific story, not a generic subject (not "ISRO overview" but "Why ISRO's Gaganyaan is 2 years late and what that means")
+- Have a central question that makes a viewer curious
+- Be relevant to India in ${today}
+- Frame correctly — past events as past, future as genuinely upcoming
+
+Return ONLY valid JSON array:
+[
+  {"topic": "specific compelling angle 1", "cluster": "${cluster}"},
+  {"topic": "specific compelling angle 2", "cluster": "${cluster}"},
+  ...6 total
+]`;
+        const r = await fetch("https://api.openai.com/v1/chat/completions",{
+          method:"POST",
+          headers:{"Authorization":"Bearer "+OPENAI_KEY,"Content-Type":"application/json"},
+          body:JSON.stringify({model:"gpt-4o-mini",messages:[{role:"user",content:prompt}],
+            temperature:0.9,max_tokens:600,response_format:{type:"json_object"}})
+        });
+        if (!r.ok) return cors({error:"OpenAI error",ideas:[]},500);
+        const d = await r.json();
+        const raw = d.choices[0].message.content;
+        const parsed = JSON.parse(raw);
+        const ideas = Array.isArray(parsed) ? parsed : (parsed.ideas || parsed.topics || []);
+        return cors({ideas, cluster});
+      } catch(e) { return cors({error:e.message, ideas:[]}, 500); }
+    }
+
     if (url.pathname === "/longform/kill" && request.method === "POST") {
       try {
         const {job_id} = await request.json();

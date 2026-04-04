@@ -1783,11 +1783,7 @@ function renderTopicsPage() {
 
 
 async function useLfTopic(topic, cluster) {
-  if (!confirm('Create Full Auto long-form on:
-
-"' + topic + '"
-
-Script to YouTube automatically.')) return;
+  if (!confirm('Create Full Auto long-form on:\n\n"' + topic + '"\n\nScript to YouTube automatically.')) return;
   try {
     var r = await fetch(API_BASE + '/longform/create', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
