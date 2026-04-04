@@ -217,15 +217,17 @@ def _handle_generate_script(data: dict):
         })
         log(job_id, f"Script done: {len(result['segments'])} segments, mood={result['mood']}")
 
-        # AUTO MODE — immediately spawn voice + images for all segments
-        auto_mode = data.get("auto", False)
+        # AUTO MODE — spawn voice + images for all segments
+        # Stagger to avoid hitting GPU limit (10 GPUs on Starter plan)
         if auto_mode:
             log(job_id, "Auto mode: spawning voice + images for all segments")
+            import time
             for s in result["segments"]:
                 try:
                     _handle_segment_voice.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
                     _handle_segment_images.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
                     print(f"  Spawned voice+images for seg {s['segment_idx']}")
+                    time.sleep(2)  # 2s stagger between segments to avoid GPU stampede
                 except Exception as ae:
                     print(f"  Auto spawn failed seg {s['segment_idx']}: {ae}")
     except Exception as e:
@@ -247,6 +249,7 @@ def _handle_segment_voice(data: dict):
         return
 
     print(f"\n[LF Segment Voice] job={job_id} seg={segment_idx}")
+    Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     try:
         segs = sb_get(
             f"longform_segments?job_id=eq.{job_id}"
@@ -301,6 +304,7 @@ def _handle_segment_images(data: dict):
         return
 
     print(f"\n[LF Segment Images] job={job_id} seg={segment_idx}")
+    Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     try:
         segs = sb_get(
             f"longform_segments?job_id=eq.{job_id}"

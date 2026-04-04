@@ -741,6 +741,19 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
   <div class="create-panel" id="cpanel-longform">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">
       <div style="font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px">&#127916; New Long-form Video</div>
+
+      <!-- Topic Suggestions -->
+      <div style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="font-size:.72rem;font-weight:600;color:var(--text)">&#128161; Story Ideas</div>
+          <button class="btn btn-sm" onclick="loadLfTopicIdeas()" style="font-size:.6rem;padding:2px 10px;background:rgba(0,229,255,.1);color:var(--accent);border-color:rgba(0,229,255,.3)">&#8635; Replenish</button>
+          <div id="lf-ideas-status" style="font-family:var(--mono);font-size:.6rem;color:var(--muted)"></div>
+        </div>
+        <div id="lf-topic-ideas" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+          <div style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">Click Refresh to get story ideas...</div>
+        </div>
+      </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div>
           <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Topic</div>
@@ -750,7 +763,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
         </div>
         <div>
           <div style="font-size:.72rem;color:var(--muted);margin-bottom:4px">Cluster</div>
-          <select id="lf-cluster"
+          <select id="lf-cluster" onchange="loadLfTopicIdeas()"
             style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;
                    padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
             <option value="Space">&#128640; Space &amp; Defence</option>
