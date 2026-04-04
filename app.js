@@ -1697,7 +1697,10 @@ function renderTopicsPage() {
       + (cat ? '<span style="font-size:.63rem;color:' + cat.color + '">' + cat.emoji + ' ' + cat.label + '</span>' : '')
       + (dateStr ? '<span style="font-family:var(--mono);font-size:.56rem;color:var(--muted)">&#128337; ' + dateStr + '</span>' : '')
       + '</div></div>'
+      + '<div style="display:flex;gap:6px;flex-shrink:0;align-items:center">'
       + (canGen ? '<button class="btn btn-primary btn-sm" data-tid="' + t.id + '" onclick="generateNow(this.dataset.tid,this)">\u25B6 Now</button>' : '')
+      + (!t.used ? '<button class="btn btn-sm" style="background:rgba(255,82,82,.12);color:var(--red);border:1px solid rgba(255,82,82,.25);padding:4px 8px;font-size:.7rem" data-tid="' + t.id + '" onclick="killTopic(this.dataset.tid,this)" title="Kill this topic">\u2715</button>' : '')
+      + '</div>'
       + '</div></div>';
   }).join('');
 }
@@ -1715,6 +1718,23 @@ async function generateNow(topicId, btn) {
     btn.textContent = '\u2713 Done!'; btn.style.color = 'var(--green)';
     setTimeout(function() { loadJobs(); loadTopicsCount(); renderTopicsPage(); }, 800);
   } catch(e) { btn.textContent = '\u25B6 Now'; btn.disabled = false; alert('Failed: ' + e.message); }
+}
+
+async function killTopic(topicId, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    var r = await fetch(API_BASE + '/kill-topic', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic_id: topicId })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    // Remove the row from DOM immediately
+    var row = btn.closest('.topic-row');
+    if (row) { row.style.opacity = '0.3'; row.style.pointerEvents = 'none'; }
+    allTopics = allTopics.filter(function(t) { return t.id !== topicId; });
+    setTimeout(function() { loadTopicsCount(); renderTopicsPage(); }, 400);
+  } catch(e) { btn.disabled = false; btn.textContent = '\u2715'; alert('Failed: ' + e.message); }
 }
 
 // ── ANALYTICS ───────────────────────────────────────────────────
@@ -2289,3 +2309,4 @@ function setTheme(mode) {
   var saved = localStorage.getItem('i20_theme') || 'dark';
   if (saved === 'light') document.body.classList.add('light-mode');
 })();
+

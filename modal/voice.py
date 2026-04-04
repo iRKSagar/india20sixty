@@ -23,8 +23,9 @@ app = modal.App("india20sixty-voice")
 VOICE_REF_R2_KEY = "voice-refs/india20sixty_voice_ref.mp3"
 
 # Chatterbox settings — tuned for Indian English cloning
-CB_EXAGGERATION  = 0.2    # very faithful to reference — minimises artifacts
-CB_CFG_WEIGHT    = 0.6    # slightly higher guidance = cleaner pronunciation
+CB_EXAGGERATION  = 0.28   # slight enthusiasm — natural warmth without artifacts
+CB_CFG_WEIGHT    = 0.6    # clean pronunciation
+CB_SPEED         = 1.08   # slightly faster delivery — natural pace not robotic
 
 # Kokoro fallback settings
 KK_VOICE_PRESET  = "af_heart"
@@ -236,20 +237,22 @@ def _chatterbox_generate(text: str, voice_ref_path: str) -> bytes:
     # Generate with voice reference for cloning
     wav = model.generate(
         text,
-        audio_prompt_path=voice_ref_path,  # zero-shot voice clone
-        exaggeration=CB_EXAGGERATION,       # 0.35 = faithful to reference
+        audio_prompt_path=voice_ref_path,
+        exaggeration=CB_EXAGGERATION,
         cfg_weight=CB_CFG_WEIGHT,
     )
 
-    # Convert to MP3
+    # Convert to MP3 with speed adjustment
     wav_path = f"{TMP_DIR}/cb_wav_{os.getpid()}.wav"
     mp3_path = f"{TMP_DIR}/cb_mp3_{os.getpid()}.mp3"
     torchaudio.save(wav_path, wav, model.sr)
 
+    # atempo=1.08 — 8% faster, natural sounding. Range: 0.5-2.0
+    # Chain two atempo if >2.0 needed, e.g. atempo=1.5,atempo=1.5 for 2.25x
     result = subprocess.run(
         ["ffmpeg", "-y", "-i", wav_path,
          "-codec:a", "libmp3lame", "-qscale:a", "2",
-         "-af", "afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
+         "-af", f"atempo={CB_SPEED},afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
          mp3_path],
         capture_output=True, timeout=30
     )

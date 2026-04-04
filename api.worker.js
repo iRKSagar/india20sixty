@@ -466,6 +466,16 @@ export default {
       } catch(e) { return cors({error:e.message},500); }
     }
 
+    if (url.pathname === "/kill-topic" && request.method === "POST") {
+      try {
+        const {topic_id} = await request.json();
+        if (!topic_id) return cors({error:"Missing topic_id"},400);
+        await sbPatch(env,"topics?id=eq."+topic_id,
+          {used:true, source:"killed", updated_at:new Date().toISOString()});
+        return cors({killed:true, topic_id});
+      } catch(e) { return cors({error:e.message},500); }
+    }
+
     if (url.pathname === "/logs") {
       try {
         const fields = "id,topic,cluster,status,error,youtube_id,council_score,created_at,updated_at,script_package";

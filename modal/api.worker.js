@@ -466,6 +466,16 @@ export default {
       } catch(e) { return cors({error:e.message},500); }
     }
 
+    if (url.pathname === "/kill-topic" && request.method === "POST") {
+      try {
+        const {topic_id} = await request.json();
+        if (!topic_id) return cors({error:"Missing topic_id"},400);
+        await sbPatch(env,"topics?id=eq."+topic_id,
+          {used:true, source:"killed", updated_at:new Date().toISOString()});
+        return cors({killed:true, topic_id});
+      } catch(e) { return cors({error:e.message},500); }
+    }
+
     if (url.pathname === "/logs") {
       try {
         const fields = "id,topic,cluster,status,error,youtube_id,council_score,created_at,updated_at,script_package";
@@ -496,7 +506,7 @@ export default {
       try {
         const results={};
         try { const r=await fetch(env.MODAL_HEALTH_URL||"",{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.modal={ok:r.ok,version:d.version||"?"}; } catch(e){results.modal={ok:false,error:e.message};}
-        try { const tcUrl=env.TOPIC_COUNCIL_HEALTH_URL||env.TOPIC_COUNCIL_URL||""; if(tcUrl){const healthUrl=tcUrl.replace("council-post","council");const r=await fetch(healthUrl,{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.topic_council={ok:r.ok,queue_depth:d.queue_depth||0,space_ready:d.space_ready||0};} } catch(e){results.topic_council={ok:false,error:e.message};}
+        try { const tcUrl=env.TOPIC_COUNCIL_URL||""; if(tcUrl){const r=await fetch(tcUrl,{signal:AbortSignal.timeout(8000)}); const d=await r.json().catch(()=>({})); results.topic_council={ok:r.ok,queue_depth:d.queue_depth||0,space_ready:d.space_ready||0};} } catch(e){results.topic_council={ok:false,error:e.message};}
         try { const t=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=cluster"); results.topics_ready=t.length; results.space_ready=t.filter(x=>x.cluster==="Space").length; } catch(e){}
         try { const j=await sbGet(env,"jobs?order=created_at.desc&limit=100&select=status,created_at"); const today=new Date(); today.setHours(0,0,0,0); const tj=j.filter(x=>new Date(x.created_at)>=today); results.jobs_today=tj.length; results.running=j.filter(x=>["pending","processing","images","voice","render","upload"].includes(x.status)).length; results.complete_today=tj.filter(x=>x.status==="complete").length; } catch(e){}
         results.time=new Date().toISOString();
@@ -718,7 +728,7 @@ export default {
     if (cron==="* * * * *") {
       await processQueue(env,ctx);
       if (env.MODAL_HEALTH_URL) fetch(env.MODAL_HEALTH_URL).catch(()=>{});
-      if (env.TOPIC_COUNCIL_URL) fetch(env.TOPIC_COUNCIL_URL+"/health").catch(()=>{});
+      if (env.TOPIC_COUNCIL_HEALTH_URL) fetch(env.TOPIC_COUNCIL_HEALTH_URL).catch(()=>{});
     }
     if (cron==="30 0,6,12 * * *") {
       try {
@@ -800,6 +810,49 @@ async function triggerReplenish(env,target,categories){
 async function createJob(t,env){return await sbInsert(env,"jobs",{topic:t.topic,cluster:t.category||"AI",status:"pending",script_package:t.script_package||null,council_score:t.council_score||0,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});}
 async function processQueue(env,ctx){const ago=new Date(Date.now()-15*60000).toISOString();try{for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=lt.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"pending",retries:(j.retries||0)+1,updated_at:new Date().toISOString()});for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=gte.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"max_retries_exceeded",updated_at:new Date().toISOString()});const pending=await sbGet(env,"jobs?status=eq.pending&order=created_at.asc&limit=1");if(!pending.length)return;await sbPatch(env,"jobs?id=eq."+pending[0].id,{status:"processing",started_at:new Date().toISOString(),updated_at:new Date().toISOString()});ctx.waitUntil(triggerRender(pending[0],env));}catch(e){console.error("Queue:",e.message);}}
 async function triggerRender(job,env,image_urls){if(!env.RENDER_PIPELINE_URL){await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:"RENDER_PIPELINE_URL not set",updated_at:new Date().toISOString()});return;}const renderUrl=env.RENDER_PIPELINE_URL.trim().replace(/\/$/,"");try{const body={job_id:job.id,topic:job.topic,script_package:job.script_package,webhook_url:(env.WORKER_URL||"").trim().replace(/\/$/,"")+"/webhook"};if(image_urls&&image_urls.length>=3)body.image_urls=image_urls;const r=await fetch(renderUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});if(!r.ok)throw new Error(r.status+": "+(await r.text()).slice(0,100));}catch(e){console.error("Render trigger:",e.message);await sbPatch(env,"jobs?id=eq."+job.id,{status:"failed",error:e.message,updated_at:new Date().toISOString()});}}
-async function createAnalyticsRecord(job_id,youtube_id,env){try{await sbInsert(env,"analytics",{video_id:job_id,youtube_views:0,youtube_likes:0,comment_count:0,score:0,created_at:new Date().toISOString()});}catch(e){}}
-async function syncYouTubeAnalytics(env){if(!env.YOUTUBE_CLIENT_ID)return;try{const jobs=(await sbGet(env,"jobs?status=eq.complete&youtube_id=not.is.null&order=created_at.desc&limit=50")).filter(j=>j.youtube_id&&j.youtube_id!=="TEST_MODE");if(!jobs.length)return;const tr=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.YOUTUBE_CLIENT_ID,client_secret:env.YOUTUBE_CLIENT_SECRET,refresh_token:env.YOUTUBE_REFRESH_TOKEN,grant_type:"refresh_token"})});if(!tr.ok)return;const token=(await tr.json()).access_token;for(let i=0;i<jobs.length;i+=50){const batch=jobs.slice(i,i+50);const res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+batch.map(j=>j.youtube_id).join(",")+"&access_token="+token);if(!res.ok)continue;for(const item of(await res.json()).items||[]){const s=item.statistics||{};const views=parseInt(s.viewCount||0),likes=parseInt(s.likeCount||0),coms=parseInt(s.commentCount||0),score=views+likes*50+coms*30;const job=batch.find(j=>j.youtube_id===item.id);if(!job)continue;const ex=await sbGet(env,"analytics?video_id=eq."+job.id);if(ex.length>0)await sbPatch(env,"analytics?video_id=eq."+job.id,{youtube_views:views,youtube_likes:likes,comment_count:coms,score,updated_at:new Date().toISOString()});else await sbInsert(env,"analytics",{video_id:job.id,youtube_views:views,youtube_likes:likes,comment_count:coms,score,created_at:new Date().toISOString()});}}}catch(e){console.error("Analytics sync:",e.message);}}
+async function createAnalyticsRecord(job_id,youtube_id,env){try{const jobs=await sbGet(env,"jobs?id=eq."+job_id+"&select=topic,cluster,council_score");const j=jobs[0]||{};const ex=await sbGet(env,"analytics?video_id=eq."+job_id);if(!ex.length){await sbInsert(env,"analytics",{video_id:job_id,youtube_id,topic:j.topic||"",cluster:j.cluster||"AI",council_score:j.council_score||0,youtube_views:0,youtube_likes:0,comment_count:0,score:0,created_at:new Date().toISOString()});}else{await sbPatch(env,"analytics?video_id=eq."+job_id,{youtube_id,updated_at:new Date().toISOString()});}}catch(e){console.error("createAnalyticsRecord:",e.message);}}
+async function syncYouTubeAnalytics(env){
+  if(!env.YOUTUBE_CLIENT_ID)return;
+  try{
+    // Get analytics rows that have a youtube_id
+    const rows=(await sbGet(env,"analytics?youtube_id=not.is.null&order=created_at.desc&limit=50"))
+      .filter(r=>r.youtube_id&&r.youtube_id!=="TEST_MODE");
+    if(!rows.length){
+      // Fallback: sync from jobs table for older records
+      const jobs=(await sbGet(env,"jobs?status=eq.complete&youtube_id=not.is.null&order=created_at.desc&limit=50"))
+        .filter(j=>j.youtube_id&&j.youtube_id!=="TEST_MODE");
+      if(!jobs.length)return;
+      const tr=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.YOUTUBE_CLIENT_ID,client_secret:env.YOUTUBE_CLIENT_SECRET,refresh_token:env.YOUTUBE_REFRESH_TOKEN,grant_type:"refresh_token"})});
+      if(!tr.ok)return;
+      const token=(await tr.json()).access_token;
+      const ids=jobs.map(j=>j.youtube_id).join(",");
+      const res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+ids+"&access_token="+token);
+      if(!res.ok)return;
+      for(const item of(await res.json()).items||[]){
+        const s=item.statistics||{};
+        const views=parseInt(s.viewCount||0),likes=parseInt(s.likeCount||0),coms=parseInt(s.commentCount||0),score=views+likes*50+coms*30;
+        const job=jobs.find(j=>j.youtube_id===item.id);
+        if(!job)continue;
+        const ex=await sbGet(env,"analytics?video_id=eq."+job.id);
+        if(ex.length>0)await sbPatch(env,"analytics?video_id=eq."+job.id,{youtube_id:item.id,youtube_views:views,youtube_likes:likes,comment_count:coms,score,updated_at:new Date().toISOString()});
+        else await sbInsert(env,"analytics",{video_id:job.id,youtube_id:item.id,topic:job.topic||"",cluster:job.cluster||"AI",youtube_views:views,youtube_likes:likes,comment_count:coms,score,created_at:new Date().toISOString()});
+      }
+      return;
+    }
+    const tr=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.YOUTUBE_CLIENT_ID,client_secret:env.YOUTUBE_CLIENT_SECRET,refresh_token:env.YOUTUBE_REFRESH_TOKEN,grant_type:"refresh_token"})});
+    if(!tr.ok){console.error("Analytics: OAuth failed",await tr.text());return;}
+    const token=(await tr.json()).access_token;
+    const ids=rows.map(r=>r.youtube_id).join(",");
+    const res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+ids+"&access_token="+token);
+    if(!res.ok){console.error("Analytics: YouTube API failed",await res.text());return;}
+    for(const item of(await res.json()).items||[]){
+      const s=item.statistics||{};
+      const views=parseInt(s.viewCount||0),likes=parseInt(s.likeCount||0),coms=parseInt(s.commentCount||0),score=views+likes*50+coms*30;
+      const row=rows.find(r=>r.youtube_id===item.id);
+      if(!row)continue;
+      await sbPatch(env,"analytics?video_id=eq."+row.video_id,{youtube_views:views,youtube_likes:likes,comment_count:coms,score,updated_at:new Date().toISOString()});
+    }
+    console.log("Analytics synced:",rows.length,"videos");
+  }catch(e){console.error("Analytics sync:",e.message);}
+}
 async function _updateLongformStatus(env,jobId){try{const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&select=status");if(!segs.length)return;const allReady=segs.every(s=>s.status==="ready");const allHaveMedia=segs.every(s=>["has_media","has_media_no_script","ready","generating_voice","generating_images"].includes(s.status));const newStatus=allReady?"ready_to_render":allHaveMedia?"media_collecting":"scripting";await sbPatch(env,"longform_jobs?id=eq."+jobId,{status:newStatus,updated_at:new Date().toISOString()});}catch(e){console.error("_updateLongformStatus:",e.message);}}
