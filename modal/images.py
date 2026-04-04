@@ -73,6 +73,99 @@ def _sanitize_prompt(prompt):
     clean = _re.sub(r"  +", " ", clean).strip().strip(",").strip()
     return clean
 
+
+def _check_image_quality(image_path: str, prompt: str, cluster: str, openai_key: str) -> tuple:
+    """
+    GPT-4o Vision quality check on generated image.
+    Returns (ok: bool, reason: str)
+    Checks:
+    - Subject matches topic (no rocket-as-tilak, no random symbols)
+    - Image is photorealistic India setting
+    - No text/watermarks visible
+    - No absurd combinations
+    """
+    if not openai_key:
+        return True, "no key — skipped"
+
+    import base64, json
+    import requests as req
+
+    try:
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+
+        check_prompt = f"""You are a quality controller for an Indian YouTube channel.
+Check this AI-generated image against the prompt: "{prompt[:200]}"
+Topic cluster: {cluster}
+
+Answer with ONLY valid JSON — no markdown:
+{{
+  "ok": true or false,
+  "reason": "one sentence explaining why it passed or failed",
+  "issues": ["list any specific problems found"]
+}}
+
+Fail (ok=false) if ANY of these are true:
+- Subject is absurd or wrong (e.g. rocket shown as a facial mark or tilak, satellite shown as jewellery, logo as a facial feature)
+- Image has obvious text, watermarks, or logos burned in
+- Image looks like clip art, cartoon, or illustration (not photorealistic)
+- The image has nothing to do with India or the topic
+- Multiple faces melted together or deformed anatomy
+
+Pass (ok=true) if:
+- Image is a plausible, grounded depiction of the topic
+- Indian context is visible (faces, architecture, technology)
+- Photorealistic style"""
+
+        r = req.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 200,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"}},
+                    {"type": "text", "text": check_prompt}
+                ]}]
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        # Strip markdown if GPT adds it
+        raw = _re.sub(r"```json|```", "", raw).strip()
+        data = json.loads(raw)
+        ok = bool(data.get("ok", True))
+        reason = data.get("reason", "")
+        issues = data.get("issues", [])
+        if issues:
+            reason += " | Issues: " + ", ".join(issues)
+        print(f"  Quality check: {'PASS' if ok else 'FAIL'} — {reason}")
+        return ok, reason
+    except Exception as e:
+        print(f"  Quality check error (skipping): {e}")
+        return True, f"check failed: {e}"
+
+
+def _make_safe_prompt(original_prompt: str, cluster: str) -> str:
+    """
+    Create a more literal, explicit prompt to avoid absurd combinations.
+    Strips abstract metaphors, focuses on concrete photorealistic scene.
+    """
+    # Cluster-specific safe anchors
+    safe_anchors = {
+        "Space":    "Indian rocket engineer at ISRO control centre, large screens showing satellite data, modern facility",
+        "AI":       "Indian software engineer at computer screen showing code, modern tech office, Bengaluru",
+        "Gadgets":  "Indian consumer holding new smartphone, modern retail store, contemporary Indian setting",
+        "DeepTech": "Indian scientist in laboratory with equipment, clean modern research facility",
+        "GreenTech":"Indian solar farm with technicians, rows of solar panels, rural India, natural daylight",
+        "Startups": "Indian entrepreneur in meeting room, startup office, whiteboard, young professionals",
+    }
+    anchor = safe_anchors.get(cluster, "photorealistic modern India, Indian professionals at work")
+    # Keep first 60 chars of original for context, add safe anchor
+    snippet = original_prompt[:60].split(",")[0].strip()
+    return f"{anchor}, context: {snippet}, natural daylight, sharp focus, no text"
+
 IMG_WIDTH        = 864
 IMG_HEIGHT       = 1536
 INFERENCE_STEPS  = 8      # 8 steps: significantly better than 4, ~16s on A10G
@@ -201,6 +294,38 @@ def generate_single_image(
 
     size = os.path.getsize(output_path)
     print(f"  ✓ {tier_used} — {size//1024}KB")
+
+    # ── IMAGE QUALITY BRAIN — GPT Vision check ────────────────
+    # Checks: right subject, no gibberish, no absurd combinations
+    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+    quality_ok, quality_reason = _check_image_quality(
+        output_path, prompt, cluster, OPENAI_API_KEY
+    )
+    if not quality_ok:
+        print(f"  ✗ Quality check FAILED: {quality_reason}")
+        print(f"  Regenerating with refined prompt...")
+        # Try once more with a more explicit, literal prompt
+        refined = _make_safe_prompt(prompt, cluster)
+        print(f"  Refined: {refined[:80]}...")
+        tier_used = None
+        if engine_mode == "inbuilt":
+            try:
+                if _try_flux(refined, output_path):
+                    tier_used = "FLUX-retry"
+            except Exception as e:
+                print(f"  FLUX retry exception: {e}")
+        if not tier_used:
+            try:
+                if _try_pollinations(refined, output_path):
+                    tier_used = "Pollinations-retry"
+            except Exception as e:
+                print(f"  Pollinations retry: {e}")
+        if tier_used:
+            size = os.path.getsize(output_path)
+            print(f"  ✓ Regenerated {tier_used} — {size//1024}KB")
+        else:
+            print(f"  Keeping original despite quality issue")
+            tier_used = tier_used or "original"
 
     # Read bytes to return — renderer runs in different container, can't share /tmp/
     with open(output_path, "rb") as f:

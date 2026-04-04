@@ -228,24 +228,51 @@ STRICT RULES:
 
 Return ONLY the script as plain text. No labels. No JSON."""
 
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": "gpt-4o-mini",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.75, "max_tokens": 200},
-            timeout=30,
-        )
-        r.raise_for_status()
-        raw   = r.json()["choices"][0]["message"]["content"].strip()
-        lines = [re.sub(r"^[\d]+[.)]\s*|^[-\u2022]\s*", "", l.strip())
-                 for l in raw.split("\n") if l.strip()]
-        script = " ".join(lines)
-        print(f"  Script ({len(script.split())} words): {script[:80]}...")
-        return script, lines
-    except Exception as e:
-        print(f"  Script failed: {e}")
+    prompt = f"""Write a YouTube Shorts voiceover script for India20Sixty — India's near future channel.
+
+Topic: {topic}
+{fact_section}
+
+STRICT RULES:
+- Between 48 and 55 words total. Count carefully. Too short = rejected.
+- Indian English. Clear, confident, modern. Not American or British.
+- NO Hindi words. NO Hinglish. Pure English only.
+- Max 12 words per sentence.
+- Open with a fact that stops the scroll.
+- NEVER start with "Fact:" — state facts directly.{cta}
+
+6 sentences (each 8-10 words):
+1. Hook — the real fact or number
+2. What is happening right now in India
+3. The scale — money, reach, jobs, impact
+4. What this means for ordinary Indians
+5. The honest challenge or twist
+6. One debate question to drive comments
+
+Return ONLY the script as plain text. No labels. No JSON. No numbering."""
+
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "gpt-4o-mini",
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.75, "max_tokens": 300},
+                timeout=30,
+            )
+            r.raise_for_status()
+            raw   = r.json()["choices"][0]["message"]["content"].strip()
+            lines = [re.sub(r"^[\d]+[.)]\s*|^[-\u2022]\s*", "", l.strip())
+                     for l in raw.split("\n") if l.strip()]
+            script = " ".join(lines)
+            word_count = len(script.split())
+            print(f"  Script attempt {attempt+1} ({word_count} words): {script[:80]}...")
+            if word_count >= 40:
+                return script, lines
+            print(f"  Script too short ({word_count} words) — retrying")
+        except Exception as e:
+            print(f"  Script attempt {attempt+1} failed: {e}")
         fallback = (f"India is building something that will change everything. "
                     f"{topic} is no longer a dream — work has already started. "
                     f"The government has committed serious money and a real deadline. "
@@ -386,30 +413,30 @@ Return ONLY the mood key. One word. No explanation. No quotes."""
 
 # ── VISUAL STYLES ───────────────────────────────────────────────
 _VISUAL_STYLES = [
-    "cinematic ultra-realistic photography, golden hour, warm saffron and ochre palette, 8K India",
-    "dramatic cinematic lighting, deep shadows, vivid neon accents, photorealistic Indian urban setting",
-    "aerial drone perspective, sweeping wide angle, vibrant India, bustling cityscape below",
-    "close-up editorial photography, shallow depth of field, Indian faces, soft bokeh, expressive",
-    "epic establishing shot, atmospheric haze, moody cinematic film grain, Indian landscape",
-    "futuristic neon-lit Indian megacity, rain-slicked streets, autorickshaws and flying drones",
-    "bright optimistic daylight, clean futuristic Indian architecture, hopeful vibrant, lotus motifs",
-    "golden sunset silhouettes over Indian skyline, dust particles, emotionally powerful cinematic",
-    "blue hour twilight, Indian city lights reflecting in water, serene futuristic, ultra sharp",
-    "dramatic overcast monsoon sky, god rays through clouds, epic Indian landscape, hopeful",
-    "hyperrealistic Indian scientist or engineer, modern lab with traditional motifs, ARRI cinematic",
-    "vibrant street-level India, mix of ancient and ultra-modern, people of all ages, optimistic",
+    "natural daylight photography, modern Indian city, sharp and clean, photorealistic",
+    "soft indoor lighting, Indian tech office or lab, contemporary professional setting",
+    "overcast natural light, Indian urban street level, authentic and grounded",
+    "blue hour city lights, Indian metro or tech park, cool tones, sharp focus",
+    "bright morning light, Indian campus or research facility, optimistic and clean",
+    "dramatic overcast sky, god rays through clouds, Indian landscape, natural colors",
+    "close-up editorial photography, shallow depth of field, Indian faces, soft bokeh",
+    "aerial drone perspective, sweeping wide angle, Indian cityscape, natural colors",
+    "futuristic neon-lit Indian megacity, rain-slicked streets, cool blues and purples",
+    "vibrant street-level India, mix of ancient and ultra-modern, people of all ages",
+    "medium shot Indian engineers or scientists in action, modern facility, natural light",
+    "hyperrealistic Indian professional in contemporary setting, clean background, sharp",
 ]
 
 _SHOT_TYPES = [
     ["extreme wide establishing shot", "dramatic low angle hero shot", "sweeping panoramic view", "epic aerial wide shot"],
     ["medium shot of Indian engineers in action", "intimate human-scale scene", "detailed view of Indian technology", "focused mid-shot with Indian faces"],
-    ["soaring aerial overview", "wide hopeful scene of India's future", "golden hour wide shot of Indian achievement", "emotional cinematic close-up"],
+    ["soaring aerial overview", "wide hopeful scene of India's future", "morning light wide shot of Indian achievement", "emotional close-up of Indian faces"],
 ]
 
 _FALLBACKS = [
-    "futuristic Indian megacity at golden hour, lotus-shaped towers, electric air taxis, marigold hues, cinematic",
-    "Indian scientists in smart traditional attire, holographic displays, IIT-style research campus, temple meets lab",
-    "aerial view of transformed green India, solar farms, villages with fibre internet, hopeful sunrise",
+    "photorealistic modern Indian city skyline, natural daylight, glass towers and infrastructure",
+    "Indian scientists in contemporary clothing, modern research campus, clean professional setting",
+    "aerial view of green India, solar farms and villages, natural colors, morning light",
 ]
 
 
@@ -431,13 +458,17 @@ def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict) -> lis
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
                   "messages": [{"role": "user", "content":
-                    f"""Create ONE ultra-dramatic showstopper image prompt for a YouTube Short hook frame.
+                    f"""Create ONE striking image prompt for a YouTube Short hook frame.
 Channel: India20Sixty — India's near future (tech, space, innovation, startups)
 Topic: "{topic}"{fact_hint}
-Requirements: unmistakably Indian — Indian faces/architecture/landscape/technology.
-ONE dominant subject 70% of frame. Extreme contrast. ARRI cinematic 8K.
-Return ONLY the prompt as a single descriptive string."""}],
-                  "temperature": 0.95, "max_tokens": 200},
+Requirements:
+- Unmistakably Indian — Indian faces, architecture, technology or landscape
+- ONE dominant subject taking up 70% of frame
+- Natural or dramatic lighting — NOT golden hour, NOT orange/saffron tones
+- Photorealistic, contemporary India — not traditional/historical
+- No text, no logos, no watermarks
+Return ONLY the image prompt as a single descriptive string."""}],
+                  "temperature": 0.9, "max_tokens": 200},
             timeout=20,
         )
         r.raise_for_status()
@@ -445,7 +476,7 @@ Return ONLY the prompt as a single descriptive string."""}],
         print(f"  Hook prompt: {hook_prompt[:60]}...")
     except Exception as e:
         print(f"  Hook prompt failed: {e}")
-        hook_prompt = f"Extreme cinematic contrast — crumbling old India vs gleaming futuristic India, {topic}, ARRI 8K"
+        hook_prompt = f"Photorealistic modern India, {topic}, Indian faces and technology, natural daylight, sharp focus"
 
     scene_2_3 = None
     try:
