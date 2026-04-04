@@ -334,14 +334,30 @@ def generate_single_image(
     # ── AUTO-SAVE TO R2 + image_cache ─────────────────────────
     r2_url = None
     has_r2 = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_KEY)
-    print(f"  R2 save: account={'yes' if R2_ACCOUNT_ID else 'MISSING'} key={'yes' if R2_ACCESS_KEY_ID else 'MISSING'} secret={'yes' if R2_SECRET_KEY else 'MISSING'}")
+    print(f"  R2 creds: account={'✓' if R2_ACCOUNT_ID else '✗MISSING'} key={'✓' if R2_ACCESS_KEY_ID else '✗MISSING'} secret={'✓' if R2_SECRET_KEY else '✗MISSING'} supabase={'✓' if SUPABASE_URL else '✗MISSING'}")
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    r2_key    = f"images/{cluster}/{job_id}_{scene_idx}_{timestamp}.png"
+
+    # Step 1: Try R2 upload
     if has_r2 and tier_used != "R2Library":
-        r2_url = _save_to_r2_and_cache(
-            output_path, job_id, scene_idx, cluster, job_type,
-            prompt, tier_used,
-            R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY, R2_BUCKET,
-            R2_BASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY
+        r2_url = _upload_to_r2(
+            output_path, r2_key,
+            R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY,
+            R2_BUCKET, R2_BASE_URL
         )
+
+    # Step 2: Always insert to image_cache (with or without R2 URL)
+    # This ensures the image appears in the library even if R2 credentials are missing
+    if SUPABASE_URL and tier_used != "R2Library":
+        public_url = r2_url or ""
+        _insert_image_cache(
+            SUPABASE_URL, SUPABASE_ANON_KEY,
+            job_id, r2_key, public_url, cluster,
+            prompt, tier_used, job_type, scene_idx
+        )
+        if not r2_url:
+            print(f"  image_cache recorded without R2 URL — add R2 credentials to Modal secrets")
 
     return {"success": True, "local_path": output_path, "tier_used": tier_used,
             "scene_idx": scene_idx, "r2_url": r2_url, "image_bytes": image_bytes}
@@ -394,29 +410,18 @@ def _try_flux(prompt: str, output_path: str) -> bool:
 # AUTO-SAVE TO R2 + IMAGE_CACHE
 # ==========================================
 
-def _save_to_r2_and_cache(
-    local_path, job_id, scene_idx, cluster, job_type,
-    prompt, engine, r2_account_id, r2_access_key, r2_secret,
-    r2_bucket, r2_base, supabase_url, supabase_key
-) -> str:
-    """Upload image to R2 under images/{cluster}/ and record in image_cache."""
-    import hmac
-    import hashlib
-    import urllib.parse
-
-    # Build R2 key — organized by cluster
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    r2_key    = f"images/{cluster}/{job_id}_{scene_idx}_{timestamp}.png"
-    endpoint  = f"https://{r2_account_id}.r2.cloudflarestorage.com"
-    url       = f"{endpoint}/{r2_bucket}/{r2_key}"
-    now       = datetime.utcnow()
-    date_str  = now.strftime("%Y%m%d")
-    time_str  = now.strftime("%Y%m%dT%H%M%SZ")
-
+def _upload_to_r2(local_path, r2_key, r2_account_id, r2_access_key,
+                  r2_secret, r2_bucket, r2_base) -> str | None:
+    """Upload image to R2. Returns public URL or None on failure."""
+    import hmac, hashlib, urllib.parse
+    endpoint = f"https://{r2_account_id}.r2.cloudflarestorage.com"
+    url      = f"{endpoint}/{r2_bucket}/{r2_key}"
+    now      = datetime.utcnow()
+    date_str = now.strftime("%Y%m%d")
+    time_str = now.strftime("%Y%m%dT%H%M%SZ")
     try:
         with open(local_path, "rb") as f:
             data = f.read()
-
         payload_hash   = hashlib.sha256(data).hexdigest()
         signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date"
         canonical = "\n".join([
@@ -436,58 +441,60 @@ def _save_to_r2_and_cache(
             "AWS4-HMAC-SHA256", time_str, cred_scope,
             hashlib.sha256(canonical.encode()).hexdigest(),
         ])
-
         def sign(key, msg):
             return hmac.new(key, msg.encode(), hashlib.sha256).digest()
-
-        signing_key = sign(
-            sign(sign(sign(f"AWS4{r2_secret}".encode(), date_str), "auto"), "s3"),
-            "aws4_request"
-        )
-        signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
-
+        sk = sign(sign(sign(sign(f"AWS4{r2_secret}".encode(), date_str), "auto"), "s3"), "aws4_request")
+        sig = hmac.new(sk, string_to_sign.encode(), hashlib.sha256).hexdigest()
         r = requests.put(url, data=data, headers={
             "Content-Type":         "image/png",
             "x-amz-content-sha256": payload_hash,
             "x-amz-date":           time_str,
             "Host":                 f"{r2_account_id}.r2.cloudflarestorage.com",
-            "Authorization": (
-                f"AWS4-HMAC-SHA256 Credential={r2_access_key}/{cred_scope},"
-                f"SignedHeaders={signed_headers},Signature={signature}"
-            ),
+            "Authorization":        f"AWS4-HMAC-SHA256 Credential={r2_access_key}/{cred_scope},SignedHeaders={signed_headers},Signature={sig}",
         }, timeout=60)
-        r.raise_for_status()
-
-        public_url = f"{r2_base}/{r2_key}" if r2_base else url
-        print(f"  R2: {len(data)//1024}KB → {r2_key}")
-
-        # Insert into image_cache with cluster tag
-        if supabase_url:
-            requests.post(
-                f"{supabase_url}/rest/v1/image_cache",
-                headers={"apikey": supabase_key,
-                         "Authorization": f"Bearer {supabase_key}",
-                         "Content-Type": "application/json",
-                         "Prefer": "return=minimal"},
-                json={
-                    "job_id":    job_id,
-                    "r2_key":    r2_key,
-                    "public_url":public_url,
-                    "cluster":   cluster,
-                    "prompt":    prompt[:500],
-                    "engine":    engine,
-                    "job_type":  job_type,
-                    "scene_idx": scene_idx,
-                    "created_at":datetime.utcnow().isoformat(),
-                },
-                timeout=8,
-            )
-
+        print(f"  R2 PUT {r.status_code}: {r2_key}")
+        if not r.ok:
+            print(f"  R2 error: {r.text[:200]}")
+            return None
+        public_url = f"{r2_base.rstrip('/')}/{r2_key}" if r2_base else url
+        print(f"  R2 ✓ {len(data)//1024}KB → {r2_key}")
         return public_url
-
     except Exception as e:
-        print(f"  R2 save failed (non-fatal): {e}")
+        print(f"  R2 upload failed: {e}")
         return None
+
+
+def _insert_image_cache(supabase_url, supabase_key, job_id, r2_key,
+                        public_url, cluster, prompt, engine, job_type, scene_idx):
+    """Insert image record into Supabase image_cache. Always called — even without R2."""
+    try:
+        r = requests.post(
+            f"{supabase_url}/rest/v1/image_cache",
+            headers={
+                "apikey":        supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+                "Content-Type":  "application/json",
+                "Prefer":        "return=minimal",
+            },
+            json={
+                "job_id":    job_id,
+                "r2_key":    r2_key,
+                "public_url":public_url,
+                "cluster":   cluster,
+                "prompt":    prompt[:500],
+                "engine":    engine,
+                "job_type":  job_type,
+                "scene_idx": scene_idx,
+                "created_at":datetime.utcnow().isoformat(),
+            },
+            timeout=10,
+        )
+        if r.ok:
+            print(f"  image_cache ✓ scene={scene_idx} cluster={cluster}")
+        else:
+            print(f"  image_cache insert failed {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        print(f"  image_cache insert error: {e}")
 
 
 # ==========================================

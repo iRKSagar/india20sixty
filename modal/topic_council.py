@@ -379,7 +379,7 @@ Respond ONLY with valid JSON (no markdown, no extra text):
   "relevance_score": 85,
   "council_score": 82,
   "script": {{
-    "text": "55-word script in pure intelligent Indian English. No Hindi words. No Hinglish. Clear, confident, educated Indian voice. Anchor to key_fact. First sentence must hook with a surprising fact or number. End with a forward-looking question about India.",
+    "text": "Write a 50-55 word script in pure intelligent Indian English. No Hindi. No Hinglish. Confident educated Indian voice. Anchor to key_fact. First sentence hooks with a specific number or fact. End with a debate question about India's future. Count words carefully — must be 50-55.",
     "mood": "One of: cinematic_epic, breaking_news, hopeful_future, cold_tech, vibrant_pop, nostalgic_film, warm_human",
     "scene_prompts": [
       "Scene 1: photorealistic modern Indian setting, specific visual brief",
