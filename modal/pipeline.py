@@ -181,18 +181,30 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
         # ── STEP 1: RESEARCH ──────────────────────────────────────
         print("\n--- Research ---")
         if script_package and script_package.get("text"):
-            # Pre-generated script from topic council — skip research + scriptwriter
-            print("  Using pre-generated script from council")
-            fact_package = {"found": True, "key_fact": script_package.get("key_fact", ""),
-                            "source": script_package.get("source", "council")}
-            script_pkg = {
-                "script":          script_package.get("text", ""),
-                "reviewed_script": script_package.get("reviewed_script", script_package.get("text", "")),
-                "mood":            script_package.get("mood", "hopeful_future"),
-                "scene_prompts":   script_package.get("scene_prompts", [f"cinematic modern India scene {i+1}" for i in range(3)]),
-                "captions":        script_package.get("captions", []),
-            }
-            log(f"Script (council): mood={script_pkg['mood']} words={len(script_pkg['script'].split())}")
+            # Validate pre-generated council script before using it
+            raw_text = script_package.get("text", "")
+            word_count = len(raw_text.split())
+
+            # Detect Hindi/Devanagari characters
+            import re as _re
+            devanagari = len(_re.findall(r'[\u0900-\u097F]', raw_text))
+            hindi_ratio = devanagari / max(len(raw_text), 1)
+
+            if hindi_ratio > 0.02 or word_count < 30:
+                print(f"  Council script rejected: {word_count} words, {devanagari} Devanagari chars — falling through to scriptwriter")
+                script_package = None  # fall through to research + scriptwriter
+            else:
+                print(f"  Using pre-generated council script ({word_count} words)")
+                fact_package = {"found": True, "key_fact": script_package.get("key_fact", ""),
+                                "source": script_package.get("source", "council")}
+                script_pkg = {
+                    "script":          raw_text,
+                    "reviewed_script": script_package.get("reviewed_script", raw_text),
+                    "mood":            script_package.get("mood", "hopeful_future"),
+                    "scene_prompts":   script_package.get("scene_prompts", [f"cinematic modern India scene {i+1}" for i in range(3)]),
+                    "captions":        script_package.get("captions", []),
+                }
+                log(f"Script (council): mood={script_pkg['mood']} words={word_count}")
         else:
             fact_package = _research().remote(job_id, topic)
             log(f"Research: {'found' if fact_package.get('found') else 'no anchor'}")
@@ -524,13 +536,16 @@ def retry_upload(data: dict):
 
 def _make_pkg(script_pkg, fact_package):
     return {
-        "text":         script_pkg["reviewed_script"],
-        "original":     script_pkg["script"],
-        "lines":        script_pkg["script_lines"],
-        "captions":     script_pkg["captions"],
+        "text":         script_pkg.get("reviewed_script", script_pkg.get("script", "")),
+        "original":     script_pkg.get("script", ""),
+        "lines":        script_pkg.get("script_lines", []),
+        "captions":     script_pkg.get("captions", []),
         "fact_anchor":  fact_package,
-        "mood":         script_pkg["mood"],
-        "mood_label":   script_pkg["mood_label"],
+        "mood":         script_pkg.get("mood", "hopeful_future"),
+        "mood_label":   script_pkg.get("mood_label", ""),
+        "scene_prompts":script_pkg.get("scene_prompts", []),
+        "key_fact":     script_pkg.get("key_fact", ""),
+        "source":       script_pkg.get("source", "pipeline"),
         "generated_at": datetime.utcnow().isoformat(),
     }
 

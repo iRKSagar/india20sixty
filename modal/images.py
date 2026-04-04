@@ -35,28 +35,43 @@ app = modal.App("india20sixty-images")
 CHANNEL_NAME = "india20sixty"
 
 STYLE_PREFIX = (
-    "photorealistic modern India, "
-    "contemporary Indian professionals and urban environments, "
-    "Indian faces diverse ages natural expressions, "
-    "real Indian cities tech parks metro stations offices labs, "
-    "natural daylight or soft indoor lighting no forced golden hour, "
-    "sharp focus 4K high detail, "
-    "cinematic wide or medium shot composition, "
-    "subtle depth of field clean background, "
-    "authentic grounded visual style not documentary dramatic, "
-    "no text no watermarks no orange tint no forced traditional attire, "
+    "photorealistic modern India 2025, "
+    "contemporary Indian professionals in real urban settings, "
+    "Indian faces natural expressions diverse ages, "
+    "Indian cities tech parks offices research labs metro stations, "
+    "natural daylight or soft artificial lighting, "
+    "sharp focus high detail clean composition, "
+    "authentic grounded realistic not stylized, "
+    "no text no logos no watermarks, "
 )
 
 NEGATIVE_PROMPT = (
+    "golden hour, orange tint, saffron palette, warm orange grade, ochre, "
+    "ARRI cinematic, anamorphic flare, "
     "blurry, cartoon, anime, painting, watermark, text overlay, logo, "
-    "forced saffron orange tint, excessive warm color grade, "
-    "traditional religious imagery unless topic requires it, "
+    "traditional religious imagery unless relevant, "
     "western faces, european, low quality, overexposed, "
     "nsfw, ugly, distorted anatomy, extra limbs, deformed hands, "
-    "stock photo look, generic clipart, cheesy composition, "
-    "dramatic fire explosions unless topic, "
-    "jpeg artifacts, chromatic aberration"
+    "stock photo look, generic clipart, "
+    "jpeg artifacts, chromatic aberration, "
+    "marigold hues, lotus motif unless relevant, "
 )
+
+import re as _re
+
+_BAD_PROMPT_WORDS = [
+    "golden hour", "golden light", "warm golden", "saffron", "ochre",
+    "ARRI", "anamorphic", "8K", "8k",
+    "marigold", "warm palette", "warm tones", "warm hues",
+    "HDR", "high dynamic range", "dramatic volumetric",
+]
+
+def _sanitize_prompt(prompt):
+    clean = prompt
+    for bad in _BAD_PROMPT_WORDS:
+        clean = clean.replace(bad, "").replace(bad.lower(), "").replace(bad.upper(), "")
+    clean = _re.sub(r"  +", " ", clean).strip().strip(",").strip()
+    return clean
 
 IMG_WIDTH        = 864
 IMG_HEIGHT       = 1536
@@ -213,7 +228,7 @@ def _try_flux(prompt: str, output_path: str) -> bool:
     import torch
     from diffusers import FluxPipeline
 
-    full_prompt = f"{STYLE_PREFIX} {prompt}"
+    full_prompt = f"{STYLE_PREFIX} {_sanitize_prompt(prompt)}"
     print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
 
     torch.cuda.empty_cache()

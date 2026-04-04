@@ -36,28 +36,55 @@ OUT_WIDTH  = 1080
 OUT_HEIGHT = 1920
 FPS        = 25
 
-# MOOD_PRESETS defined inline — do NOT import from scriptwriter.
-# Cross-app imports cause Modal to find two app objects and fail.
+# MOOD_PRESETS — pool-based, same as renderer.py
 MOOD_PRESETS = {
-    "cinematic_epic":  {"label":"Cinematic Epic",  "grade":{"ccm":"colorchannelmixer=rr=1.05:rg=0.0:rb=-0.05:gr=0.0:gg=0.95:gb=0.05:br=-0.10:bg=0.03:bb=1.07","eq":"eq=contrast=1.38:brightness=-0.03:saturation=0.82","sharp":"unsharp=7:7:1.2:3:3:0.0","noise":"noise=c0s=18:c0f=t+u","vignette":"vignette=angle=0.6"},"scenes":[{"motion_a":"diagonal_bl_tr","motion_b":"zoom_in_sim","transition":"wiperight","energy":"high","caption":"box"}]},
-    "breaking_news":   {"label":"Breaking News",   "grade":{"ccm":"colorchannelmixer=rr=0.90:rg=0.05:rb=0.05:gr=0.0:gg=0.95:gb=0.05:br=0.05:bg=0.08:bb=0.87","eq":"eq=contrast=1.28:brightness=0.0:saturation=0.68","sharp":"unsharp=5:5:1.1:3:3:0.0","noise":"noise=c0s=10:c0f=t+u","vignette":"vignette=angle=0.45"},"scenes":[{"motion_a":"pan_right_fast","motion_b":"diagonal_tl_br","transition":"slideleft","energy":"high","caption":"box"}]},
-    "hopeful_future":  {"label":"Hopeful Future",  "grade":{"ccm":"colorchannelmixer=rr=1.08:rg=0.05:rb=-0.03:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=-0.02:bb=0.97","eq":"eq=contrast=1.12:brightness=0.04:saturation=1.45","sharp":"unsharp=3:3:0.7:3:3:0.0","noise":"noise=c0s=8:c0f=t+u","vignette":"vignette=angle=0.30"},"scenes":[{"motion_a":"pan_right_slow","motion_b":"zoom_in_sim","transition":"dissolve","energy":"medium","caption":"plain"}]},
-    "dark_serious":    {"label":"Dark Serious",    "grade":{"ccm":"colorchannelmixer=rr=0.95:rg=0.0:rb=0.05:gr=0.0:gg=0.88:gb=0.12:br=0.08:bg=0.05:bb=0.87","eq":"eq=contrast=1.45:brightness=-0.06:saturation=0.52","sharp":"unsharp=7:7:1.0:3:3:0.0","noise":"noise=c0s=24:c0f=t+u","vignette":"vignette=angle=0.70"},"scenes":[{"motion_a":"drift_slow","motion_b":"pan_left_slow","transition":"fadeblack","energy":"low","caption":"box"}]},
-    "cold_tech":       {"label":"Cold Tech",       "grade":{"ccm":"colorchannelmixer=rr=0.88:rg=0.05:rb=0.07:gr=-0.03:gg=0.95:gb=0.08:br=0.0:bg=0.05:bb=1.15","eq":"eq=contrast=1.22:brightness=0.0:saturation=0.88","sharp":"unsharp=5:5:1.0:3:3:0.0","noise":"noise=c0s=12:c0f=t+u","vignette":"vignette=angle=0.42"},"scenes":[{"motion_a":"diagonal_tl_br","motion_b":"zoom_in_sim","transition":"slideleft","energy":"medium","caption":"box"}]},
-    "vibrant_pop":     {"label":"Vibrant Pop",     "grade":{"ccm":"colorchannelmixer=rr=1.05:rg=0.0:rb=0.0:gr=0.05:gg=1.08:gb=0.0:br=0.0:bg=0.0:bb=1.05","eq":"eq=contrast=1.08:brightness=0.06:saturation=1.72","sharp":"unsharp=3:3:0.6:3:3:0.0","noise":"noise=c0s=6:c0f=t+u","vignette":"vignette=angle=0.22"},"scenes":[{"motion_a":"diagonal_tl_br","motion_b":"diagonal_br_tl","transition":"wiperight","energy":"high","caption":"box"}]},
-    "nostalgic_film":  {"label":"Nostalgic Film",  "grade":{"ccm":"colorchannelmixer=rr=1.12:rg=0.05:rb=-0.08:gr=0.05:gg=1.0:gb=-0.05:br=-0.03:bg=0.0:bb=0.93","eq":"eq=contrast=1.18:brightness=0.03:saturation=1.12","sharp":"unsharp=3:3:0.5:3:3:0.0","noise":"noise=c0s=26:c0f=t+u","vignette":"vignette=angle=0.65"},"scenes":[{"motion_a":"pan_right_slow","motion_b":"drift_slow","transition":"dissolve","energy":"low","caption":"plain"}]},
-    "warm_human":      {"label":"Warm Human",      "grade":{"ccm":"colorchannelmixer=rr=1.10:rg=0.05:rb=-0.05:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=0.0:bb=0.95","eq":"eq=contrast=1.10:brightness=0.05:saturation=1.32","sharp":"unsharp=3:3:0.5:3:3:0.0","noise":"noise=c0s=8:c0f=t+u","vignette":"vignette=angle=0.28"},"scenes":[{"motion_a":"pan_right_slow","motion_b":"zoom_in_sim","transition":"dissolve","energy":"low","caption":"plain"}]},
+    "cinematic_epic":  {"label":"Cinematic Epic","grade":{"ccm":"colorchannelmixer=rr=1.05:rg=0.0:rb=-0.05:gr=0.0:gg=0.95:gb=0.05:br=-0.10:bg=0.03:bb=1.07","eq":"eq=contrast=1.38:brightness=-0.03:saturation=0.82","sharp":"unsharp=7:7:1.2:3:3:0.0","noise":"noise=c0s=18:c0f=t+u","vignette":"vignette=angle=0.6"},"energy":"high","motion_pools":{0:["zoom_in_fast","diagonal_bl_tr_fast","pan_right_fast","pull_back_fast"],1:["pan_left_fast","diagonal_tr_bl","zoom_in_med","pan_up_fast"],2:["pull_back_slow","diagonal_bl_tr","pan_right_med","drift_up_right"]},"transition_pools":{0:["wiperight","slideleft","slideright"],1:["wipeleft","wiperight"],2:["dissolve","fade"]},"caption":"box"},
+    "breaking_news":   {"label":"Breaking News","grade":{"ccm":"colorchannelmixer=rr=0.90:rg=0.05:rb=0.05:gr=0.0:gg=0.95:gb=0.05:br=0.05:bg=0.08:bb=0.87","eq":"eq=contrast=1.28:brightness=0.0:saturation=0.68","sharp":"unsharp=5:5:1.1:3:3:0.0","noise":"noise=c0s=10:c0f=t+u","vignette":"vignette=angle=0.45"},"energy":"high","motion_pools":{0:["pan_right_fast","diagonal_tl_br_fast","zoom_in_fast","pan_left_fast"],1:["pan_left_fast","diagonal_tr_bl","pan_up_fast"],2:["static_hold","pan_right_med","zoom_in_med"]},"transition_pools":{0:["slideleft","wipeleft","wiperight"],1:["wipeleft","slideleft"],2:["fadeblack","dissolve"]},"caption":"box"},
+    "hopeful_future":  {"label":"Hopeful Future","grade":{"ccm":"colorchannelmixer=rr=1.08:rg=0.05:rb=-0.03:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=-0.02:bb=0.97","eq":"eq=contrast=1.12:brightness=0.04:saturation=1.35","sharp":"unsharp=3:3:0.7:3:3:0.0","noise":"noise=c0s=8:c0f=t+u","vignette":"vignette=angle=0.30"},"energy":"low","motion_pools":{0:["pan_right_slow","drift_slow","zoom_in_slow","pan_up_slow"],1:["drift_up_right","pan_left_slow","diagonal_bl_tr","pull_back_slow"],2:["pull_back_slow","drift_slow","static_breathe","pan_up_slow"]},"transition_pools":{0:["dissolve","fade"],1:["fade","dissolve"],2:["dissolve","fade"]},"caption":"plain"},
+    "dark_serious":    {"label":"Dark Serious","grade":{"ccm":"colorchannelmixer=rr=0.95:rg=0.0:rb=0.05:gr=0.0:gg=0.88:gb=0.12:br=0.08:bg=0.05:bb=0.87","eq":"eq=contrast=1.45:brightness=-0.06:saturation=0.52","sharp":"unsharp=7:7:1.0:3:3:0.0","noise":"noise=c0s=24:c0f=t+u","vignette":"vignette=angle=0.70"},"energy":"low","motion_pools":{0:["drift_slow","pan_left_slow","static_hold","drift_down_left"],1:["diagonal_tr_bl","static_hold","pan_up_slow","drift_slow"],2:["pull_back_slow","static_breathe","pan_up_slow"]},"transition_pools":{0:["fadeblack","dissolve"],1:["dissolve","fade"],2:["fadeblack","fade"]},"caption":"box"},
+    "cold_tech":       {"label":"Cold Tech","grade":{"ccm":"colorchannelmixer=rr=0.88:rg=0.05:rb=0.07:gr=-0.03:gg=0.95:gb=0.08:br=0.0:bg=0.05:bb=1.15","eq":"eq=contrast=1.22:brightness=0.0:saturation=0.88","sharp":"unsharp=5:5:1.0:3:3:0.0","noise":"noise=c0s=12:c0f=t+u","vignette":"vignette=angle=0.42"},"energy":"medium","motion_pools":{0:["diagonal_tl_br","zoom_in_med","pan_right_med","diagonal_bl_tr"],1:["pan_left_med","diagonal_br_tl","zoom_in_slow","pan_right_fast"],2:["pull_back_med","drift_slow","static_hold","pan_up_slow"]},"transition_pools":{0:["slideleft","wipeleft","dissolve"],1:["wipeleft","slideright","dissolve"],2:["dissolve","fade"]},"caption":"box"},
+    "vibrant_pop":     {"label":"Vibrant Pop","grade":{"ccm":"colorchannelmixer=rr=1.05:rg=0.0:rb=0.0:gr=0.05:gg=1.08:gb=0.0:br=0.0:bg=0.0:bb=1.05","eq":"eq=contrast=1.08:brightness=0.06:saturation=1.72","sharp":"unsharp=3:3:0.6:3:3:0.0","noise":"noise=c0s=6:c0f=t+u","vignette":"vignette=angle=0.22"},"energy":"high","motion_pools":{0:["diagonal_tl_br_fast","pan_right_fast","zoom_in_fast","diagonal_bl_tr_fast"],1:["pan_left_fast","zoom_in_med","diagonal_tr_bl","diagonal_br_tl"],2:["diagonal_bl_tr","zoom_in_med","pan_up_fast","pan_right_med"]},"transition_pools":{0:["wiperight","slideright","slideleft"],1:["slideright","wiperight","wipeleft"],2:["dissolve","wiperight"]},"caption":"box"},
+    "nostalgic_film":  {"label":"Nostalgic Film","grade":{"ccm":"colorchannelmixer=rr=1.12:rg=0.05:rb=-0.08:gr=0.05:gg=1.0:gb=-0.05:br=-0.03:bg=0.0:bb=0.93","eq":"eq=contrast=1.18:brightness=0.03:saturation=1.12","sharp":"unsharp=3:3:0.5:3:3:0.0","noise":"noise=c0s=26:c0f=t+u","vignette":"vignette=angle=0.65"},"energy":"low","motion_pools":{0:["pan_right_slow","drift_slow","zoom_in_slow","drift_up_right"],1:["diagonal_bl_tr","pan_up_slow","drift_down_left","pan_left_slow"],2:["zoom_in_slow","static_breathe","pull_back_slow","drift_slow"]},"transition_pools":{0:["dissolve","fade"],1:["fade","dissolve"],2:["dissolve","fadeblack"]},"caption":"plain"},
+    "warm_human":      {"label":"Warm Human","grade":{"ccm":"colorchannelmixer=rr=1.10:rg=0.05:rb=-0.05:gr=0.03:gg=1.02:gb=-0.05:br=-0.05:bg=0.0:bb=0.95","eq":"eq=contrast=1.10:brightness=0.05:saturation=1.32","sharp":"unsharp=3:3:0.5:3:3:0.0","noise":"noise=c0s=8:c0f=t+u","vignette":"vignette=angle=0.28"},"energy":"low","motion_pools":{0:["pan_right_slow","drift_slow","zoom_in_slow","drift_up_right"],1:["drift_slow","pan_up_slow","drift_down_left","zoom_in_slow"],2:["static_breathe","pull_back_slow","drift_slow","pan_up_slow"]},"transition_pools":{0:["dissolve","fade"],1:["fade","dissolve"],2:["dissolve","fade"]},"caption":"plain"},
 }
 
 MOTIONS = {
-    "pan_right_slow": {"hpct":1.20,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//2}"},
-    "pan_right_fast": {"hpct":1.28,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//3}"},
-    "pan_left_slow":  {"hpct":1.20,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//2}"},
-    "diagonal_bl_tr": {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}"},
-    "zoom_in_sim":    {"hpct":1.35,"x":lambda dx,dy,n:f"{dx//2}-{dx//4}*n/{n}","y":lambda dx,dy,n:f"{dy//2}-{dy//4}*n/{n}"},
-    "drift_slow":     {"hpct":1.12,"x":lambda dx,dy,n:f"{dx//3}*n/{n}","y":lambda dx,dy,n:f"{dy//4}"},
-    "static_hold":    {"hpct":1.08,"x":lambda dx,dy,n:f"{dx//2}","y":lambda dx,dy,n:f"{dy//2}"},
+    "pan_right_slow":      {"hpct":1.18,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//2}","speed":"slow"},
+    "pan_right_med":       {"hpct":1.24,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//2}","speed":"medium"},
+    "pan_right_fast":      {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//3}","speed":"fast"},
+    "pan_left_slow":       {"hpct":1.18,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//2}","speed":"slow"},
+    "pan_left_med":        {"hpct":1.24,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//2}","speed":"medium"},
+    "pan_left_fast":       {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}","y":lambda dx,dy,n:f"{dy//3}","speed":"fast"},
+    "pan_up_slow":         {"hpct":1.22,"x":lambda dx,dy,n:f"{dx//2}","y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}","speed":"slow"},
+    "pan_up_fast":         {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//2}","y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}","speed":"fast"},
+    "pan_down_slow":       {"hpct":1.22,"x":lambda dx,dy,n:f"{dx//2}","y":lambda dx,dy,n:f"{dy}*n/{n}","speed":"slow"},
+    "diagonal_tl_br":      {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}*n/{n}","speed":"medium"},
+    "diagonal_tr_bl":      {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}*n/{n}","speed":"medium"},
+    "diagonal_bl_tr":      {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}","speed":"medium"},
+    "diagonal_br_tl":      {"hpct":1.30,"x":lambda dx,dy,n:f"{dx}-{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}","speed":"medium"},
+    "diagonal_tl_br_fast": {"hpct":1.36,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}*n/{n}","speed":"fast"},
+    "diagonal_bl_tr_fast": {"hpct":1.36,"x":lambda dx,dy,n:f"{dx}*n/{n}","y":lambda dx,dy,n:f"{dy}-{dy}*n/{n}","speed":"fast"},
+    "zoom_in_slow":        {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//2}-{dx//5}*n/{n}","y":lambda dx,dy,n:f"{dy//2}-{dy//5}*n/{n}","speed":"slow"},
+    "zoom_in_med":         {"hpct":1.35,"x":lambda dx,dy,n:f"{dx//2}-{dx//4}*n/{n}","y":lambda dx,dy,n:f"{dy//2}-{dy//4}*n/{n}","speed":"medium"},
+    "zoom_in_fast":        {"hpct":1.42,"x":lambda dx,dy,n:f"{dx//2}-{dx//3}*n/{n}","y":lambda dx,dy,n:f"{dy//2}-{dy//3}*n/{n}","speed":"fast"},
+    "pull_back_slow":      {"hpct":1.28,"x":lambda dx,dy,n:f"{dx//5}+{dx//5}*n/{n}","y":lambda dx,dy,n:f"{dy//5}+{dy//5}*n/{n}","speed":"slow"},
+    "pull_back_med":       {"hpct":1.35,"x":lambda dx,dy,n:f"{dx//4}+{dx//4}*n/{n}","y":lambda dx,dy,n:f"{dy//4}+{dy//4}*n/{n}","speed":"medium"},
+    "pull_back_fast":      {"hpct":1.42,"x":lambda dx,dy,n:f"{dx//3}+{dx//3}*n/{n}","y":lambda dx,dy,n:f"{dy//3}+{dy//3}*n/{n}","speed":"fast"},
+    "drift_slow":          {"hpct":1.12,"x":lambda dx,dy,n:f"{dx//3}*n/{n}","y":lambda dx,dy,n:f"{dy//5}","speed":"slow"},
+    "drift_up_right":      {"hpct":1.15,"x":lambda dx,dy,n:f"{dx//4}*n/{n}","y":lambda dx,dy,n:f"{dy//3}-{dy//4}*n/{n}","speed":"slow"},
+    "drift_down_left":     {"hpct":1.15,"x":lambda dx,dy,n:f"{dx//3}-{dx//4}*n/{n}","y":lambda dx,dy,n:f"{dy//4}*n/{n}","speed":"slow"},
+    "static_hold":         {"hpct":1.05,"x":lambda dx,dy,n:f"{dx//2}","y":lambda dx,dy,n:f"{dy//2}","speed":"static"},
+    "static_breathe":      {"hpct":1.08,"x":lambda dx,dy,n:f"{dx//2}","y":lambda dx,dy,n:f"{dy//2}","speed":"static"},
 }
+
+def _pick_motion_lf(pool_key: int, preset: dict, used: set) -> str:
+    import random
+    pool = preset.get("motion_pools",{}).get(pool_key, list(MOTIONS.keys()))
+    available = [m for m in pool if m not in used]
+    if not available: available = pool
+    choice = random.choice(available)
+    used.add(choice)
+    return choice
 
 
 # ==========================================
@@ -170,20 +197,26 @@ def _render_image_segment(job_id, seg_idx, media, audio_path, audio_dur,
     n_images    = len(media)
     time_per_img = audio_dur / n_images
 
+    import random
     clip_paths = []
+    used_motions = set()
+    preset = MOOD_PRESETS.get(mood, list(MOOD_PRESETS.values())[0])
+
     for i, m in enumerate(media):
         img_path  = m["local_path"]
         clip_path = f"{TMP_DIR}/{job_id}_seg{seg_idx}_img{i}.mp4"
         pre_path  = f"{TMP_DIR}/{job_id}_seg{seg_idx}_pre{i}.jpg"
 
-        # Pick motion based on position
-        motion_key = ["pan_right_slow","diagonal_bl_tr","zoom_in_sim","drift_slow"][i % 4]
-        motion     = MOTIONS.get(motion_key, MOTIONS["pan_right_slow"])
-        hpct       = motion["hpct"]
-        pan_w      = int(OUT_WIDTH * hpct)
-        pan_h      = int(OUT_HEIGHT * hpct)
-        dx, dy     = pan_w - OUT_WIDTH, pan_h - OUT_HEIGHT
-        n_frames   = int(time_per_img * FPS)
+        # Pick motion from pool — no consecutive repeats
+        motion_key = _pick_motion_lf(i % 3, preset, used_motions)
+        used_motions.add(motion_key)
+        motion   = MOTIONS.get(motion_key, MOTIONS["pan_right_slow"])
+        hpct     = motion["hpct"]
+        pan_w    = int(OUT_WIDTH * hpct)
+        pan_h    = int(OUT_HEIGHT * hpct)
+        dx, dy   = pan_w - OUT_WIDTH, pan_h - OUT_HEIGHT
+        n_frames = int(time_per_img * FPS)
+        print(f"  Seg {seg_idx} img {i}: {motion_key}")
 
         # Pre-process
         _ffmpeg([
@@ -192,8 +225,13 @@ def _render_image_segment(job_id, seg_idx, media, audio_path, audio_dur,
             "-frames:v","1","-q:v","3","-f","image2","-vcodec","mjpeg",pre_path
         ], f"pre-{seg_idx}-{i}", timeout=20)
 
-        x_expr = motion["x"](dx, dy, n_frames)
-        y_expr = motion["y"](dx, dy, n_frames)
+        speed_map = {"fast": 1.0, "medium": 0.72, "slow": 0.45, "static": 0.0}
+        spd = speed_map.get(motion.get("speed","medium"), 0.72)
+        sdx = max(1, min(int(dx * spd), dx))
+        sdy = max(1, min(int(dy * spd), dy))
+
+        x_expr = motion["x"](sdx, sdy, n_frames)
+        y_expr = motion["y"](sdx, sdy, n_frames)
 
         # Caption — subtitle style for long-form (smaller, positioned lower)
         cap_filter = ""

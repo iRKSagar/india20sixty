@@ -23,8 +23,8 @@ app = modal.App("india20sixty-voice")
 VOICE_REF_R2_KEY = "voice-refs/india20sixty_voice_ref.mp3"
 
 # Chatterbox settings — tuned for Indian English cloning
-CB_EXAGGERATION  = 0.35   # lower = more faithful to reference voice
-CB_CFG_WEIGHT    = 0.5    # balanced natural delivery
+CB_EXAGGERATION  = 0.2    # very faithful to reference — minimises artifacts
+CB_CFG_WEIGHT    = 0.6    # slightly higher guidance = cleaner pronunciation
 
 # Kokoro fallback settings
 KK_VOICE_PRESET  = "af_heart"
@@ -249,7 +249,7 @@ def _chatterbox_generate(text: str, voice_ref_path: str) -> bytes:
     result = subprocess.run(
         ["ffmpeg", "-y", "-i", wav_path,
          "-codec:a", "libmp3lame", "-qscale:a", "2",
-         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+         "-af", "afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
          mp3_path],
         capture_output=True, timeout=30
     )
@@ -287,6 +287,21 @@ def _kokoro_generate(text: str) -> bytes:
 
 def _clean_script(script: str) -> str:
     clean = script
+
+    # Strip Devanagari (Hindi) characters entirely — should not reach here but safety net
+    clean = re.sub(r'[\u0900-\u097F]+', '', clean)
+
+    # Strip common Hindi transliteration words that sound wrong in TTS
+    hindi_words = [
+        r'\bYaar\b', r'\byaar\b', r'\bBhai\b', r'\bbhai\b',
+        r'\bDesh\b', r'\bdesh\b', r'\bSach mein\b', r'\bsach mein\b',
+        r'\bArre\b', r'\barre\b', r'\bSuno\b', r'\bsuno\b',
+        r'\bDekho\b', r'\bdekho\b', r'\bHamare\b', r'\bhamare\b',
+        r'\bAapka\b', r'\baapka\b', r'\bHaan\b', r'\bhaan\b',
+    ]
+    for w in hindi_words:
+        clean = re.sub(w, '', clean)
+
     clean = re.sub(r"^Fact:\s*", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\bFact:\s*", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"</?(?:excited|happy|sad|whisper|angry)[^>]*>", "", clean)
@@ -321,6 +336,9 @@ def _clean_script(script: str) -> str:
     clean = re.sub(r"(\d+),00,00,000", lambda m: m.group(1)+" crore", clean)
     clean = re.sub(r"(\d+),00,000",    lambda m: m.group(1)+" lakh",  clean)
     clean = re.sub(r"\s+", " ", clean).strip()
+
+    words = clean.split()
+    print(f"  Script after clean: {len(words)} words")
     return clean
 
 
@@ -349,3 +367,5 @@ def main():
         engine_mode="inbuilt",
     )
     print(f"Engine: {result['engine']} | Duration: {result['duration']:.1f}s")
+
+
