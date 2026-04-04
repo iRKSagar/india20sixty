@@ -1774,12 +1774,30 @@ function renderTopicsPage() {
       + '</div></div>'
       + '<div style="display:flex;gap:6px;flex-shrink:0;align-items:center">'
       + (canGen ? '<button class="btn btn-primary btn-sm" data-tid="' + t.id + '" onclick="generateNow(this.dataset.tid,this)">\u25B6 Now</button>' : '')
+      + (canGen ? '<button class="btn btn-sm" style="background:rgba(179,136,255,.12);color:var(--purple);border:1px solid rgba(179,136,255,.25);font-size:.68rem" data-topic="' + esc(t.topic) + '" data-cluster="' + (t.cluster||'AI') + '" onclick="useLfTopic(this.dataset.topic,this.dataset.cluster)">&#127916; LF</button>' : '')
       + (!t.used ? '<button class="btn btn-sm" style="background:rgba(255,82,82,.12);color:var(--red);border:1px solid rgba(255,82,82,.25);padding:4px 8px;font-size:.7rem" data-tid="' + t.id + '" onclick="killTopic(this.dataset.tid,this)" title="Kill this topic">\u2715</button>' : '')
       + '</div>'
       + '</div></div>';
   }).join('');
 }
 
+
+async function useLfTopic(topic, cluster) {
+  if (!confirm('Create Full Auto long-form on:
+
+"' + topic + '"
+
+Script to YouTube automatically.')) return;
+  try {
+    var r = await fetch(API_BASE + '/longform/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: topic, cluster: cluster, target_duration: 420, auto: true })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    showToast('Long-form started — check Create page');
+  } catch(e) { alert('Failed: ' + e.message); }
+}
 async function generateNow(topicId, btn) {
   if (!confirm('Generate a video from this topic right now?')) return;
   btn.disabled = true; btn.textContent = '\u23F3...';
@@ -2038,6 +2056,8 @@ function renderLogs() {
   var jobs = logsTab === 'failed'
     ? (window._logsFailed  || [])
     : (window._logsHistory || []);
+  // Newest first
+  jobs = jobs.slice().sort(function(a,b) { return new Date(b.updated_at||b.created_at) - new Date(a.updated_at||a.created_at); });
   if (!jobs.length) {
     el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">'
       + (logsTab === 'failed' ? '&#10003; No failed jobs' : 'No completed jobs yet') + '</div>';
@@ -2114,29 +2134,48 @@ function updateLfPrecursor() {
   if (voxEl) { voxEl.innerHTML = voxLabel; voxEl.style.color = voxColor; }
 }
 
+function setLfMode(mode) {
+  var autoBtn   = document.getElementById('lf-mode-auto');
+  var manualBtn = document.getElementById('lf-mode-manual');
+  var hidden    = document.getElementById('lf-auto-mode');
+  if (!autoBtn || !manualBtn || !hidden) return;
+  var isAuto = mode === 'auto';
+  hidden.value = isAuto ? 'true' : 'false';
+  autoBtn.style.borderColor  = isAuto ? 'var(--accent)' : 'var(--border)';
+  autoBtn.style.background   = isAuto ? 'rgba(0,229,255,.08)' : 'transparent';
+  manualBtn.style.borderColor= isAuto ? 'var(--border)' : 'var(--green)';
+  manualBtn.style.background = isAuto ? 'transparent' : 'rgba(0,230,118,.08)';
+}
+
 async function createLongformJob() {
   var topic   = (document.getElementById('lf-topic').value || '').trim();
   var cluster = document.getElementById('lf-cluster').value || 'Space';
-  var autoEl  = document.getElementById('lf-auto-mode');
-  var autoMode = autoEl ? autoEl.checked : true;
+  var modeEl  = document.getElementById('lf-auto-mode');
+  var autoMode = modeEl ? modeEl.value !== 'false' : true;
   if (!topic) { alert('Enter a topic first'); return; }
+
+  // Confirmation for full auto
+  if (autoMode) {
+    if (!confirm('Full Auto will generate script, images, voice, render and publish to YouTube automatically.\n\nStart for topic: "' + topic + '"?')) return;
+  }
+
   var st = document.getElementById('lf-create-status');
-  st.textContent = autoMode ? 'Creating job (Full Auto)...' : 'Creating job (Manual)...';
+  st.textContent = autoMode ? '🤖 Full Auto starting...' : '🎨 Creating manual job...';
   st.style.color = 'var(--muted)';
   try {
     var r = await fetch(API_BASE + '/longform/create', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ topic: topic, cluster: cluster, target_duration: lfDurMins * 60, auto: autoMode })
+      body: JSON.stringify({ topic, cluster, target_duration: lfDurMins * 60, auto: autoMode })
     });
     var d = await r.json();
     if (d.job_id) {
       st.textContent = autoMode
-        ? 'Full Auto started — script → voice → images → render → publish (~15 min)'
-        : 'Manual job created — open Studio to control each segment';
+        ? '✓ Full Auto running — script → images → voice → render → YouTube (~15 min)'
+        : '✓ Job created — open Studio to pick library images per segment';
       st.style.color = 'var(--green)';
       document.getElementById('lf-topic').value = '';
-      setTimeout(function() { loadLongformJobs(); st.textContent = ''; }, 5000);
+      setTimeout(function() { loadLongformJobs(); st.textContent = ''; }, 6000);
     } else {
       st.textContent = 'Error: ' + (d.error || 'unknown');
       st.style.color = 'var(--red)';
@@ -2147,59 +2186,135 @@ async function createLongformJob() {
   }
 }
 
+var _lfPollTimer = null;
+
+async function loadLfTopicIdeas() {
+  var el  = document.getElementById('lf-topic-ideas');
+  var st  = document.getElementById('lf-ideas-status');
+  var cat = document.getElementById('lf-cluster');
+  var cluster = cat ? cat.value : 'Space';
+  if (el) el.innerHTML = '<span style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">Generating ideas...</span>';
+  if (st) { st.textContent = 'Loading...'; st.style.color = 'var(--muted)'; }
+  try {
+    var r = await fetch(API_BASE + '/longform/topic-ideas?cluster=' + cluster);
+    var d = await r.json();
+    var ideas = d.ideas || [];
+    if (!ideas.length) {
+      if (el) el.innerHTML = '<span style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">No ideas — try a different cluster</span>';
+      if (st) st.textContent = '';
+      return;
+    }
+    if (el) el.innerHTML = ideas.map(function(idea) {
+      return '<button onclick="useLfIdea(this)" data-topic="' + esc(idea.topic) + '" data-cluster="' + esc(idea.cluster||cluster) + '" '
+        + 'style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;'
+        + 'font-size:.68rem;cursor:pointer;color:var(--text);text-align:left">'
+        + esc(idea.topic) + '</button>';
+    }).join('');
+    if (st) { st.textContent = ideas.length + ' ideas'; st.style.color = 'var(--green)'; }
+  } catch(e) {
+    if (el) el.innerHTML = '<span style="font-family:var(--mono);font-size:.65rem;color:var(--red)">Error: ' + e.message + '</span>';
+    if (st) st.textContent = '';
+  }
+}
+
+function useLfIdea(btn) {
+  var topicEl   = document.getElementById('lf-topic');
+  var clusterEl = document.getElementById('lf-cluster');
+  if (topicEl)   topicEl.value   = btn.dataset.topic;
+  if (clusterEl && btn.dataset.cluster) clusterEl.value = btn.dataset.cluster;
+  document.querySelectorAll('#lf-topic-ideas button').forEach(function(b) {
+    b.style.borderColor = b === btn ? 'var(--accent)' : 'var(--border)';
+    b.style.color = b === btn ? 'var(--accent)' : 'var(--text)';
+  });
+}
+
+function _lfProgressBar(segs) {
+  if (!segs || !segs.length) return '';
+  var total    = segs.length;
+  var ready    = segs.filter(function(s) { return s.status === 'ready'; }).length;
+  var hasVoice = segs.filter(function(s) { return s.voice_r2_url; }).length;
+  var hasMedia = segs.filter(function(s) { return (s.media||[]).length > 0; }).length;
+  var pct      = Math.round((ready / total) * 100);
+  var sColor   = {'ready':'var(--green)','generating_voice':'var(--yellow)','generating_images':'var(--yellow)','has_media':'var(--purple)','has_script':'var(--accent)','empty':'var(--surface2)'};
+  return '<div style="margin-top:6px">'
+    + '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:.57rem;color:var(--muted);margin-bottom:2px">'
+    + '<span>' + ready + '/' + total + ' segments ready</span>'
+    + '<span>🎙' + hasVoice + ' 🖼' + hasMedia + '</span>'
+    + '</div>'
+    + '<div style="height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;margin-bottom:2px">'
+    + '<div style="height:100%;width:'+pct+'%;background:var(--accent);border-radius:2px;transition:width .4s"></div>'
+    + '</div>'
+    + '<div style="display:flex;gap:2px">'
+    + segs.map(function(s) {
+        var c = sColor[s.status] || 'var(--surface2)';
+        return '<div title="'+esc((s.label||s.segment_type||'Seg')+': '+s.status)+'" '
+          + 'style="flex:1;height:5px;background:'+c+';border-radius:1px"></div>';
+      }).join('')
+    + '</div></div>';
+}
+
 async function loadLongformJobs() {
   var el = document.getElementById('lf-jobs-list');
   if (!el) return;
   try {
-    var r = await fetch(API_BASE + '/longform/jobs');
+    var r    = await fetch(API_BASE + '/longform/jobs');
     var jobs = await r.json();
     if (!Array.isArray(jobs) || !jobs.length) {
       el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">No long-form jobs yet.</div>';
+      clearTimeout(_lfPollTimer);
       return;
     }
-    // Show only non-complete jobs in Create panel; complete ones are in logs
-    var active    = jobs.filter(function(j) { return j.status !== 'complete' && j.status !== 'failed'; });
-    var failed    = jobs.filter(function(j) { return j.status === 'failed'; });
-    var completed = jobs.filter(function(j) { return j.status === 'complete'; });
-    var showJobs  = active.length ? active : (completed.length ? completed : []);
 
-    // Clear killed button if there are failed jobs
+    var active = jobs.filter(function(j) { return !['complete','failed'].includes(j.status); });
+    var failed = jobs.filter(function(j) { return j.status === 'failed'; });
+
+    // Fetch segment progress for active jobs
+    var segsMap = {};
+    await Promise.all(active.map(async function(j) {
+      try {
+        var sr = await fetch(API_BASE + '/longform/' + j.id);
+        var sd = await sr.json();
+        segsMap[j.id] = sd.segments || [];
+      } catch(e) {}
+    }));
+
+    var statusColor = {draft:'#888',scripting:'var(--yellow)',media_collecting:'#4fc3f7',ready_to_render:'var(--purple)',rendering:'var(--accent)',complete:'#69f0ae',failed:'var(--red)'};
+    var statusLabel = {scripting:'⏳ Scripting...',media_collecting:'🎬 Building media...',ready_to_render:'✅ Ready to render',rendering:'🎞 Rendering...',complete:'✓ Done',failed:'✗ Failed',draft:'Draft'};
+
     var clearBtn = failed.length
-      ? '<button class="btn btn-sm" style="font-size:.68rem;background:rgba(255,82,82,.1);color:var(--red);margin-bottom:10px" onclick="clearKilledLfJobs()">&#128465; Clear ' + failed.length + ' killed job(s)</button><br>'
+      ? '<button class="btn btn-sm" style="font-size:.68rem;color:var(--red);margin-bottom:8px" onclick="clearKilledLfJobs()">🗑 Clear '+failed.length+' failed</button><br>'
       : '';
 
-    if (!showJobs.length && !failed.length) {
-      el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">No long-form jobs yet.</div>';
-      return;
-    }
-    el.innerHTML = clearBtn + showJobs.map(function(j) {
-      var statusColor = {draft:'#888',scripting:'var(--yellow)',media_collecting:'#4fc3f7',
-        ready_to_render:'var(--purple)',rendering:'var(--accent)',complete:'#69f0ae',failed:'var(--red)'}[j.status]||'#888';
+    el.innerHTML = clearBtn + jobs.map(function(j) {
+      var col    = statusColor[j.status] || '#888';
+      var lbl    = statusLabel[j.status] || j.status;
       var durStr = j.target_duration ? Math.round(j.target_duration/60)+'m' : '?';
-      var ytLink = j.youtube_id
-        ? '<a href="https://youtube.com/watch?v='+j.youtube_id+'" target="_blank" style="color:var(--red);text-decoration:none;font-size:.7rem">&#9654; Watch</a>' : '';
-      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">'
+      var segs   = segsMap[j.id] || [];
+      var prog   = (segs.length && !['complete','failed','draft'].includes(j.status)) ? _lfProgressBar(segs) : '';
+      var ytLink = j.youtube_id ? '<a href="https://youtube.com/watch?v='+j.youtube_id+'" target="_blank" style="color:#ff0000;font-size:.7rem;text-decoration:none">▶ Watch</a>' : '';
+      var errStr = j.error ? '<div style="font-family:var(--mono);font-size:.57rem;color:var(--red);margin-top:2px">'+esc(j.error.slice(0,80))+'</div>' : '';
+      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px">'
+        + '<div style="display:flex;align-items:center;gap:8px">'
         + '<div style="flex:1;min-width:0">'
-        + '<div style="font-size:.82rem;font-weight:600;margin-bottom:2px">' + esc(j.topic) + '</div>'
-        + '<div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">' + j.cluster + ' &bull; ' + durStr + ' &bull; ' + new Date(j.created_at).toLocaleDateString() + '</div>'
-        + (j.error ? '<div style="font-family:var(--mono);font-size:.58rem;color:var(--red);margin-top:2px">' + esc(j.error.slice(0,80)) + '</div>' : '')
+        + '<div style="font-size:.82rem;font-weight:600">'+esc(j.topic)+'</div>'
+        + '<div style="font-family:var(--mono);font-size:.6rem;color:var(--muted)">'+j.cluster+' &bull; '+durStr+' &bull; '+new Date(j.created_at).toLocaleDateString()+'</div>'
+        + errStr + prog
         + '</div>'
-        + (ytLink ? '<div>' + ytLink + '</div>' : '')
-        + '<div style="font-family:var(--mono);font-size:.68rem;color:' + statusColor + ';font-weight:600">' + j.status + '</div>'
-        + '<button class="btn btn-sm" style="font-size:.7rem" data-jid="' + j.id + '" onclick="openLfStudio(this.dataset.jid)">Studio</button>'
-        + (j.status === 'failed' || j.status === 'scripting'
-          ? '<button class="btn btn-sm" style="font-size:.7rem;background:rgba(0,229,255,.1);color:var(--accent)" data-jid="' + j.id + '" data-topic="' + esc(j.topic) + '" data-cluster="' + j.cluster + '" data-dur="' + (j.target_duration||420) + '" onclick="retryLfScript(this)">&#8635; Retry</button>'
-          : '')
-        + '<button class="btn btn-sm" style="font-size:.7rem;background:rgba(100,100,200,.1);color:var(--muted)" data-jid="' + j.id + '" onclick="viewJobLogs(this.dataset.jid)">&#128196; Logs</button>'
-        + '<button class="btn btn-sm" style="font-size:.7rem;background:rgba(255,82,82,.1);color:var(--red)" data-jid="' + j.id + '" onclick="killLfJob(this.dataset.jid,this)">&times; Kill</button>'
-        + '</div>';
+        + (ytLink?'<div>'+ytLink+'</div>':'')
+        + '<div style="font-family:var(--mono);font-size:.65rem;color:'+col+';font-weight:700;white-space:nowrap">'+lbl+'</div>'
+        + '<button class="btn btn-sm" style="font-size:.68rem" data-jid="'+j.id+'" onclick="openLfStudio(this.dataset.jid)">Studio</button>'
+        + (['failed','scripting'].includes(j.status)?'<button class="btn btn-sm" style="font-size:.68rem;color:var(--accent)" data-jid="'+j.id+'" data-topic="'+esc(j.topic)+'" data-cluster="'+j.cluster+'" data-dur="'+(j.target_duration||420)+'" onclick="retryLfScript(this)">↺</button>':'')
+        + '<button class="btn btn-sm" style="font-size:.68rem;color:var(--muted)" data-jid="'+j.id+'" onclick="viewJobLogs(this.dataset.jid)">📄</button>'
+        + '<button class="btn btn-sm" style="font-size:.68rem;color:var(--red)" data-jid="'+j.id+'" onclick="killLfJob(this.dataset.jid,this)">&times;</button>'
+        + '</div></div>';
     }).join('');
-    if (completed.length && active.length) {
-      el.innerHTML += '<div style="font-family:var(--mono);font-size:.65rem;color:var(--muted);text-align:center;padding:6px">'
-        + completed.length + ' completed job(s) — see Logs for history</div>';
-    }
+
+    // Auto-poll every 10s if jobs are in progress
+    clearTimeout(_lfPollTimer);
+    if (active.length) _lfPollTimer = setTimeout(loadLongformJobs, 10000);
+
   } catch(e) {
-    el.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:10px">Error: ' + e.message + '</div>';
+    el.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:10px">Error: '+e.message+'</div>';
   }
 }
 
@@ -2285,11 +2400,27 @@ async function refreshLfStudio() {
     var job = await r.json();
     lfJobData = job;
     document.getElementById('lf-studio-topic').textContent = job.topic || 'Long-form Video';
-    document.getElementById('lf-studio-status').textContent =
-      'Status: ' + job.status + (job.mood ? ' · Mood: ' + job.mood : '') +
-      ' · Target: ' + Math.round((job.target_duration||420)/60) + ' min';
+
     var segs     = job.segments || [];
-    var allReady = segs.length > 0 && segs.every(function(s) { return s.status === 'ready'; });
+    var ready    = segs.filter(function(s) { return s.status === 'ready' || (s.voice_r2_url && (s.media||[]).length > 0); }).length;
+    var hasMedia = segs.filter(function(s) { return (s.media||[]).length > 0; }).length;
+    var allReady = segs.length > 0 && ready === segs.length;
+
+    // Progress bar
+    var pct = segs.length ? Math.round((ready / segs.length) * 100) : 0;
+    var statusColor = {
+      scripting:'var(--yellow)', media_collecting:'var(--accent)',
+      ready_to_render:'var(--purple)', rendering:'var(--accent)',
+      complete:'#69f0ae', failed:'var(--red)'
+    }[job.status] || 'var(--muted)';
+
+    document.getElementById('lf-studio-status').innerHTML =
+      'Status: <span style="color:' + statusColor + ';font-weight:600">' + job.status + '</span>'
+      + (job.mood ? ' &bull; ' + job.mood : '')
+      + ' &bull; ' + Math.round((job.target_duration||420)/60) + ' min'
+      + (segs.length ? ' &bull; <span style="color:var(--green)">' + ready + '/' + segs.length + ' segments ready</span>' : '')
+      + (segs.length ? '<div style="margin-top:4px;height:3px;background:var(--surface2);border-radius:2px"><div style="height:3px;background:var(--green);border-radius:2px;width:' + pct + '%"></div></div>' : '');
+
     var renderBtn = document.getElementById('lf-render-btn');
     if (renderBtn) renderBtn.disabled = !allReady;
     renderLfTimeline(segs);
@@ -2297,6 +2428,10 @@ async function refreshLfStudio() {
       var seg = segs.find(function(s) { return s.segment_idx === lfCurrentSegIdx; });
       if (seg) renderLfEditor(seg);
     }
+
+    // Auto-refresh while in progress
+    var inProgress = ['scripting','media_collecting','rendering'].includes(job.status);
+    if (inProgress) setTimeout(refreshLfStudio, 8000);
   } catch(e) {
     document.getElementById('lf-studio-status').textContent = 'Error: ' + e.message;
   }
@@ -2365,9 +2500,9 @@ function renderLfEditor(seg) {
     + '<div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Media</div>'
     + (mediaItems || '<div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:6px">No media yet</div>')
     + '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">'
+    + '<button class="btn btn-primary" style="font-size:.72rem" onclick="openLfLibPicker(' + seg.segment_idx + ')">&#128444; From Library</button>'
     + '<button class="btn" style="font-size:.72rem" onclick="lfAutoImages(' + seg.segment_idx + ')">&#9889; Auto-gen</button>'
-    + '<label class="btn" style="font-size:.72rem;cursor:pointer">&#128228; Image<input type="file" accept="image/*" style="display:none" onchange="lfUploadMedia(event,' + seg.segment_idx + ',\'image\')"></label>'
-    + '<label class="btn" style="font-size:.72rem;cursor:pointer">&#127909; Video<input type="file" accept="video/*" style="display:none" onchange="lfUploadMedia(event,' + seg.segment_idx + ',\'video\')"></label>'
+    + '<label class="btn" style="font-size:.72rem;cursor:pointer">&#128228; Upload<input type="file" accept="image/*" style="display:none" onchange="lfUploadMedia(event,' + seg.segment_idx + ',\'image\')"></label>'
     + '</div></div>'
     + '<div style="margin-bottom:14px">'
     + '<div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Voice</div>'
@@ -2382,6 +2517,103 @@ function renderLfEditor(seg) {
 function lfMsg(msg, color) {
   var el = document.getElementById('lf-seg-msg');
   if (el) { el.textContent = msg; el.style.color = color || 'var(--muted)'; }
+}
+
+var _lfLibSegIdx = null;
+var _lfLibSelected = [];
+
+async function openLfLibPicker(segIdx) {
+  _lfLibSegIdx = segIdx;
+  _lfLibSelected = [];
+
+  // Create picker overlay
+  var overlay = document.getElementById('lf-lib-picker');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'lf-lib-picker';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;overflow:auto;padding:20px';
+    overlay.innerHTML = '<div style="max-width:900px;margin:0 auto">'
+      + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'
+      + '<button class="btn" onclick="document.getElementById(\'lf-lib-picker\').style.display=\'none\'">← Back</button>'
+      + '<div style="font-size:.9rem;font-weight:700">Pick images for segment</div>'
+      + '<div id="lf-lib-count" style="font-family:var(--mono);font-size:.7rem;color:var(--yellow);margin-left:auto">0 selected</div>'
+      + '<button class="btn btn-primary" id="lf-lib-use-btn" onclick="useLibImagesForSegment()" disabled style="opacity:.4">Use Selected</button>'
+      + '</div>'
+      + '<div id="lf-lib-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px"></div>'
+      + '</div>';
+    document.body.appendChild(overlay);
+  }
+
+  overlay.style.display = 'block';
+  var grid = document.getElementById('lf-lib-grid');
+  grid.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;padding:20px">Loading library...</div>';
+
+  try {
+    var r = await fetch(API_BASE + '/image-library?limit=200');
+    var d = await r.json();
+    var imgs = d.images || [];
+    if (!imgs.length) {
+      grid.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;padding:20px">No images in library yet. Generate some videos first.</div>';
+      return;
+    }
+    grid.innerHTML = imgs.map(function(img, i) {
+      var cat = CATS[img.cluster] || { color:'var(--muted)', emoji:'📷' };
+      return '<div class="lib-img-card" data-url="' + esc(img.url) + '" data-key="' + esc(img.key||'') + '" '
+        + 'onclick="toggleLfLibImg(this)" style="position:relative;cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid transparent">'
+        + (img.url ? '<img src="' + esc(img.url) + '" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" onerror="this.parentElement.style.display=\'none\'">'
+          : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2);display:flex;align-items:center;justify-content:center">🖼</div>')
+        + '<div style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.4)" id="lf-lib-chk-' + i + '"></div>'
+        + '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);padding:3px 5px;font-family:var(--mono);font-size:.52rem;color:' + cat.color + '">'
+        + cat.emoji + ' ' + esc((img.topic||'').slice(0,18)) + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    grid.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.75rem;padding:20px">Error: ' + e.message + '</div>';
+  }
+}
+
+function toggleLfLibImg(el) {
+  var url = el.dataset.url;
+  var key = el.dataset.key;
+  var idx = _lfLibSelected.findIndex(function(s) { return s.url === url; });
+  if (idx > -1) {
+    _lfLibSelected.splice(idx, 1);
+    el.style.borderColor = 'transparent';
+  } else {
+    _lfLibSelected.push({ url, key });
+    el.style.borderColor = 'var(--accent)';
+  }
+  var cnt = document.getElementById('lf-lib-count');
+  var btn = document.getElementById('lf-lib-use-btn');
+  if (cnt) cnt.textContent = _lfLibSelected.length + ' selected';
+  if (btn) { btn.disabled = !_lfLibSelected.length; btn.style.opacity = _lfLibSelected.length ? '1' : '.4'; }
+}
+
+async function useLibImagesForSegment() {
+  if (!_lfLibSelected.length || _lfLibSegIdx === null) return;
+  var btn = document.getElementById('lf-lib-use-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    // Build media array with selected library images
+    var media = _lfLibSelected.map(function(s, i) {
+      return { type: 'image', r2_url: s.key || s.url, public_url: s.url, order: i, source: 'library' };
+    });
+    var r = await fetch(API_BASE + '/longform/segment/set-media', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ job_id: lfCurrentJobId, segment_idx: _lfLibSegIdx, media })
+    });
+    var d = await r.json();
+    if (d.ok || d.status) {
+      document.getElementById('lf-lib-picker').style.display = 'none';
+      lfMsg('✓ ' + media.length + ' library image(s) applied to segment', '#69f0ae');
+      refreshLfStudio();
+    } else {
+      throw new Error(d.error || 'Failed');
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Use Selected'; }
+    lfMsg('Error: ' + e.message, 'var(--red)');
+  }
 }
 
 async function saveLfScript(segIdx) {
