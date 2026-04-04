@@ -333,7 +333,9 @@ def generate_single_image(
 
     # ── AUTO-SAVE TO R2 + image_cache ─────────────────────────
     r2_url = None
-    if R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and tier_used != "R2Library":
+    has_r2 = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_KEY)
+    print(f"  R2 save: account={'yes' if R2_ACCOUNT_ID else 'MISSING'} key={'yes' if R2_ACCESS_KEY_ID else 'MISSING'} secret={'yes' if R2_SECRET_KEY else 'MISSING'}")
+    if has_r2 and tier_used != "R2Library":
         r2_url = _save_to_r2_and_cache(
             output_path, job_id, scene_idx, cluster, job_type,
             prompt, tier_used,

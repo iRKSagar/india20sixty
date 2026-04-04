@@ -252,7 +252,7 @@ def _chatterbox_generate(text: str, voice_ref_path: str) -> bytes:
     result = subprocess.run(
         ["ffmpeg", "-y", "-i", wav_path,
          "-codec:a", "libmp3lame", "-qscale:a", "2",
-         "-af", f"atempo={CB_SPEED},afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
+         "-af", f"atempo={CB_SPEED},afftdn=nf=-20,volume=2dB,loudnorm=I=-12:TP=-1.0:LRA=9",
          mp3_path],
         capture_output=True, timeout=30
     )

@@ -273,12 +273,18 @@ Return ONLY the script as plain text. No labels. No JSON. No numbering."""
             print(f"  Script too short ({word_count} words) — retrying")
         except Exception as e:
             print(f"  Script attempt {attempt+1} failed: {e}")
-        fallback = (f"India is building something that will change everything. "
-                    f"{topic} is no longer a dream — work has already started. "
-                    f"The government has committed serious money and a real deadline. "
-                    f"Thousands of skilled jobs will follow. "
-                    f"But execution is the real test. Will India deliver on time?")
-        return fallback, [fallback]
+
+    # All attempts failed or too short — use guaranteed 52-word fallback
+    fallback = (
+        f"India just crossed a major milestone with {topic}. "
+        f"This is not a future plan — the work is happening right now. "
+        f"Billions have been committed and a hard deadline is locked in. "
+        f"Hundreds of thousands of skilled jobs are being created across India. "
+        f"The biggest challenge is not money or talent — it is execution speed. "
+        f"Will India deliver on time and set a new global standard?"
+    )
+    print(f"  Using fallback script ({len(fallback.split())} words)")
+    return fallback, [fallback]
 
 
 def _pronunciation_fix(script: str) -> str:

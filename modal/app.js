@@ -63,6 +63,20 @@ var audioCtx = null, analyserNode = null, recTimer = null, recSecs = 0;
 var selectedMusic = null, playbackAudio = null, isRecording = false;
 
 // ── UTILS ──────────────────────────────────────────────────────
+function showToast(msg, duration) {
+  var t = document.getElementById('toast-msg');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast-msg';
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);color:var(--text);padding:10px 20px;border-radius:8px;font-family:var(--mono);font-size:.75rem;z-index:9999;pointer-events:none;transition:opacity .3s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function() { t.style.opacity = '0'; }, duration || 2500);
+}
+
 function esc(str) {
   if (!str) return '';
   return String(str)
@@ -848,7 +862,8 @@ function renderReviewGrid() {
     var reason   = j.review_reason || 'Ready for review';
     var hasVideo = !!(j.has_video && j.video_public_url);
     var videoUrl = j.video_public_url || '';
-    var isSilent = j.status === 'staged';
+    var isSilent = j.is_silent || j.status === 'staged' && !(j.error && j.error.includes('publish_failed'));
+    var statusColor = j.status === 'staged' ? 'var(--yellow)' : j.status === 'review' ? 'var(--cyan)' : 'var(--red)';
     return '<div class="queue-card" style="cursor:default">'
       + '<div class="queue-card-head">'
       + '<div class="queue-card-topic">' + title + '</div>'
@@ -856,8 +871,9 @@ function renderReviewGrid() {
       + '<span style="font-size:.63rem;color:' + cat.color + '">' + cat.emoji + ' ' + cat.label + '</span>'
       + '<span class="score-pill ' + scClass(j.council_score || 0) + '">' + (j.council_score || 0) + '</span>'
       + badge(j.status)
+      + '<span style="font-family:var(--mono);font-size:.57rem;color:var(--muted)">' + (j.created_at ? ago(j.created_at) + ' ago' : '') + '</span>'
       + '</div></div>'
-      + '<div style="padding:4px 12px;background:var(--surface2);font-family:var(--mono);font-size:.58rem;color:var(--muted);border-bottom:0.5px solid var(--border)">' + reason + '</div>'
+      + '<div style="padding:4px 12px;background:var(--surface2);font-family:var(--mono);font-size:.58rem;color:' + statusColor + ';border-bottom:0.5px solid var(--border)">' + reason + '</div>'
       + (hasVideo
         ? '<video src="' + videoUrl + '" controls preload="metadata" style="width:100%;max-height:200px;background:#000;display:block"></video>'
         : '<div style="background:var(--surface2);height:56px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:.65rem;color:var(--muted)">No video file saved</div>')
@@ -1548,8 +1564,8 @@ function filterLib(topic, el) {
 
 function renderLibrary() {
   var html2 = allImages.length ? allImages.map(function(img) {
-    var sel2  = libSelectedImages2.indexOf(img.url) > -1;
-    var idx2  = libSelectedImages2.indexOf(img.url);
+    var sel2  = libSelectedImages2.some(function(s) { return s.url === img.url; });
+    var idx2  = libSelectedImages2.findIndex(function(s) { return s.url === img.url; });
     var cat   = CATS[img.cluster] || null;
     var engBadge = img.engine && img.engine !== 'unknown'
       ? '<div style="position:absolute;top:4px;left:4px;font-family:var(--mono);font-size:.52rem;'
@@ -1563,14 +1579,18 @@ function renderLibrary() {
     var clBadge = cat
       ? '<div style="font-size:.55rem;color:' + cat.color + ';padding:1px 0">' + cat.emoji + ' ' + img.cluster + '</div>'
       : '';
+    var selBadge = sel2
+      ? '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;z-index:2">' + (idx2+1) + '</div>'
+      : '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.3);z-index:2"></div>';
     return '<div class="lib-img-card ' + (sel2 ? 'selected' : '') + '" '
-      + 'data-imgurl="' + img.url.replace(/"/g,'&quot;') + '" onclick="toggleLib2(this)" '
-      + 'style="position:relative">'
+      + 'data-imgurl="' + img.url.replace(/"/g,'&quot;') + '" '
+      + 'data-imgkey="' + (img.key||'').replace(/"/g,'&quot;') + '" '
+      + 'data-imgid="' + (img.id||'') + '" '
+      + 'onclick="toggleLib2(this)" style="position:relative;cursor:pointer">'
       + '<img src="' + img.url + '" loading="lazy" '
         + 'style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" '
         + 'onerror="this.parentElement.style.display=\'none\'">'
-      + engBadge + jtBadge
-      + (sel2 ? '<div class="lib-num">' + (idx2+1) + '</div>' : '')
+      + engBadge + jtBadge + selBadge
       + '<div class="lib-topic">' + clBadge + esc(img.topic.slice(0,24)) + '</div>'
       + '</div>';
   }).join('')
@@ -1579,6 +1599,48 @@ function renderLibrary() {
 
   var g2 = document.getElementById('lib-grid2');
   if (g2) g2.innerHTML = html2;
+  _updateLibDeleteBtn();
+}
+
+function _updateLibDeleteBtn() {
+  var btn = document.getElementById('lib-delete-btn');
+  if (!btn) return;
+  var n = libSelectedImages2.length;
+  if (n > 0) {
+    btn.style.display = 'flex';
+    btn.textContent = '\uD83D\uDDD1 Delete ' + n + ' image' + (n > 1 ? 's' : '');
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+async function deleteSelectedImages() {
+  var n = libSelectedImages2.length;
+  if (!n) return;
+  if (!confirm('Delete ' + n + ' image' + (n > 1 ? 's' : '') + ' from R2 and library? This cannot be undone.')) return;
+  var btn = document.getElementById('lib-delete-btn');
+  btn.textContent = '\u23F3 Deleting...'; btn.disabled = true;
+  try {
+    var keys = libSelectedImages2.map(function(s) { return s.key; }).filter(Boolean);
+    var ids  = libSelectedImages2.map(function(s) { return s.id;  }).filter(Boolean);
+    var r = await fetch(API_BASE + '/delete-images', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: keys, ids: ids })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    // Remove deleted images from allImages
+    var deletedUrls = libSelectedImages2.map(function(s) { return s.url; });
+    allImages = allImages.filter(function(img) { return deletedUrls.indexOf(img.url) === -1; });
+    libSelectedImages2 = [];
+    setText('lib-count2', allImages.length);
+    renderLibrary();
+    showToast('Deleted ' + (d.deleted || n) + ' image' + (n > 1 ? 's' : ''));
+  } catch(e) {
+    btn.textContent = '\uD83D\uDDD1 Delete ' + n;
+    btn.disabled = false;
+    alert('Delete failed: ' + e.message);
+  }
 }
 
 function toggleLib1(el) {
@@ -1598,16 +1660,19 @@ function toggleLib1(el) {
 
 function toggleLib2(el) {
   var url = el.dataset.imgurl;
-  var idx = libSelectedImages2.indexOf(url);
-  if (idx > -1) { libSelectedImages2.splice(idx, 1); }
-  else {
-    if (libSelectedImages2.length >= 3) { alert('Select exactly 3 images. Deselect one first.'); return; }
-    libSelectedImages2.push(url);
+  var key = el.dataset.imgkey || '';
+  var id  = el.dataset.imgid  || '';
+  var idx = libSelectedImages2.findIndex(function(s) { return s.url === url; });
+  if (idx > -1) {
+    libSelectedImages2.splice(idx, 1);
+  } else {
+    libSelectedImages2.push({ url: url, key: key, id: id });
   }
   var sc = document.getElementById('lib-sel-count2');
-  if (sc) sc.textContent = libSelectedImages2.length + ' / 3 selected';
+  if (sc) sc.textContent = libSelectedImages2.length + ' selected';
   var btn = document.getElementById('lib-create-btn2');
   if (btn) { btn.disabled = libSelectedImages2.length !== 3; btn.style.opacity = libSelectedImages2.length === 3 ? '1' : '.4'; }
+  _updateLibDeleteBtn();
   renderLibrary();
 }
 
@@ -1617,7 +1682,8 @@ async function createVideoFromLibrary() {
 }
 async function createVideoFromLibrary2() {
   if (libSelectedImages2.length !== 3) { alert('Select exactly 3 images first.'); return; }
-  await _createFromImages(libSelectedImages2, 'lib-create-btn2', 'lib-sel-count2', function() { libSelectedImages2 = []; });
+  var urls = libSelectedImages2.map(function(s) { return s.url; });
+  await _createFromImages(urls, 'lib-create-btn2', 'lib-sel-count2', function() { libSelectedImages2 = []; _updateLibDeleteBtn(); });
 }
 async function _createFromImages(imgs, btnId, cntId, resetFn) {
   var btn = document.getElementById(btnId);

@@ -831,8 +831,9 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
       <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:2px">Every generated image auto-saved here. Select 3 → Create Video.</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
-      <span id="lib-sel-count2" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 / 3 selected</span>
-      <button class="btn btn-primary btn-sm" id="lib-create-btn2" onclick="createVideoFromLibrary2()" disabled style="opacity:.4">&#9654; Create Video</button>
+      <span id="lib-sel-count2" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 selected</span>
+      <button class="btn btn-primary btn-sm" id="lib-create-btn2" onclick="createVideoFromLibrary2()" disabled style="opacity:.4">&#9654; Create Video (3)</button>
+      <button id="lib-delete-btn" onclick="deleteSelectedImages()" style="display:none;align-items:center;gap:5px;background:rgba(255,82,82,.15);color:var(--red);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:5px 12px;font-size:.72rem;font-family:var(--font);cursor:pointer">&#128465; Delete</button>
       <button class="btn btn-ghost btn-sm" onclick="loadLibrary()">&#8635; Refresh</button>
     </div>
   </div>

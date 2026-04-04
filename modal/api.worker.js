@@ -129,20 +129,29 @@ export default {
     if (url.pathname === "/review") {
       try {
         const r2Base = (env.R2_BASE_URL||"").replace(/\/$/,"");
-        const fields = "id,topic,cluster,script_package,video_r2_url,council_score,updated_at,status,error";
-        const [rev,cbdp,staged] = await Promise.all([
+        const fields = "id,topic,cluster,script_package,video_r2_url,council_score,updated_at,created_at,status,error,youtube_id";
+        const [rev,cbdp,stagedHuman,stagedFailed] = await Promise.all([
           sbGet(env,"jobs?status=eq.review&order=updated_at.desc&select="+fields),
           sbGet(env,"jobs?status=eq.cbdp&order=updated_at.desc&select="+fields),
-          sbGet(env,"jobs?status=eq.staged&order=updated_at.desc&select="+fields),
+          // Human voice mode staged (silent, needs voice)
+          sbGet(env,"jobs?status=eq.staged&error=is.null&order=updated_at.desc&select="+fields),
+          // Publish-failed staged (has video, publish errored)
+          sbGet(env,"jobs?status=eq.staged&error=not.is.null&order=updated_at.desc&select="+fields),
         ]);
-        const failed = await sbGet(env,"jobs?status=eq.failed&video_r2_url=not.is.null&order=updated_at.desc&limit=20&select="+fields).catch(()=>[]);
         const seen = new Set();
-        const all = [...staged,...rev,...cbdp,...failed].filter(j=>{ if(seen.has(j.id))return false; seen.add(j.id); return true; });
+        const all = [...stagedHuman,...stagedFailed,...rev,...cbdp].filter(j=>{ if(seen.has(j.id))return false; seen.add(j.id); return true; });
         return cors(all.map(j=>{
           const raw=j.video_r2_url||"";
           const videoUrl=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null);
-          const reason=j.status==="staged"?"Silent video — needs AI voice":j.status==="review"?"Publish was OFF":j.status==="cbdp"?"Upload failed":"Not published";
-          return {...j, video_public_url:videoUrl, review_reason:reason, has_video:!!videoUrl};
+          let reason="";
+          const isSilent = j.status==="staged" && (!j.error || !j.error.includes("publish_failed"));
+          if (isSilent) reason="Silent video — needs AI voice or manual recording";
+          else if (j.status==="staged" && j.error) reason="Publish failed — "+j.error.replace("publish_failed: ","").slice(0,80);
+          else if (j.status==="review") reason="Publish was OFF — ready to publish";
+          else if (j.status==="cbdp") reason="Upload failed — ready to retry";
+          else reason="Not published";
+          return {...j, video_public_url:videoUrl, review_reason:reason, has_video:!!videoUrl,
+                  is_silent:isSilent};
         }));
       } catch(e) { return cors({error:e.message},500); }
     }
@@ -228,13 +237,14 @@ export default {
         // Primary: query image_cache table
         try {
           // Use basic columns first — works even without migration
-          let ep = "image_cache?select=r2_key,public_url,topic,scene_idx,created_at,cluster,engine,job_type&order=created_at.desc&limit=300";
+          let ep = "image_cache?select=id,r2_key,public_url,topic,scene_idx,created_at,cluster,engine,job_type&order=created_at.desc&limit=500";
           if (cluster) ep += "&cluster=eq." + cluster;
           if (jobType) ep += "&job_type=eq." + jobType;
           const rows = await sbGet(env, ep);
           if (rows.length > 0) {
             return cors({
               images: rows.map(r => ({
+                id:       r.id,
                 key:      r.r2_key,
                 url:      r.public_url || (r2Base + "/" + r.r2_key),
                 topic:    r.topic || "India Tech",
@@ -277,6 +287,51 @@ export default {
         return cors({images:[], total:0, source:"empty",
           note:"Run Supabase migration and configure R2 binding to see images"});
       } catch(e) { return cors({error:e.message,images:[]}); }
+    }
+
+    if (url.pathname === "/delete-images" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const keys = body.keys || [];   // R2 keys to delete
+        const ids  = body.ids  || [];   // image_cache row ids to delete
+        if (!keys.length && !ids.length) return cors({error:"No keys or ids provided"},400);
+
+        let r2Deleted = 0, dbDeleted = 0, errors = [];
+
+        // Delete from R2 if bucket is bound
+        if (env.R2 && keys.length) {
+          for (const key of keys) {
+            try {
+              await env.R2.delete(key);
+              r2Deleted++;
+            } catch(e) {
+              errors.push("R2 " + key + ": " + e.message);
+            }
+          }
+        }
+
+        // Delete from image_cache by id
+        if (ids.length) {
+          try {
+            // Supabase: delete where id in (...)
+            for (const id of ids) {
+              await sbDelete(env, "image_cache?id=eq." + id);
+              dbDeleted++;
+            }
+          } catch(e) {
+            errors.push("DB: " + e.message);
+          }
+        } else if (keys.length) {
+          // Fallback: delete by r2_key if no ids
+          for (const key of keys) {
+            try {
+              await sbDelete(env, "image_cache?r2_key=eq." + encodeURIComponent(key));
+            } catch(e) {}
+          }
+        }
+
+        return cors({deleted: r2Deleted, db_deleted: dbDeleted, errors, total: keys.length});
+      } catch(e) { return cors({error:e.message},500); }
     }
 
     if (url.pathname === "/run-with-images" && request.method === "POST") {
@@ -759,6 +814,7 @@ function sbh(env){return{apikey:env.SUPABASE_ANON_KEY,Authorization:"Bearer "+(e
 async function sbGet(env,ep){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{headers:sbh(env)});if(!r.ok)throw new Error("GET "+r.status+" "+ep);return r.json();}
 async function sbInsert(env,table,data){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+table,{method:"POST",headers:{...sbh(env),Prefer:"return=representation"},body:JSON.stringify(data)});if(!r.ok){const b=await r.text();throw new Error("INSERT "+r.status+" "+b.slice(0,200));}return(await r.json())[0];}
 async function sbPatch(env,ep,data){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{method:"PATCH",headers:{...sbh(env),Prefer:"return=minimal"},body:JSON.stringify(data)});return r.ok;}
+async function sbDelete(env,ep){const r=await fetch(env.SUPABASE_URL+"/rest/v1/"+ep,{method:"DELETE",headers:{...sbh(env),Prefer:"return=minimal"}});return r.ok;}
 async function upsertState(env,data){try{const rows=await sbGet(env,"system_state?id=eq.main&select=id");if(rows.length>0){await sbPatch(env,"system_state?id=eq.main",{...data,updated_at:new Date().toISOString()});}else{await sbInsert(env,"system_state",{id:"main",...data});}}catch(e){console.error("upsertState:",e.message);}}
 function cors(data,status){return new Response(JSON.stringify(data,null,2),{status:status||200,headers:{"content-type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"*","Access-Control-Allow-Methods":"GET,POST,OPTIONS,PATCH"}});}
 

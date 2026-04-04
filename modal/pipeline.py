@@ -342,25 +342,45 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
                     "India20Sixty - India's near future, explained.\n\n"
                     "#IndiaFuture #FutureTech #India #Shorts #AI #Technology #Innovation"
                 )
-                video_id = _yt_upload().remote(
-                    video_path="", title=title, description=description,
-                    tags=["Future India","India innovation","AI","Technology","Shorts"],
-                    video_bytes=video_bytes,
-                )
-                log(f"Uploaded: {video_id}")
                 try:
-                    requests.post(f"{SUPABASE_URL}/rest/v1/videos",
-                                  headers={**hdrs,"Prefer":"return=minimal"},
-                                  json={"job_id":job_id,"topic":topic,
-                                        "youtube_url":f"https://youtube.com/watch?v={video_id}"},
-                                  timeout=10)
-                except Exception as e:
-                    print(f"  videos insert (non-fatal): {e}")
-                update_status("complete", {
-                    "youtube_id": video_id,
-                    "script_package": _make_pkg(script_pkg, fact_package),
-                })
-                print(f"\nCOMPLETE: https://youtube.com/watch?v={video_id}")
+                    video_id = _yt_upload().remote(
+                        video_path="", title=title, description=description,
+                        tags=["Future India","India innovation","AI","Technology","Shorts"],
+                        video_bytes=video_bytes,
+                    )
+                    log(f"Uploaded: {video_id}")
+                    try:
+                        requests.post(f"{SUPABASE_URL}/rest/v1/videos",
+                                      headers={**hdrs,"Prefer":"return=minimal"},
+                                      json={"job_id":job_id,"topic":topic,
+                                            "youtube_url":f"https://youtube.com/watch?v={video_id}"},
+                                      timeout=10)
+                    except Exception as e:
+                        print(f"  videos insert (non-fatal): {e}")
+                    update_status("complete", {
+                        "youtube_id": video_id,
+                        "script_package": _make_pkg(script_pkg, fact_package),
+                    })
+                    print(f"\nCOMPLETE: https://youtube.com/watch?v={video_id}")
+                except Exception as pub_err:
+                    # Publish failed — save video to staged so it can be published later
+                    pub_msg = str(pub_err)
+                    print(f"\nPUBLISH FAILED ({pub_msg}) — saving to staged for manual publish")
+                    log(f"Publish failed: {pub_msg[:200]}")
+                    try:
+                        r2_key = f"staged/{job_id}/video.mp4"
+                        video_r2_url = _r2_upload().remote("", r2_key, file_bytes=video_bytes)
+                        update_status("staged", {
+                            "video_r2_url":  video_r2_url,
+                            "error":         f"publish_failed: {pub_msg[:200]}",
+                            "script_package": {**_make_pkg(script_pkg, fact_package), "title": title},
+                        })
+                        log(f"Staged after publish failure: {r2_key}")
+                        print(f"  Staged at {r2_key} — publish from dashboard when ready")
+                    except Exception as stage_err:
+                        print(f"  Staging also failed: {stage_err}")
+                        update_status("cbdp", {"error": f"publish+stage failed: {pub_msg[:200]}"})
+                    # Don't re-raise — job is now staged, not failed
 
     except Exception as e:
         msg = str(e)
