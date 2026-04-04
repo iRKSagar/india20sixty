@@ -237,7 +237,7 @@ export default {
         // Primary: query image_cache table
         try {
           // Use basic columns first — works even without migration
-          let ep = "image_cache?select=id,r2_key,public_url,topic,scene_idx,created_at,cluster,engine,job_type&order=created_at.desc&limit=500";
+          let ep = "image_cache?select=id,r2_key,public_url,topic,scene_idx,created_at,cluster,engine,job_type,job_id&order=created_at.desc&limit=500";
           if (cluster) ep += "&cluster=eq." + cluster;
           if (jobType) ep += "&job_type=eq." + jobType;
           const rows = await sbGet(env, ep);
@@ -246,13 +246,14 @@ export default {
               images: rows.map(r => ({
                 id:       r.id,
                 key:      r.r2_key,
-                url:      r.public_url || (r2Base + "/" + r.r2_key),
-                topic:    r.topic || "India Tech",
+                url:      r.public_url || (r2Base && r.r2_key ? r2Base+"/"+r.r2_key : ""),
+                topic:    r.topic || r.job_id || "India Tech",
                 cluster:  r.cluster || "AI",
                 engine:   r.engine  || "FLUX",
                 job_type: r.job_type || "shorts",
                 scene_idx:r.scene_idx || 0,
                 uploaded: r.created_at,
+                has_url:  !!(r.public_url || r2Base),
               })),
               total: rows.length,
               source: "image_cache",

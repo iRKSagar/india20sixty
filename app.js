@@ -1582,16 +1582,25 @@ function renderLibrary() {
     var selBadge = sel2
       ? '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;z-index:2">' + (idx2+1) + '</div>'
       : '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.3);z-index:2"></div>';
+    var imgContent = img.url
+      ? '<img src="' + img.url + '" loading="lazy" '
+        + 'style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" '
+        + 'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">'
+        + '<div style="display:none;width:100%;aspect-ratio:9/16;background:var(--surface2);align-items:center;justify-content:center;flex-direction:column;gap:4px">'
+        + '<span style="font-size:1.2rem">🖼</span>'
+        + '<span style="font-family:var(--mono);font-size:.55rem;color:var(--muted)">Load failed</span></div>'
+      : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px">'
+        + '<span style="font-size:1.2rem">🖼</span>'
+        + '<span style="font-family:var(--mono);font-size:.55rem;color:var(--muted)">No R2 URL</span>'
+        + '<span style="font-family:var(--mono);font-size:.5rem;color:var(--muted2)">Add R2 creds to Modal</span></div>';
     return '<div class="lib-img-card ' + (sel2 ? 'selected' : '') + '" '
-      + 'data-imgurl="' + img.url.replace(/"/g,'&quot;') + '" '
+      + 'data-imgurl="' + (img.url||'').replace(/"/g,'&quot;') + '" '
       + 'data-imgkey="' + (img.key||'').replace(/"/g,'&quot;') + '" '
       + 'data-imgid="' + (img.id||'') + '" '
       + 'onclick="toggleLib2(this)" style="position:relative;cursor:pointer">'
-      + '<img src="' + img.url + '" loading="lazy" '
-        + 'style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" '
-        + 'onerror="this.parentElement.style.display=\'none\'">'
+      + imgContent
       + engBadge + jtBadge + selBadge
-      + '<div class="lib-topic">' + clBadge + esc(img.topic.slice(0,24)) + '</div>'
+      + '<div class="lib-topic">' + clBadge + esc((img.topic||'').slice(0,24)) + '</div>'
       + '</div>';
   }).join('')
   : '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--muted);font-family:var(--mono);font-size:.75rem">'
@@ -2375,4 +2384,3 @@ function setTheme(mode) {
   var saved = localStorage.getItem('i20_theme') || 'dark';
   if (saved === 'light') document.body.classList.add('light-mode');
 })();
-
