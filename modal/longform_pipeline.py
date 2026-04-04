@@ -82,6 +82,81 @@ def sb_insert(table, data):
     if not r.ok: raise Exception(f"INSERT {r.status_code}: {r.text[:200]}")
     return r.json()[0]
 
+
+
+def _check_and_auto_render(job_id: str):
+    """Check if all segments have voice. If so, trigger render automatically."""
+    try:
+        # Get job auto_mode setting
+        jobs = sb_get(f"longform_jobs?id=eq.{job_id}&select=auto_mode,status")
+        if not jobs or jobs[0].get("status") in ("rendering", "complete", "failed"):
+            return  # Already rendering or done
+        if not jobs[0].get("auto_mode", False):
+            return  # Manual mode — don't auto-render
+
+        # Check all segments have voice
+        segs = sb_get(f"longform_segments?job_id=eq.{job_id}&select=segment_idx,voice_r2_url,media")
+        if not segs:
+            return
+        all_have_voice = all(s.get("voice_r2_url") for s in segs)
+        if not all_have_voice:
+            ready_count = sum(1 for s in segs if s.get("voice_r2_url"))
+            print(f"  Auto-render check: {ready_count}/{len(segs)} segments have voice")
+            return
+
+        print(f"  All {len(segs)} segments have voice — triggering auto render")
+        log(job_id, f"All segments ready — auto-rendering")
+        sb_patch(f"longform_jobs?id=eq.{job_id}",
+                 {"status": "rendering", "updated_at": datetime.utcnow().isoformat()})
+        _handle_render_full.spawn({"job_id": job_id})
+    except Exception as e:
+        print(f"  _check_and_auto_render failed (non-fatal): {e}")
+
+def _upload_bytes_to_r2(data: bytes, r2_key: str, content_type: str,
+                         r2_account_id: str, r2_access_key: str, r2_secret: str,
+                         r2_bucket: str, r2_base: str) -> str:
+    """Upload raw bytes to R2. Returns public URL. No /tmp needed."""
+    import hmac, hashlib, urllib.parse
+    endpoint = f"https://{r2_account_id}.r2.cloudflarestorage.com"
+    url      = f"{endpoint}/{r2_bucket}/{r2_key}"
+    now      = datetime.utcnow()
+    date_str = now.strftime("%Y%m%d")
+    time_str = now.strftime("%Y%m%dT%H%M%SZ")
+    payload_hash   = hashlib.sha256(data).hexdigest()
+    signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date"
+    canonical = "\n".join([
+        "PUT",
+        f"/{r2_bucket}/{urllib.parse.quote(r2_key, safe='/')}",
+        "",
+        f"content-type:{content_type}",
+        f"host:{r2_account_id}.r2.cloudflarestorage.com",
+        f"x-amz-content-sha256:{payload_hash}",
+        f"x-amz-date:{time_str}",
+        "",
+        signed_headers,
+        payload_hash,
+    ])
+    cred_scope     = f"{date_str}/auto/s3/aws4_request"
+    string_to_sign = "\n".join([
+        "AWS4-HMAC-SHA256", time_str, cred_scope,
+        hashlib.sha256(canonical.encode()).hexdigest(),
+    ])
+    def sign(key, msg):
+        return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+    sk  = sign(sign(sign(sign(f"AWS4{r2_secret}".encode(), date_str), "auto"), "s3"), "aws4_request")
+    sig = hmac.new(sk, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    r = requests.put(url, data=data, headers={
+        "Content-Type":         content_type,
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date":           time_str,
+        "Host":                 f"{r2_account_id}.r2.cloudflarestorage.com",
+        "Authorization":        f"AWS4-HMAC-SHA256 Credential={r2_access_key}/{cred_scope},SignedHeaders={signed_headers},Signature={sig}",
+    }, timeout=60)
+    if not r.ok:
+        print(f"  R2 upload failed {r.status_code}: {r.text[:100]}")
+        return ""
+    return f"{r2_base.rstrip('/')}/{r2_key}" if r2_base else url
+
 def log(job_id, msg):
     print(f"[longform] {msg}")
     try:
@@ -159,10 +234,11 @@ async def dispatch(request: Request):
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=180)
 def _handle_generate_script(data: dict):
-    job_id   = data["job_id"]
-    topic    = data.get("topic", "Future India")
-    cluster  = data.get("cluster", "Space")
-    dur_secs = int(data.get("target_duration", 420))
+    job_id    = data["job_id"]
+    topic     = data.get("topic", "Future India")
+    cluster   = data.get("cluster", "Space")
+    dur_secs  = int(data.get("target_duration", 420))
+    auto_mode = data.get("auto", False)  # Full auto: spawn voice+images after script
 
     print(f"\n[LF Generate Script] job={job_id} topic={topic[:60]}")
     sb_patch(f"longform_jobs?id=eq.{job_id}",
@@ -264,25 +340,47 @@ def _handle_segment_voice(data: dict):
             reviewed_script=segs[0]["script"],
         )
         # Voice ran in separate container — use bytes not path
-        audio_bytes = voice_result.get("audio_bytes")
-        audio_dur   = voice_result["duration"]
+        audio_bytes = voice_result.get("audio_bytes") if voice_result else None
+        audio_dur   = voice_result.get("duration", 0) if voice_result else 0
+        engine      = voice_result.get("engine", "unknown") if voice_result else "failed"
 
-        audio_local = f"{TMP_DIR}/{job_id}_seg{segment_idx}_voice.mp3"
-        if audio_bytes:
-            with open(audio_local, "wb") as f:
-                f.write(audio_bytes)
+        print(f"  Voice result: engine={engine} dur={audio_dur:.1f}s bytes={len(audio_bytes) if audio_bytes else 0}")
+
+        if not audio_bytes:
+            raise Exception(f"Voice engine '{engine}' returned no audio bytes — check voice.py logs")
+
+        print(f"  Voice result: engine={engine} dur={audio_dur:.1f}s bytes={len(audio_bytes)}")
+
+        # Upload bytes directly to R2 — no /tmp path needed, no cross-container issues
+        r2_key   = f"longform/{job_id}/seg{segment_idx}_voice.mp3"
+        r2_base  = os.environ.get("R2_BASE_URL", "").rstrip("/")
+        r2_acct  = os.environ.get("R2_ACCOUNT_ID", "")
+        r2_key_id= os.environ.get("R2_ACCESS_KEY_ID", "")
+        r2_secret= os.environ.get("R2_SECRET_ACCESS_KEY", "")
+        r2_bucket= os.environ.get("R2_BUCKET", "india20sixty-videos")
+
+        voice_url = None
+        if r2_acct and r2_key_id and r2_secret:
+            voice_url = _upload_bytes_to_r2(
+                audio_bytes, r2_key, "audio/mpeg",
+                r2_acct, r2_key_id, r2_secret, r2_bucket, r2_base
+            )
+            print(f"  R2 upload ✓ → {r2_key}")
         else:
-            raise Exception("Voice worker returned no audio bytes")
+            print(f"  R2 creds missing — voice not uploaded to R2")
 
-        r2_key    = f"longform/{job_id}/seg{segment_idx}_voice.mp3"
-        voice_url = _r2_upload().remote(audio_local, r2_key)
-        try: os.remove(audio_local)
-        except Exception: pass
-
-        log(job_id, f"Seg {segment_idx} voice: {audio_dur:.1f}s")
+        log(job_id, f"Seg {segment_idx} voice: {audio_dur:.1f}s engine={engine}")
+        # Update segment directly in Supabase — more reliable than webhook
+        sb_patch(
+            f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+            {"voice_r2_url": voice_url or r2_key, "voice_source": "ai",
+             "status": "ready", "updated_at": datetime.utcnow().isoformat()}
+        )
         ping_worker(job_id, segment_idx, "segment_voice_ready", {
             "voice_r2_url": r2_key, "voice_pub_url": voice_url, "duration": audio_dur,
         })
+        # Check if all segments are ready and auto-render
+        _check_and_auto_render(job_id)
     except Exception as e:
         msg = str(e)[:400]
         print(f"  Segment voice failed: {msg}")
@@ -327,23 +425,37 @@ def _handle_segment_images(data: dict):
         results = [f.get() for f in futures]
 
         media = []
+        r2_base  = os.environ.get("R2_BASE_URL", "").rstrip("/")
+        r2_acct  = os.environ.get("R2_ACCOUNT_ID", "")
+        r2_key_id= os.environ.get("R2_ACCESS_KEY_ID", "")
+        r2_secret= os.environ.get("R2_SECRET_ACCESS_KEY", "")
+        r2_bucket= os.environ.get("R2_BUCKET", "india20sixty-videos")
+
         for res in results:
             if res["success"] and res.get("image_bytes"):
                 r2_key = f"longform/{job_id}/seg{segment_idx}_img{res['scene_idx']}.png"
-                # Write bytes to this container's /tmp/ then upload to R2
-                local_p = f"{TMP_DIR}/{job_id}_seg{segment_idx}_img{res['scene_idx']}.png"
-                with open(local_p, "wb") as f:
-                    f.write(res["image_bytes"])
-                public_url = _r2_upload().remote(local_p, r2_key)
-                media.append({"type":"image","r2_url":r2_key,"public_url":public_url,"order":res["scene_idx"]})
-                try: os.remove(local_p)
-                except Exception: pass
+                public_url = None
+                if r2_acct and r2_key_id and r2_secret:
+                    public_url = _upload_bytes_to_r2(
+                        res["image_bytes"], r2_key, "image/png",
+                        r2_acct, r2_key_id, r2_secret, r2_bucket, r2_base
+                    )
+                    print(f"  R2 img ✓ seg={segment_idx} idx={res['scene_idx']}")
+                media.append({"type":"image","r2_url":r2_key,"public_url":public_url or r2_key,"order":res["scene_idx"]})
             elif res.get("r2_url"):
-                # Already on R2 from auto-save
-                media.append({"type":"image","r2_url":res["r2_url"],"public_url":res["r2_url"],"order":res["scene_idx"]})
+                media.append({"type":"image","r2_url":res["r2_url"],"public_url":res.get("r2_url",""),"order":res["scene_idx"]})
 
         log(job_id, f"Seg {segment_idx} images: {len(media)}/{len(image_prompts)}")
+        # Update segment directly in Supabase — more reliable than webhook
+        if media:
+            sb_patch(
+                f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+                {"media": media, "status": "has_media",
+                 "updated_at": datetime.utcnow().isoformat()}
+            )
         ping_worker(job_id, segment_idx, "segment_images_ready", {"media": media})
+        # Check if all segments are ready and auto-render
+        _check_and_auto_render(job_id)
     except Exception as e:
         msg = str(e)[:400]
         sb_patch(

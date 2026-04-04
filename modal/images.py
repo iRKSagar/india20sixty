@@ -35,14 +35,10 @@ app = modal.App("india20sixty-images")
 CHANNEL_NAME = "india20sixty"
 
 STYLE_PREFIX = (
-    "photorealistic modern India 2025, "
-    "contemporary Indian professionals in real urban settings, "
-    "Indian faces natural expressions diverse ages, "
-    "Indian cities tech parks offices research labs metro stations, "
-    "natural daylight or soft artificial lighting, "
-    "sharp focus high detail clean composition, "
-    "authentic grounded realistic not stylized, "
-    "no text no logos no watermarks, "
+    "photorealistic modern India, "
+    "Indian faces natural expressions, "
+    "natural daylight, sharp focus, "
+    "no text no logos, "
 )
 
 NEGATIVE_PROMPT = (
@@ -148,23 +144,19 @@ Pass (ok=true) if:
 
 
 def _make_safe_prompt(original_prompt: str, cluster: str) -> str:
-    """
-    Create a more literal, explicit prompt to avoid absurd combinations.
-    Strips abstract metaphors, focuses on concrete photorealistic scene.
-    """
-    # Cluster-specific safe anchors
+    """Simplified fallback prompt that stays under CLIP 77-token limit."""
     safe_anchors = {
-        "Space":    "Indian rocket engineer at ISRO control centre, large screens showing satellite data, modern facility",
-        "AI":       "Indian software engineer at computer screen showing code, modern tech office, Bengaluru",
-        "Gadgets":  "Indian consumer holding new smartphone, modern retail store, contemporary Indian setting",
-        "DeepTech": "Indian scientist in laboratory with equipment, clean modern research facility",
-        "GreenTech":"Indian solar farm with technicians, rows of solar panels, rural India, natural daylight",
-        "Startups": "Indian entrepreneur in meeting room, startup office, whiteboard, young professionals",
+        "Space":    "ISRO Indian rocket engineers at mission control, large monitors, Bengaluru facility",
+        "AI":       "Indian software engineers at workstations, modern tech office, Bengaluru",
+        "Gadgets":  "Indian consumer with new smartphone, modern retail store, urban India",
+        "DeepTech": "Indian scientist with laboratory equipment, clean research facility, India",
+        "GreenTech":"Solar farm technicians, rows of solar panels, rural India, clear sky",
+        "Startups": "Indian entrepreneurs in modern startup office, whiteboard session, Bengaluru",
     }
-    anchor = safe_anchors.get(cluster, "photorealistic modern India, Indian professionals at work")
-    # Keep first 60 chars of original for context, add safe anchor
-    snippet = original_prompt[:60].split(",")[0].strip()
-    return f"{anchor}, context: {snippet}, natural daylight, sharp focus, no text"
+    anchor = safe_anchors.get(cluster, "Indian professionals at work, modern India")
+    # Short snippet from original — max 30 chars to stay under CLIP limit
+    snippet = original_prompt[:30].split(",")[0].strip()
+    return f"{anchor}, {snippet}, natural daylight, sharp focus, no text"
 
 IMG_WIDTH        = 864
 IMG_HEIGHT       = 1536
@@ -372,7 +364,16 @@ def _try_flux(prompt: str, output_path: str) -> bool:
     import torch
     from diffusers import FluxPipeline
 
-    full_prompt = f"{STYLE_PREFIX} {_sanitize_prompt(prompt)}"
+    sanitized = _sanitize_prompt(prompt)
+
+    # CLIP hard limit: 77 tokens ≈ ~200 chars total (including STYLE_PREFIX)
+    # Truncate the raw prompt BEFORE prepending the prefix
+    # STYLE_PREFIX ≈ 60 chars, so leave ~140 chars for the actual prompt
+    if len(sanitized) > 140:
+        sanitized = sanitized[:137] + "..."
+        print(f"  Prompt truncated to 140 chars for CLIP 77-token limit")
+
+    full_prompt = f"{STYLE_PREFIX} {sanitized}"
     print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
 
     torch.cuda.empty_cache()
