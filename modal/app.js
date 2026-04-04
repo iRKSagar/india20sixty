@@ -1839,19 +1839,20 @@ function renderAnalytics() {
   var sorted = rows.slice().sort(function(a, b) { return b.score - a.score; });
   var vg = document.getElementById('video-grid');
   if (vg) vg.innerHTML = sorted.map(function(r) {
-    var job = analyticsJobs.find(function(j) { return j.id === r.video_id; }) || {};
-    var hasYt = job.youtube_id && job.youtube_id !== 'TEST_MODE';
-    return '<div class="video-card"><div class="video-thumb">\uD83C\uDFAC</div><div class="video-body">'
-      + '<div class="video-topic">' + (job.topic || 'Unknown') + '</div>'
-      + '<div class="video-stats"><span>\uD83D\uDC41 <b>' + fmt(r.youtube_views || 0) + '</b></span>'
-      + '<span>\u2764 <b>' + fmt(r.youtube_likes || 0) + '</b></span></div>'
-      + '<div style="font-family:var(--mono);font-size:.68rem;font-weight:600;color:var(--yellow)">' + fmt(r.score || 0) + '</div>'
-      + (hasYt ? '<a class="video-link" href="https://youtube.com/watch?v=' + job.youtube_id + '" target="_blank">&#9654; Watch</a>' : '')
+    var hasYt = r.youtube_id && r.youtube_id !== 'TEST_MODE';
+    var cat = CATS[r.cluster] || { color:'var(--muted)', emoji:'📹', label: r.cluster || '' };
+    return '<div class="video-card"><div class="video-thumb" style="font-size:1.5rem;display:flex;align-items:center;justify-content:center;background:var(--surface2)">' + cat.emoji + '</div><div class="video-body">'
+      + '<div class="video-topic">' + (r.topic || 'Unknown') + '</div>'
+      + '<div style="font-size:.6rem;color:' + cat.color + ';margin-bottom:4px">' + cat.label + '</div>'
+      + '<div class="video-stats"><span>👁 <b>' + fmt(r.youtube_views || 0) + '</b></span>'
+      + '<span>❤ <b>' + fmt(r.youtube_likes || 0) + '</b></span>'
+      + '<span>💬 <b>' + fmt(r.comment_count || 0) + '</b></span></div>'
+      + '<div style="font-family:var(--mono);font-size:.68rem;font-weight:600;color:var(--yellow)">Score: ' + fmt(r.score || 0) + '</div>'
+      + (hasYt ? '<a class="video-link" href="https://youtube.com/watch?v=' + r.youtube_id + '" target="_blank">▶ Watch</a>' : '<span style="font-family:var(--mono);font-size:.6rem;color:var(--muted)">Not published yet</span>')
       + '</div></div>';
   }).join('');
   function perfRow(r) {
-    var j = analyticsJobs.find(function(x) { return x.id === r.video_id; }) || {};
-    return '<div class="perf-row"><div class="perf-topic">' + (j.topic || '-') + '</div>'
+    return '<div class="perf-row"><div class="perf-topic">' + (r.topic || '-') + '</div>'
       + '<div class="perf-num pn-views">' + fmt(r.youtube_views || 0) + '</div>'
       + '<div class="perf-num pn-likes">' + fmt(r.youtube_likes || 0) + '</div>'
       + '<div class="perf-num pn-score">' + fmt(r.score || 0) + '</div></div>';
@@ -1979,11 +1980,41 @@ function closeLogs() {
 
 function switchLogsTab(name) {
   logsTab = name;
-  ['failed','history'].forEach(function(n) {
+  ['failed','history','modal'].forEach(function(n) {
     var t = document.getElementById('ltab-' + n);
     if (t) t.classList.toggle('active', n === name);
   });
-  renderLogs();
+  if (name === 'modal') loadModalLogs();
+  else renderLogs();
+}
+
+async function loadModalLogs(jobId) {
+  var el = document.getElementById('logs-list');
+  if (el) el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);font-family:var(--mono);font-size:.75rem">Loading Modal logs...</div>';
+  try {
+    var qs = jobId ? '?job_id=' + jobId + '&limit=100' : '?limit=100';
+    var r  = await fetch(API_BASE + '/modal-logs' + qs);
+    var d  = await r.json();
+    var logs = d.logs || [];
+    if (!logs.length) {
+      if (el) el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">No logs found.</div>';
+      return;
+    }
+    if (el) el.innerHTML = '<div style="font-family:var(--mono);font-size:.68rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:70vh;overflow-y:auto">'
+      + logs.map(function(l) {
+          var ts = l.created_at ? new Date(l.created_at).toLocaleTimeString() : '';
+          var isErr = /fail|error|exception/i.test(l.message);
+          var isOk  = /✓|complete|success|done|published/i.test(l.message);
+          var col   = isErr ? 'var(--red)' : isOk ? 'var(--green)' : 'var(--text)';
+          return '<div style="padding:2px 0;border-bottom:1px solid var(--border);color:' + col + '">'
+            + '<span style="color:var(--muted);margin-right:8px">' + ts + '</span>'
+            + (l.job_id ? '<span style="color:var(--accent);margin-right:6px">[' + l.job_id.slice(0,8) + ']</span>' : '')
+            + esc(l.message) + '</div>';
+        }).join('')
+      + '</div>';
+  } catch(e) {
+    if (el) el.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:10px">Error: ' + e.message + '</div>';
+  }
 }
 
 async function loadLogs() {
@@ -2135,10 +2166,16 @@ async function loadLongformJobs() {
         + '<div style="flex:1;min-width:0">'
         + '<div style="font-size:.82rem;font-weight:600;margin-bottom:2px">' + esc(j.topic) + '</div>'
         + '<div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">' + j.cluster + ' &bull; ' + durStr + ' &bull; ' + new Date(j.created_at).toLocaleDateString() + '</div>'
+        + (j.error ? '<div style="font-family:var(--mono);font-size:.58rem;color:var(--red);margin-top:2px">' + esc(j.error.slice(0,80)) + '</div>' : '')
         + '</div>'
         + (ytLink ? '<div>' + ytLink + '</div>' : '')
         + '<div style="font-family:var(--mono);font-size:.68rem;color:' + statusColor + ';font-weight:600">' + j.status + '</div>'
-        + '<button class="btn btn-sm" style="font-size:.7rem" onclick="openLfStudio(\'' + j.id + '\')">Open Studio</button>'
+        + '<button class="btn btn-sm" style="font-size:.7rem" data-jid="' + j.id + '" onclick="openLfStudio(this.dataset.jid)">Studio</button>'
+        + (j.status === 'failed' || j.status === 'scripting'
+          ? '<button class="btn btn-sm" style="font-size:.7rem;background:rgba(0,229,255,.1);color:var(--accent)" data-jid="' + j.id + '" data-topic="' + esc(j.topic) + '" data-cluster="' + j.cluster + '" data-dur="' + (j.target_duration||420) + '" onclick="retryLfScript(this)">&#8635; Retry</button>'
+          : '')
+        + '<button class="btn btn-sm" style="font-size:.7rem;background:rgba(100,100,200,.1);color:var(--muted)" data-jid="' + j.id + '" onclick="viewJobLogs(this.dataset.jid)">&#128196; Logs</button>'
+        + '<button class="btn btn-sm" style="font-size:.7rem;background:rgba(255,82,82,.1);color:var(--red)" data-jid="' + j.id + '" onclick="killLfJob(this.dataset.jid,this)">&times; Kill</button>'
         + '</div>';
     }).join('');
     if (completed.length && active.length) {
@@ -2163,6 +2200,55 @@ function closeLfStudio() {
   document.body.style.overflow = '';
   lfCurrentJobId = null;
   loadLongformJobs();
+}
+
+async function killLfJob(jobId, btn) {
+  if (!confirm('Kill this longform job?')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    var r = await fetch(API_BASE + '/longform/kill', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    showToast('Job killed');
+    loadLongformJobs();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '\u00d7 Kill'; }
+    alert('Failed: ' + e.message);
+  }
+}
+
+async function retryLfScript(btn) {
+  var jobId  = btn.dataset.jid;
+  var topic  = btn.dataset.topic;
+  var cluster= btn.dataset.cluster;
+  var dur    = parseInt(btn.dataset.dur) || 420;
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    var r = await fetch(API_BASE + '/longform/retry-script', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId, topic, cluster, target_duration: dur })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    showToast('Script generation restarted');
+    setTimeout(loadLongformJobs, 2000);
+  } catch(e) {
+    btn.disabled = false; btn.textContent = '\u8635 Retry';
+    alert('Failed: ' + e.message);
+  }
+}
+
+function viewJobLogs(jobId) {
+  openLogs();
+  logsTab = 'modal';
+  ['failed','history','modal'].forEach(function(n) {
+    var t = document.getElementById('ltab-' + n);
+    if (t) t.classList.toggle('active', n === 'modal');
+  });
+  loadModalLogs(jobId);
 }
 
 async function refreshLfStudio() {

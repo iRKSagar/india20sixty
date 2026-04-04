@@ -5,6 +5,7 @@ import requests
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from fastapi import Request
 
 # ==========================================
 # MODAL APP — LONGFORM PIPELINE
@@ -112,12 +113,18 @@ def ping_worker(job_id, segment_idx, event, payload):
 
 @app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def dispatch(data: dict):
+async def dispatch(request: Request):
     """
     Single entry point for all longform operations.
     Spawns the appropriate handler function async.
     Returns immediately with { status: started }.
     """
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+
     action = data.get("action", "")
     job_id = data.get("job_id", "")
 

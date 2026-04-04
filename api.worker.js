@@ -644,7 +644,7 @@ export default {
           created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
         });
         const lfUrl=env.LONGFORM_PIPELINE_URL||"";
-        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-script",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs})}).catch(e=>console.error("lf script:",e.message)));
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-script",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs})}).catch(e=>console.error("lf script:",e.message)));
         return cors({status:"created",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs});
       } catch(e){return cors({error:e.message},500);}
     }
@@ -652,6 +652,44 @@ export default {
     if (url.pathname === "/longform/jobs") {
       try { return cors(await sbGet(env,"longform_jobs?order=created_at.desc&limit=30")); }
       catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/kill" && request.method === "POST") {
+      try {
+        const {job_id} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        await sbPatch(env,"longform_jobs?id=eq."+job_id,
+          {status:"failed",error:"manually_killed",updated_at:new Date().toISOString()});
+        return cors({killed:true,job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/retry-script" && request.method === "POST") {
+      try {
+        const {job_id,topic,cluster,target_duration} = await request.json();
+        if (!job_id) return cors({error:"Missing job_id"},400);
+        const lfUrl = (env.LONGFORM_PIPELINE_URL||"").trim().replace(/\/$/,"");
+        if (!lfUrl) return cors({error:"LONGFORM_PIPELINE_URL not set"},500);
+        await sbPatch(env,"longform_jobs?id=eq."+job_id,
+          {status:"scripting",error:null,updated_at:new Date().toISOString()});
+        ctx.waitUntil(fetch(lfUrl,{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({action:"generate-script",job_id,topic,cluster,target_duration:target_duration||420}),
+          signal:AbortSignal.timeout(30000)
+        }).catch(e=>console.error("retry-script:",e.message)));
+        return cors({status:"started",job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/modal-logs" && request.method === "GET") {
+      try {
+        const job_id = url.searchParams.get("job_id") || "";
+        const limit  = parseInt(url.searchParams.get("limit") || "50");
+        let ep = "render_logs?order=created_at.desc&limit="+limit+"&select=job_id,message,created_at";
+        if (job_id) ep += "&job_id=eq."+job_id;
+        const logs = await sbGet(env,ep);
+        return cors({logs: logs.reverse()});
+      } catch(e){return cors({error:e.message,logs:[]},500);}
     }
 
     if (url.pathname.match(/^\/longform\/[a-f0-9-]{36}$/) && request.method === "GET") {
@@ -737,7 +775,7 @@ export default {
         if (!segs[0].script) return cors({error:"No script for this segment"},400);
         await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_voice",updated_at:new Date().toISOString()});
         const lfUrl=env.LONGFORM_PIPELINE_URL||"";
-        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-voice",job_id,segment_idx})}).catch(e=>console.error("seg voice:",e.message)));
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-voice",job_id,segment_idx})}).catch(e=>console.error("seg voice:",e.message)));
         return cors({status:"generating",job_id,segment_idx});
       } catch(e){return cors({error:e.message},500);}
     }
@@ -748,7 +786,7 @@ export default {
         if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
         await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_images",updated_at:new Date().toISOString()});
         const lfUrl=env.LONGFORM_PIPELINE_URL||"";
-        if (lfUrl) ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-images",job_id,segment_idx})}).catch(e=>console.error("seg img:",e.message)));
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-images",job_id,segment_idx})}).catch(e=>console.error("seg img:",e.message)));
         return cors({status:"generating",job_id,segment_idx});
       } catch(e){return cors({error:e.message},500);}
     }
@@ -763,7 +801,7 @@ export default {
         await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"rendering",updated_at:new Date().toISOString()});
         const lfUrl=env.LONGFORM_PIPELINE_URL||"";
         if (!lfUrl) return cors({error:"LONGFORM_PIPELINE_URL not set"},500);
-        ctx.waitUntil(fetch(lfUrl+"/dispatch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"render-full",job_id,publish_at:publish_at||null})}).catch(e=>console.error("lf render:",e.message)));
+        ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"render-full",job_id,publish_at:publish_at||null})}).catch(e=>console.error("lf render:",e.message)));
         return cors({status:"rendering",job_id});
       } catch(e){return cors({error:e.message},500);}
     }
