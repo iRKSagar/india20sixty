@@ -348,16 +348,17 @@ def generate_single_image(
         )
 
     # Step 2: Always insert to image_cache (with or without R2 URL)
-    # This ensures the image appears in the library even if R2 credentials are missing
     if SUPABASE_URL and tier_used != "R2Library":
         public_url = r2_url or ""
+        # Extract topic from job_id (format: job_id or job_id_segN)
+        topic_hint = job_id.replace("-","").replace("_","")[:20]
         _insert_image_cache(
             SUPABASE_URL, SUPABASE_ANON_KEY,
             job_id, r2_key, public_url, cluster,
             prompt, tier_used, job_type, scene_idx
         )
         if not r2_url:
-            print(f"  image_cache recorded without R2 URL — add R2 credentials to Modal secrets")
+            print(f"  ⚠ image_cache saved without R2 URL — R2 creds missing from Modal secrets")
 
     return {"success": True, "local_path": output_path, "tier_used": tier_used,
             "scene_idx": scene_idx, "r2_url": r2_url, "image_bytes": image_bytes}

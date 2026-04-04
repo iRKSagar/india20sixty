@@ -203,32 +203,12 @@ def _generate_script(api_key: str, topic: str, fact_package: dict, subscribe_cta
     if fact_package and fact_package.get("found"):
         fact_section = f"\nREAL FACT ANCHOR:\nFact: {fact_package['key_fact']}\nSource: {fact_package['source']}"
 
+    from datetime import datetime as _dt
+    today = _dt.utcnow().strftime("%B %Y")  # e.g. "April 2026"
     cta = "\n- End with exactly: Follow India20Sixty for daily India tech updates." if subscribe_cta else ""
 
     prompt = f"""Write a YouTube Shorts voiceover script for India20Sixty — India's near future channel.
-
-Topic: {topic}
-{fact_section}
-
-STRICT RULES:
-- Maximum 55 words total.
-- Indian English. Clear, confident, modern. Not American or British.
-- NO Hindi words. NO Hinglish. Pure English only.
-- Max 12 words per sentence.
-- Open with a fact that stops the scroll.
-- NEVER start with "Fact:" — state facts directly.{cta}
-
-6 sentences:
-1. Hook — the real fact or number
-2. What is happening right now in India
-3. The scale — money, reach, jobs, impact
-4. What this means for ordinary Indians
-5. The honest challenge or twist
-6. One debate question to drive comments
-
-Return ONLY the script as plain text. No labels. No JSON."""
-
-    prompt = f"""Write a YouTube Shorts voiceover script for India20Sixty — India's near future channel.
+Today is {today}. Treat events before {today} as past history — use past tense for them.
 
 Topic: {topic}
 {fact_section}
@@ -239,6 +219,7 @@ STRICT RULES:
 - NO Hindi words. NO Hinglish. Pure English only.
 - Max 12 words per sentence.
 - Open with a fact that stops the scroll.
+- Use correct tense — past for what already happened, future for what is coming.
 - NEVER start with "Fact:" — state facts directly.{cta}
 
 6 sentences (each 8-10 words):

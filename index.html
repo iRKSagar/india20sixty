@@ -783,6 +783,19 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
           <div id="lf-pre-engine-voice" style="color:var(--green)">&#9889; Chatterbox — free</div>
         </div>
       </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button id="lf-mode-auto" onclick="setLfMode('auto')"
+          style="flex:1;padding:12px;border-radius:8px;border:2px solid var(--accent);background:rgba(0,229,255,.08);cursor:pointer;text-align:left">
+          <div style="font-size:.82rem;font-weight:700;color:var(--accent)">🤖 Full Auto</div>
+          <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:2px">Script → AI Images → Voice → Render → Publish</div>
+        </button>
+        <button id="lf-mode-manual" onclick="setLfMode('manual')"
+          style="flex:1;padding:12px;border-radius:8px;border:2px solid var(--border);background:transparent;cursor:pointer;text-align:left">
+          <div style="font-size:.82rem;font-weight:700;color:var(--text)">🎨 Library Images</div>
+          <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:2px">Script → Pick images from library → Voice → Render</div>
+        </button>
+      </div>
+      <input type="hidden" id="lf-auto-mode" value="true">
       <button class="btn btn-primary" style="width:100%" onclick="createLongformJob()">&#127916; Create Long-form Video</button>
       <div id="lf-create-status" style="margin-top:8px;font-family:var(--mono);font-size:.7rem;color:var(--muted)"></div>
     </div>

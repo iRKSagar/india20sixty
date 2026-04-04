@@ -94,17 +94,21 @@ def log(job_id, msg):
 def ping_worker(job_id, segment_idx, event, payload):
     worker_url = os.environ.get("WORKER_URL", "")
     if not worker_url:
+        print(f"  ping_worker SKIP — WORKER_URL not set (event={event})")
         return
     try:
-        requests.post(
+        r = requests.post(
             worker_url.rstrip("/") + "/longform/webhook",
             headers={"Content-Type": "application/json"},
             json={"job_id": job_id, "segment_idx": segment_idx,
                   "event": event, "payload": payload},
-            timeout=10,
+            timeout=15,
         )
+        print(f"  ping_worker {event} → {r.status_code}")
+        if not r.ok:
+            print(f"  ping_worker error body: {r.text[:200]}")
     except Exception as e:
-        print(f"  Webhook ping failed (non-fatal): {e}")
+        print(f"  ping_worker FAILED (event={event}): {e}")
 
 
 # ==========================================
@@ -136,13 +140,13 @@ async def dispatch(request: Request):
     print(f"[dispatch] action={action} job={job_id}")
 
     if action == "generate-script":
-        _handle_generate_script.spawn(data)
+        await _handle_generate_script.spawn.aio(data)
     elif action == "generate-segment-voice":
-        _handle_segment_voice.spawn(data)
+        await _handle_segment_voice.spawn.aio(data)
     elif action == "generate-segment-images":
-        _handle_segment_images.spawn(data)
+        await _handle_segment_images.spawn.aio(data)
     elif action == "render-full":
-        _handle_render_full.spawn(data)
+        await _handle_render_full.spawn.aio(data)
     else:
         return {"status": "error", "message": f"Unknown action: {action}"}
 
@@ -171,6 +175,36 @@ def _handle_generate_script(data: dict):
         )
         sb_patch(f"longform_jobs?id=eq.{job_id}",
                  {"mood": result["mood"], "updated_at": datetime.utcnow().isoformat()})
+
+        # Insert segments directly — more reliable than webhook ping
+        print(f"  Inserting {len(result['segments'])} segments into Supabase...")
+        for s in result["segments"]:
+            try:
+                sb_insert("longform_segments", {
+                    "job_id":         job_id,
+                    "segment_idx":    s["segment_idx"],
+                    "segment_type":   s["type"],
+                    "label":          s["label"],
+                    "script":         s["script"],
+                    "duration_target":s["duration_target"],
+                    "image_prompts":  s.get("image_prompts", []),
+                    "caption_style":  s.get("caption_style", "subtitle"),
+                    "transition_out": s.get("transition_out", "dissolve"),
+                    "media":          [],
+                    "voice_r2_url":   None,
+                    "voice_source":   None,
+                    "status":         "has_script",
+                    "created_at":     datetime.utcnow().isoformat(),
+                })
+                print(f"    Segment {s['segment_idx']} [{s['label']}] inserted")
+            except Exception as se:
+                print(f"    Segment {s['segment_idx']} insert failed: {se}")
+
+        # Update job status to media_collecting
+        sb_patch(f"longform_jobs?id=eq.{job_id}",
+                 {"status": "media_collecting", "updated_at": datetime.utcnow().isoformat()})
+
+        # Also ping worker as backup (non-critical)
         ping_worker(job_id, None, "script_ready", {
             "segments": [{
                 "segment_idx":    s["segment_idx"],
@@ -182,6 +216,18 @@ def _handle_generate_script(data: dict):
             } for s in result["segments"]],
         })
         log(job_id, f"Script done: {len(result['segments'])} segments, mood={result['mood']}")
+
+        # AUTO MODE — immediately spawn voice + images for all segments
+        auto_mode = data.get("auto", False)
+        if auto_mode:
+            log(job_id, "Auto mode: spawning voice + images for all segments")
+            for s in result["segments"]:
+                try:
+                    _handle_segment_voice.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
+                    _handle_segment_images.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
+                    print(f"  Spawned voice+images for seg {s['segment_idx']}")
+                except Exception as ae:
+                    print(f"  Auto spawn failed seg {s['segment_idx']}: {ae}")
     except Exception as e:
         msg = str(e)[:400]
         print(f"  Script failed: {msg}")

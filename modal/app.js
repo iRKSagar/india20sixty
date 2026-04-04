@@ -2117,22 +2117,26 @@ function updateLfPrecursor() {
 async function createLongformJob() {
   var topic   = (document.getElementById('lf-topic').value || '').trim();
   var cluster = document.getElementById('lf-cluster').value || 'Space';
+  var autoEl  = document.getElementById('lf-auto-mode');
+  var autoMode = autoEl ? autoEl.checked : true;
   if (!topic) { alert('Enter a topic first'); return; }
   var st = document.getElementById('lf-create-status');
-  st.textContent = 'Creating job...';
+  st.textContent = autoMode ? 'Creating job (Full Auto)...' : 'Creating job (Manual)...';
   st.style.color = 'var(--muted)';
   try {
     var r = await fetch(API_BASE + '/longform/create', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ topic: topic, cluster: cluster, target_duration: lfDurMins * 60 })
+      body: JSON.stringify({ topic: topic, cluster: cluster, target_duration: lfDurMins * 60, auto: autoMode })
     });
     var d = await r.json();
     if (d.job_id) {
-      st.textContent = 'Job created — script generating (~30s)';
-      st.style.color = 'var(--accent)';
+      st.textContent = autoMode
+        ? 'Full Auto started — script → voice → images → render → publish (~15 min)'
+        : 'Manual job created — open Studio to control each segment';
+      st.style.color = 'var(--green)';
       document.getElementById('lf-topic').value = '';
-      setTimeout(function() { loadLongformJobs(); st.textContent = ''; }, 4000);
+      setTimeout(function() { loadLongformJobs(); st.textContent = ''; }, 5000);
     } else {
       st.textContent = 'Error: ' + (d.error || 'unknown');
       st.style.color = 'var(--red)';
@@ -2154,9 +2158,21 @@ async function loadLongformJobs() {
       return;
     }
     // Show only non-complete jobs in Create panel; complete ones are in logs
-    var active = jobs.filter(function(j) { return j.status !== 'complete'; });
+    var active    = jobs.filter(function(j) { return j.status !== 'complete' && j.status !== 'failed'; });
+    var failed    = jobs.filter(function(j) { return j.status === 'failed'; });
     var completed = jobs.filter(function(j) { return j.status === 'complete'; });
-    el.innerHTML = (active.length ? active : jobs).map(function(j) {
+    var showJobs  = active.length ? active : (completed.length ? completed : []);
+
+    // Clear killed button if there are failed jobs
+    var clearBtn = failed.length
+      ? '<button class="btn btn-sm" style="font-size:.68rem;background:rgba(255,82,82,.1);color:var(--red);margin-bottom:10px" onclick="clearKilledLfJobs()">&#128465; Clear ' + failed.length + ' killed job(s)</button><br>'
+      : '';
+
+    if (!showJobs.length && !failed.length) {
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);font-family:var(--mono);font-size:.75rem">No long-form jobs yet.</div>';
+      return;
+    }
+    el.innerHTML = clearBtn + showJobs.map(function(j) {
       var statusColor = {draft:'#888',scripting:'var(--yellow)',media_collecting:'#4fc3f7',
         ready_to_render:'var(--purple)',rendering:'var(--accent)',complete:'#69f0ae',failed:'var(--red)'}[j.status]||'#888';
       var durStr = j.target_duration ? Math.round(j.target_duration/60)+'m' : '?';
@@ -2185,6 +2201,17 @@ async function loadLongformJobs() {
   } catch(e) {
     el.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:10px">Error: ' + e.message + '</div>';
   }
+}
+
+async function clearKilledLfJobs() {
+  if (!confirm('Permanently delete all killed/failed longform jobs?')) return;
+  try {
+    var r = await fetch(API_BASE + '/longform/clear-failed', { method: 'POST' });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    showToast('Cleared ' + (d.deleted || 0) + ' failed jobs');
+    loadLongformJobs();
+  } catch(e) { alert('Failed: ' + e.message); }
 }
 
 async function openLfStudio(jobId) {
@@ -2470,4 +2497,3 @@ function setTheme(mode) {
   var saved = localStorage.getItem('i20_theme') || 'dark';
   if (saved === 'light') document.body.classList.add('light-mode');
 })();
-

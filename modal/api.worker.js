@@ -634,18 +634,22 @@ export default {
 
     if (url.pathname === "/longform/create" && request.method === "POST") {
       try {
-        const {topic,cluster,target_duration}=await request.json().catch(()=>({}));
+        const {topic,cluster,target_duration,auto}=await request.json().catch(()=>({}));
         if (!topic) return cors({error:"Missing topic"},400);
         const safeCluster=(cluster&&ALL_CATS.includes(cluster))?cluster:"Space";
         const durSecs=Math.min(720,Math.max(180,(parseInt(target_duration)||420)));
+        const autoMode = auto !== false; // default true — full auto
         const job=await sbInsert(env,"longform_jobs",{
           topic:topic.trim().slice(0,300),cluster:safeCluster,
           status:"scripting",target_duration:durSecs,
+          auto_mode:autoMode,
           created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
         });
         const lfUrl=env.LONGFORM_PIPELINE_URL||"";
-        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-script",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs})}).catch(e=>console.error("lf script:",e.message)));
-        return cors({status:"created",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs});
+        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({action:"generate-script",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs,auto:autoMode})
+        }).catch(e=>console.error("lf script:",e.message)));
+        return cors({status:"created",job_id:job.id,topic,cluster:safeCluster,target_duration:durSecs,auto:autoMode});
       } catch(e){return cors({error:e.message},500);}
     }
 
@@ -661,6 +665,22 @@ export default {
         await sbPatch(env,"longform_jobs?id=eq."+job_id,
           {status:"failed",error:"manually_killed",updated_at:new Date().toISOString()});
         return cors({killed:true,job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/clear-failed" && request.method === "POST") {
+      try {
+        // Get failed job ids first
+        const failed = await sbGet(env,"longform_jobs?status=eq.failed&select=id");
+        let deleted = 0;
+        for (const j of failed) {
+          // Delete segments first
+          await sbDelete(env,"longform_segments?job_id=eq."+j.id).catch(()=>{});
+          // Delete job
+          await sbDelete(env,"longform_jobs?id=eq."+j.id).catch(()=>{});
+          deleted++;
+        }
+        return cors({deleted});
       } catch(e){return cors({error:e.message},500);}
     }
 
@@ -717,6 +737,18 @@ export default {
         await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{script,updated_at:new Date().toISOString()});
         await _updateLongformStatus(env,job_id);
         return cors({status:"updated",job_id,segment_idx});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
+    if (url.pathname === "/longform/segment/set-media" && request.method === "POST") {
+      try {
+        const {job_id,segment_idx,media}=await request.json();
+        if (!job_id||segment_idx==null||!media) return cors({error:"Missing fields"},400);
+        const newStatus = media.length > 0 ? "has_media" : "has_script";
+        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,
+          {media,status:newStatus,updated_at:new Date().toISOString()});
+        await _updateLongformStatus(env,job_id);
+        return cors({ok:true,job_id,segment_idx,media_count:media.length});
       } catch(e){return cors({error:e.message},500);}
     }
 
@@ -976,4 +1008,26 @@ async function syncYouTubeAnalytics(env){
     console.log("Analytics synced:",rows.length,"videos");
   }catch(e){console.error("Analytics sync:",e.message);}
 }
-async function _updateLongformStatus(env,jobId){try{const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&select=status");if(!segs.length)return;const allReady=segs.every(s=>s.status==="ready");const allHaveMedia=segs.every(s=>["has_media","has_media_no_script","ready","generating_voice","generating_images"].includes(s.status));const newStatus=allReady?"ready_to_render":allHaveMedia?"media_collecting":"scripting";await sbPatch(env,"longform_jobs?id=eq."+jobId,{status:newStatus,updated_at:new Date().toISOString()});}catch(e){console.error("_updateLongformStatus:",e.message);}}
+async function _updateLongformStatus(env,jobId){
+  try{
+    const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&select=status,voice_r2_url,media");
+    if(!segs.length)return;
+    const allReady=segs.every(s=>s.status==="ready"||(s.voice_r2_url&&(s.media||[]).length>0));
+    const allHaveMedia=segs.every(s=>["has_media","ready","generating_voice","generating_images"].includes(s.status)||s.voice_r2_url||(s.media||[]).length>0);
+    const newStatus=allReady?"ready_to_render":allHaveMedia?"media_collecting":"scripting";
+    await sbPatch(env,"longform_jobs?id=eq."+jobId,{status:newStatus,updated_at:new Date().toISOString()});
+    // Auto-trigger render when all segments ready
+    if(allReady){
+      const jobs=await sbGet(env,"longform_jobs?id=eq."+jobId+"&select=auto_mode");
+      if(jobs.length&&jobs[0].auto_mode!==false){
+        const lfUrl=(env.LONGFORM_PIPELINE_URL||"").trim().replace(/\/$/,"");
+        if(lfUrl){
+          fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},
+            body:JSON.stringify({action:"render-full",job_id:jobId})
+          }).catch(e=>console.error("auto-render:",e.message));
+          console.log("Auto-render triggered for",jobId);
+        }
+      }
+    }
+  }catch(e){console.error("_updateLongformStatus:",e.message);}
+}
