@@ -909,29 +909,51 @@ Return ONLY valid JSON array:
 
   async scheduled(event, env, ctx) {
     const cron=event.cron;
+    console.log("Cron fired:", cron, new Date().toISOString());
+
+    // Every minute — queue processor + health pings
     if (cron==="* * * * *") {
       await processQueue(env,ctx);
       if (env.MODAL_HEALTH_URL) fetch(env.MODAL_HEALTH_URL).catch(()=>{});
       if (env.TOPIC_COUNCIL_HEALTH_URL) fetch(env.TOPIC_COUNCIL_HEALTH_URL).catch(()=>{});
     }
-    if (cron==="30 0,6,12 * * *") {
+
+    // Video creation — matches exactly what Cloudflare has registered:
+    // 30 2 * * *  = 2:30 AM UTC = 8:00 AM IST
+    // 0 8 * * *   = 8:00 AM UTC = 1:30 PM IST
+    // 30 15 * * * = 3:30 PM UTC = 9:00 PM IST
+    const isVideoCron = cron==="30 2 * * *" || cron==="0 8 * * *" || cron==="30 15 * * *";
+    if (isVideoCron) {
       try {
-        const rows=await sbGet(env,"system_state?id=eq.main&select=videos_per_day,last_cluster");
-        const vpd=rows[0]?.videos_per_day||1; const last=rows[0]?.last_cluster||"";
-        const utcH=new Date().getUTCHours();
-        const fire=vpd===3||(vpd===2&&(utcH===0||utcH===12))||(vpd===1&&utcH===6);
-        if (fire) {
-          const t=await pickTopic(env,null,last);
-          const j=await createJob(t,env);
-          await upsertState(env,{last_cluster:t.category});
-          ctx.waitUntil(triggerRender(j,env));
-          console.log("Scheduled:",j.id,t.topic,t.category);
-        }
-      } catch(e){console.error("Scheduled:",e.message);}
+        const rows=await sbGet(env,"system_state?id=eq.main&select=videos_per_day,last_cluster,publish");
+        const s=rows[0]||{};
+        const vpd=s.videos_per_day||1;
+        const last=s.last_cluster||"";
+        if (s.publish===false) { console.log("Publish OFF — skipping"); return; }
+        // 1 vid/day: only 0 8 (1:30 PM IST)
+        // 2 vids/day: 30 2 + 30 15 (8 AM + 9 PM IST)
+        // 3 vids/day: all three slots
+        const shouldFire =
+          vpd===3 ||
+          (vpd===2 && (cron==="30 2 * * *" || cron==="30 15 * * *")) ||
+          (vpd===1 && cron==="0 8 * * *");
+        if (!shouldFire) { console.log("Skip: vpd="+vpd+" cron="+cron); return; }
+        const t=await pickTopic(env,null,last);
+        const j=await createJob(t,env);
+        await upsertState(env,{last_cluster:t.category});
+        ctx.waitUntil(triggerRender(j,env));
+        console.log("Video scheduled:",j.id,t.topic,t.category);
+      } catch(e){console.error("Scheduled error:",e.message);}
     }
-    if (cron==="30 20 * * *") {
+
+    // Analytics sync + replenish — fires on the 2:30 AM UTC slot (quietest time)
+    if (cron==="30 2 * * *") {
       ctx.waitUntil(syncYouTubeAnalytics(env));
-      try { const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id"); if(av.length<5)ctx.waitUntil(triggerReplenish(env,12,null)); } catch(e){}
+      try {
+        const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id");
+        if(av.length<5) ctx.waitUntil(triggerReplenish(env,12,null));
+        console.log("Topics ready:", av.length);
+      } catch(e){}
     }
   }
 };
