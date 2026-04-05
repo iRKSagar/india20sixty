@@ -410,17 +410,28 @@ def _handle_segment_voice(data: dict):
     except Exception as e:
         msg = str(e)[:400]
         print(f"  Segment voice failed: {msg}")
-        sb_patch(
-            f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
-            {"status": "voice_failed", "updated_at": datetime.utcnow().isoformat()}
-        )
+        # If it timed out, retry once automatically
+        if "timeout" in msg.lower() or "cancelled" in msg.lower():
+            print(f"  Timeout detected — scheduling retry for seg {segment_idx}")
+            sb_patch(
+                f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+                {"status": "has_script", "updated_at": datetime.utcnow().isoformat()}
+            )
+            # Re-spawn self after 5s
+            import time; time.sleep(5)
+            _handle_segment_voice.spawn({"job_id": job_id, "segment_idx": segment_idx})
+        else:
+            sb_patch(
+                f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+                {"status": "voice_failed", "updated_at": datetime.utcnow().isoformat()}
+            )
 
 
 # ==========================================
 # HANDLER: GENERATE SEGMENT IMAGES
 # ==========================================
 
-@app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=300)
+@app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=900)
 def _handle_segment_images(data: dict):
     job_id      = data["job_id"]
     segment_idx = data.get("segment_idx")
@@ -513,10 +524,16 @@ def _handle_render_full(data: dict):
 
         segments_data = sb_get(
             f"longform_segments?job_id=eq.{job_id}&order=segment_idx.asc"
-            "&select=segment_idx,type,label,script,media,voice_r2_url,"
+            "&select=segment_idx,segment_type,label,script,media,voice_r2_url,"
             "caption_style,transition_out,duration_target"
         )
-        if not segments_data: raise Exception("No segments found")
+        if not segments_data:
+            # Try without optional columns in case of schema mismatch
+            segments_data = sb_get(
+                f"longform_segments?job_id=eq.{job_id}&order=segment_idx.asc"
+                "&select=segment_idx,segment_type,label,script,media,voice_r2_url,duration_target"
+            )
+        if not segments_data: raise Exception(f"No segments found for job {job_id}")
 
         mood = job.get("mood", "hopeful_future")
         render_segments = []
@@ -538,12 +555,12 @@ def _handle_render_full(data: dict):
 
             render_segments.append({
                 "segment_idx":    seg_idx,
-                "type":           seg.get("type","context"),
-                "label":          seg.get("label",""),
-                "voice_url":      voice_url,      # R2 URL — renderer downloads
-                "media_urls":     media_urls,      # R2 URLs — renderer downloads
-                "caption_style":  seg.get("caption_style","subtitle"),
-                "transition_out": seg.get("transition_out","dissolve"),
+                "type":           seg.get("segment_type", seg.get("type", "context")),
+                "label":          seg.get("label", ""),
+                "voice_url":      voice_url,
+                "media_urls":     media_urls,
+                "caption_style":  seg.get("caption_style", "subtitle"),
+                "transition_out": seg.get("transition_out", "dissolve"),
             })
 
         log(job_id, f"Rendering {len(render_segments)} segments")
