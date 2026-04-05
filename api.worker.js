@@ -92,18 +92,6 @@ export default {
         return cors({status:"job_created",job_id:job.id,topic:t.topic,category:t.cluster});
       } catch(e) { return cors({error:e.message},500); }
     }
-
-    if (url.pathname === "/set-mode" && request.method === "POST") {
-      try {
-        const {mode} = await request.json();
-        const validMode = ["auto","stage"].includes(mode)?mode:"auto";
-        const updates = {mode:validMode, updated_at:new Date().toISOString()};
-        if (validMode==="auto") { updates.publish=true; updates.voice_mode="ai"; } else { updates.publish=false; }
-        await upsertState(env, updates);
-        return cors({mode:validMode});
-      } catch(e) { return cors({error:e.message},500); }
-    }
-
     if (url.pathname === "/settings" && request.method === "GET") {
       try {
         const rows = await sbGet(env,"system_state?id=eq.main&select=mode,voice_mode,publish,videos_per_day,subscribe_cta,long_form,cross_post,priority_a,image_engine,voice_engine");
@@ -221,23 +209,6 @@ export default {
         return cors({status:"rejected",job_id,topic_restored:true});
       } catch(e) { return cors({error:e.message},500); }
     }
-
-    if (url.pathname === "/upload-image" && request.method === "POST") {
-      try {
-        if (!env.VIDEOS_BUCKET) return cors({error:"R2 not bound"},500);
-        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
-        const topic=url.searchParams.get("topic")||"uploaded";
-        const filename=url.searchParams.get("filename")||("img_"+Date.now()+".png");
-        const topicSlug=topic.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40);
-        const key="images/"+topicSlug+"/"+filename;
-        const blob=await request.arrayBuffer();
-        await env.VIDEOS_BUCKET.put(key,blob,{httpMetadata:{contentType:request.headers.get("content-type")||"image/png"}});
-        const publicUrl=r2Base+"/"+key;
-        await sbInsert(env,"image_cache",{topic,r2_key:key,public_url:publicUrl,scene_idx:0,created_at:new Date().toISOString()}).catch(()=>{});
-        return cors({status:"uploaded",key,url:publicUrl});
-      } catch(e) { return cors({error:e.message},500); }
-    }
-
     if (url.pathname === "/image-library/backfill" && request.method === "POST") {
       try {
         if (!env.VIDEOS_BUCKET || typeof env.VIDEOS_BUCKET.list !== "function")
@@ -432,47 +403,14 @@ export default {
 
     if (url.pathname === "/replenish" && request.method === "POST") {
       const body=await request.json().catch(()=>({}));
-      try {
-        const tcUrl=(env.TOPIC_COUNCIL_URL||"").trim();
-        if (!tcUrl) return cors({error:"TOPIC_COUNCIL_URL not set in Cloudflare variables"},500);
-        // Fire replenish in background — topic council takes 60-90s, longer than CF 30s limit
-        ctx.waitUntil(
-          fetch(tcUrl, {
-            method:"POST",
-            headers:{"content-type":"application/json"},
-            body:JSON.stringify({action:"replenish",target:body.target||12,categories:body.categories||null}),
-            signal:AbortSignal.timeout(120000)
-          }).then(async r => {
-            const txt = await r.text().catch(()=>"");
-            console.log("Replenish result:", r.status, txt.slice(0,200));
-          }).catch(e => console.error("Replenish bg error:", e.message))
-        );
-        // Return immediately — don't wait for 90s council response
-        return cors({status:"replenishing", message:"Topic council is running. Topics will appear in ~60s. Refresh the Topics tab."});
-      } catch(e){
-        return cors({error:e.message},500);
-      }
-    }
+      const cats = (body.categories||ALL_CATS).filter(c=>ALL_CATS.includes(c));
+      const target = parseInt(body.target)||12;
+      if(!env.OPENAI_API_KEY) return cors({error:"OPENAI_API_KEY not set"},500);
 
-    if (url.pathname === "/publish-state") {
-      if (request.method==="GET") { try { const r=await sbGet(env,"system_state?id=eq.main&select=publish"); return cors({publish:r[0]?.publish===true}); } catch(e){return cors({publish:false});} }
-      if (request.method==="POST") { try { const {publish}=await request.json(); await upsertState(env,{publish:!!publish}); return cors({publish:!!publish}); } catch(e){return cors({error:e.message},500);} }
+      // Run replenish in background — GPT scoring takes 60-90s for 12 topics
+      ctx.waitUntil(_runReplenish(env, cats, target));
+      return cors({status:"replenishing", message:"Generating "+target+" topics for: "+(cats.join(", "))+". Refresh in ~90s."});
     }
-
-    if (url.pathname === "/voice-mode") {
-      if (request.method==="GET") { try { const r=await sbGet(env,"system_state?id=eq.main&select=voice_mode"); return cors({voice_mode:r[0]?.voice_mode||"ai"}); } catch(e){return cors({voice_mode:"ai"});} }
-      if (request.method==="POST") { try { const {voice_mode}=await request.json(); const m=["ai","human"].includes(voice_mode)?voice_mode:"ai"; await upsertState(env,{voice_mode:m}); return cors({voice_mode:m}); } catch(e){return cors({error:e.message},500);} }
-    }
-
-    if (url.pathname === "/set-schedule" && request.method === "POST") {
-      try { const {videos_per_day}=await request.json(); const vpd=Math.min(3,Math.max(1,parseInt(videos_per_day)||1)); await upsertState(env,{videos_per_day:vpd}); return cors({videos_per_day:vpd}); }
-      catch(e){return cors({error:e.message},500);}
-    }
-    if (url.pathname === "/get-schedule") {
-      try { const r=await sbGet(env,"system_state?id=eq.main&select=videos_per_day"); return cors({videos_per_day:r[0]?.videos_per_day||1}); }
-      catch(e){return cors({videos_per_day:1});}
-    }
-
     if (url.pathname === "/kill-incomplete" && request.method === "POST") {
       try {
         const stuck=await sbGet(env,"jobs?status=in.(pending,processing,images,voice,render,upload)&select=id,topic,cluster");
@@ -543,19 +481,6 @@ export default {
       try { return cors(await sbGet(env,"jobs?status=eq.cbdp&order=created_at.desc&select=id,topic,cluster,script_package,video_r2_url,created_at,council_score,error")); }
       catch(e){return cors({error:e.message},500);}
     }
-
-    if (url.pathname === "/retry-upload" && request.method === "POST") {
-      try {
-        const {job_id}=await request.json();
-        if (!job_id) return cors({error:"Missing job_id"},400);
-        const triggerUrl=(env.RENDER_PIPELINE_URL||"").trim().replace(/\/$/,"");
-        await sbPatch(env,"jobs?id=eq."+job_id,{status:"upload",error:null,updated_at:new Date().toISOString()});
-        ctx.waitUntil(fetch(triggerUrl,{method:"POST",headers:{"content-type":"application/json"},
-          body:JSON.stringify({action:"retry-upload",job_id})}).catch(e=>console.error("retry:",e.message)));
-        return cors({status:"retry_triggered",job_id});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
     if (url.pathname === "/upload-voice" && request.method === "POST") {
       try {
         const jobId=url.searchParams.get("job_id");
@@ -644,17 +569,6 @@ export default {
         return cors({failed,complete});
       } catch(e) { return cors({error:e.message},500); }
     }
-
-    if (url.pathname === "/mark-cbdp" && request.method === "POST") {
-      try {
-        const failed=await sbGet(env,"jobs?status=eq.failed&select=id,error,script_package");
-        const kw=["400","401","403","youtube","upload","quota","invaliddescription","bad request"];
-        let marked=0;
-        for (const j of failed) { if (kw.some(k=>(j.error||"").toLowerCase().includes(k))&&j.script_package) { await sbPatch(env,"jobs?id=eq."+j.id,{status:"cbdp",updated_at:new Date().toISOString()}); marked++; } }
-        return cors({marked,total_failed:failed.length});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
     if (url.pathname === "/calendar") {
       try { return cors(await sbGet(env,"jobs?status=in.(staged,mixing,complete)&order=scheduled_at.asc.nullslast,created_at.desc&select=id,topic,cluster,status,youtube_id,scheduled_at,created_at")); }
       catch(e){return cors({error:e.message},500);}
@@ -699,27 +613,6 @@ export default {
         return cors({status:"uploaded",r2_key:r2Key,url:publicUrl,job_id:jobId,size_kb:Math.round(blob.byteLength/1024)});
       } catch(e){return cors({error:e.message},500);}
     }
-
-    if (url.pathname === "/manual-jobs") {
-      try {
-        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
-        const fields="id,topic,cluster,status,script_package,video_r2_url,created_at,updated_at,youtube_id";
-        const [p,s,a,c,f]=await Promise.all([
-          sbGet(env,"jobs?status=eq.manual_pending&order=created_at.desc&limit=30&select="+fields),
-          sbGet(env,"jobs?status=eq.staged&order=created_at.desc&limit=30&select="+fields),
-          sbGet(env,"jobs?status=in.(voice,upload,mixing)&order=created_at.desc&limit=20&select="+fields),
-          sbGet(env,"jobs?status=eq.complete&order=created_at.desc&limit=20&select="+fields),
-          sbGet(env,"jobs?status=eq.failed&order=created_at.desc&limit=10&select="+fields),
-        ]);
-        const all=[...p,...s,...a,...c,...f].filter(j=>j.script_package&&j.script_package.source==="manual");
-        const seen=new Set();
-        return cors(all.filter(j=>{if(seen.has(j.id))return false;seen.add(j.id);return true;}).map(j=>{
-          const raw=j.video_r2_url||""; const v=raw.startsWith("http")?raw:(raw&&r2Base?r2Base+"/"+raw:null);
-          return {...j,video_public_url:v,has_video:!!v};
-        }));
-      } catch(e){return cors({error:e.message},500);}
-    }
-
     // ══════════════════════════════════════════════════════════
     // LONG-FORM ROUTES
     // ══════════════════════════════════════════════════════════
@@ -857,100 +750,6 @@ Return ONLY valid JSON array:
         return cors({...jobs[0],segments:enrichedSegs});
       } catch(e){return cors({error:e.message},500);}
     }
-
-    if (url.pathname === "/longform/segment/script" && request.method === "POST") {
-      try {
-        const {job_id,segment_idx,script}=await request.json();
-        if (!job_id||segment_idx==null||!script) return cors({error:"Missing fields"},400);
-        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{script,updated_at:new Date().toISOString()});
-        await _updateLongformStatus(env,job_id);
-        return cors({status:"updated",job_id,segment_idx});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
-    if (url.pathname === "/longform/segment/set-media" && request.method === "POST") {
-      try {
-        const {job_id,segment_idx,media}=await request.json();
-        if (!job_id||segment_idx==null||!media) return cors({error:"Missing fields"},400);
-        const newStatus = media.length > 0 ? "has_media" : "has_script";
-        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,
-          {media,status:newStatus,updated_at:new Date().toISOString()});
-        await _updateLongformStatus(env,job_id);
-        return cors({ok:true,job_id,segment_idx,media_count:media.length});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
-    if (url.pathname === "/longform/segment/upload-media" && request.method === "POST") {
-      try {
-        if (!env.VIDEOS_BUCKET) return cors({error:"R2 not bound"},500);
-        const jobId=url.searchParams.get("job_id");
-        const segIdx=url.searchParams.get("segment_idx");
-        const mediaIdx=url.searchParams.get("media_idx")||"0";
-        const mediaType=url.searchParams.get("media_type")||"image";
-        if (!jobId||segIdx==null) return cors({error:"Missing job_id or segment_idx"},400);
-        const ext=mediaType==="video"?"mp4":"png";
-        const r2Key="longform/"+jobId+"/seg"+segIdx+"_media"+mediaIdx+"."+ext;
-        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
-        const blob=await request.arrayBuffer();
-        const ct=request.headers.get("content-type")||(mediaType==="video"?"video/mp4":"image/png");
-        await env.VIDEOS_BUCKET.put(r2Key,blob,{httpMetadata:{contentType:ct}});
-        const publicUrl=r2Base+"/"+r2Key;
-        const segs=await sbGet(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx+"&select=id,media,script");
-        if (!segs.length) return cors({error:"Segment not found"},404);
-        const media=segs[0].media||[];
-        const idx=parseInt(mediaIdx);
-        while (media.length<=idx) media.push(null);
-        media[idx]={type:mediaType,r2_url:r2Key,public_url:publicUrl,order:idx};
-        const filtered=media.filter(Boolean);
-        const newStatus=filtered.length>0?(segs[0].script?"has_media":"has_media_no_script"):segs[0].status;
-        await sbPatch(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx,{media:filtered,status:newStatus,updated_at:new Date().toISOString()});
-        await _updateLongformStatus(env,jobId);
-        return cors({status:"uploaded",r2_key:r2Key,public_url:publicUrl,segment_idx:parseInt(segIdx),media_idx:idx,type:mediaType});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
-    if (url.pathname === "/longform/segment/upload-voice" && request.method === "POST") {
-      try {
-        if (!env.VIDEOS_BUCKET) return cors({error:"R2 not bound"},500);
-        const jobId=url.searchParams.get("job_id");
-        const segIdx=url.searchParams.get("segment_idx");
-        if (!jobId||segIdx==null) return cors({error:"Missing job_id or segment_idx"},400);
-        const r2Key="longform/"+jobId+"/seg"+segIdx+"_voice.webm";
-        const r2Base=(env.R2_BASE_URL||"").replace(/\/$/,"");
-        const blob=await request.arrayBuffer();
-        await env.VIDEOS_BUCKET.put(r2Key,blob,{httpMetadata:{contentType:"audio/webm"}});
-        const publicUrl=r2Base+"/"+r2Key;
-        await sbPatch(env,"longform_segments?job_id=eq."+jobId+"&segment_idx=eq."+segIdx,{voice_r2_url:r2Key,voice_source:"human",status:"ready",updated_at:new Date().toISOString()});
-        await _updateLongformStatus(env,jobId);
-        return cors({status:"uploaded",r2_key:r2Key,public_url:publicUrl,segment_idx:parseInt(segIdx)});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
-    if (url.pathname === "/longform/segment/generate-voice" && request.method === "POST") {
-      try {
-        const {job_id,segment_idx}=await request.json();
-        if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
-        const segs=await sbGet(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx+"&select=id,script");
-        if (!segs.length) return cors({error:"Segment not found"},404);
-        if (!segs[0].script) return cors({error:"No script for this segment"},400);
-        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_voice",updated_at:new Date().toISOString()});
-        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
-        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-voice",job_id,segment_idx})}).catch(e=>console.error("seg voice:",e.message)));
-        return cors({status:"generating",job_id,segment_idx});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
-    if (url.pathname === "/longform/segment/generate-images" && request.method === "POST") {
-      try {
-        const {job_id,segment_idx}=await request.json();
-        if (!job_id||segment_idx==null) return cors({error:"Missing fields"},400);
-        await sbPatch(env,"longform_segments?job_id=eq."+job_id+"&segment_idx=eq."+segment_idx,{status:"generating_images",updated_at:new Date().toISOString()});
-        const lfUrl=env.LONGFORM_PIPELINE_URL||"";
-        if (lfUrl) ctx.waitUntil(fetch(lfUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"generate-segment-images",job_id,segment_idx})}).catch(e=>console.error("seg img:",e.message)));
-        return cors({status:"generating",job_id,segment_idx});
-      } catch(e){return cors({error:e.message},500);}
-    }
-
     if (url.pathname === "/longform/render" && request.method === "POST") {
       try {
         const {job_id,publish_at}=await request.json();
@@ -1046,12 +845,106 @@ Return ONLY valid JSON array:
       ctx.waitUntil(syncYouTubeAnalytics(env));
       try {
         const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id");
-        if(av.length<5) ctx.waitUntil(triggerReplenish(env,12,null));
+        if(av.length<5) ctx.waitUntil(_runReplenish(env,ALL_CATS,12));
         console.log("Topics ready:", av.length);
       } catch(e){}
     }
   }
 };
+
+// ── REPLENISH — runs directly in Worker via ctx.waitUntil ─────
+const SEED_HEADLINES = {
+  AI:       [{t:"India AI startup ecosystem raises record funding 2026",c:"AI"},{t:"IIT researchers develop multilingual AI model for 22 Indian languages",c:"AI"},{t:"India launches national AI compute infrastructure for universities",c:"AI"},{t:"Indian AI firm wins global medical imaging benchmark",c:"AI"},{t:"India's AI regulation framework first draft released",c:"AI"}],
+  Space:    [{t:"ISRO Gaganyaan astronaut training completion announced",c:"Space"},{t:"India commercial space sector attracts 10 new startups via IN-SPACe",c:"Space"},{t:"ISRO successfully tests space docking technology",c:"Space"},{t:"India launches earth observation satellite for 600 million farmers",c:"Space"},{t:"India space station 2035 blueprint released by ISRO",c:"Space"}],
+  Gadgets:  [{t:"India first homegrown 5G chip enters mass production",c:"Gadgets"},{t:"India EV sales cross 1 million units monthly",c:"Gadgets"},{t:"Made in India drone achieves 200km range record",c:"Gadgets"},{t:"India affordable 5G smartphone launched at Rs 8000",c:"Gadgets"},{t:"India semiconductor fabrication plant gets government approval",c:"Gadgets"}],
+  DeepTech: [{t:"IIT Bombay develops room temperature superconductor breakthrough",c:"DeepTech"},{t:"India quantum computing startup achieves 100 qubit milestone",c:"DeepTech"},{t:"Indian biotech firm develops dengue vaccine using AI",c:"DeepTech"},{t:"India 3D printing company manufactures bridge in 72 hours",c:"DeepTech"},{t:"India nanotech research center opens with 500 crore funding",c:"DeepTech"}],
+  GreenTech:[{t:"India achieves 200 GW solar capacity milestone",c:"GreenTech"},{t:"India green hydrogen exports begin to Europe",c:"GreenTech"},{t:"India builds world largest floating solar farm",c:"GreenTech"},{t:"India EV battery recycling industry creates 50000 jobs",c:"GreenTech"},{t:"India wind energy capacity doubles in single year",c:"GreenTech"}],
+  Startups: [{t:"Indian fintech startup becomes youngest decacorn in Asia",c:"Startups"},{t:"India agritech startup brings AI to 100 million farmers",c:"Startups"},{t:"India edtech pivot to skill training creates new unicorn",c:"Startups"},{t:"India health startup digitises primary care for rural areas",c:"Startups"},{t:"India B2B SaaS exports cross 10 billion dollars annually",c:"Startups"}],
+};
+
+async function _runReplenish(env, cats, target) {
+  console.log("Replenish: cats="+cats+" target="+target);
+  const today = new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
+  let added = 0;
+
+  for (const cat of cats) {
+    if (added >= target) break;
+    const perCat = Math.ceil((target - added) / (cats.length - cats.indexOf(cat)));
+    const seeds = SEED_HEADLINES[cat] || [];
+    // Shuffle seeds
+    const shuffled = seeds.sort(()=>Math.random()-0.5).slice(0, perCat + 2);
+
+    for (const seed of shuffled) {
+      if (added >= target) break;
+      try {
+        const prompt = `You are a content council for India20Sixty — YouTube Shorts about India's near future.
+Today is ${today}. Evaluate this India tech headline for a 25-second Short.
+
+HEADLINE: ${seed.t}
+CATEGORY: ${cat}
+
+IMPORTANT: Frame past events as "India did X", future as upcoming. Correct tense only.
+
+SCENE PROMPT RULES — show the ACTUAL subject:
+- Cars/EVs → cars, roads, charging. NOT offices.
+- Space → rockets, launch pads, satellites. NOT offices.
+- Solar/Green → panels, farms. NOT offices.
+- AI → ONLY then show engineers at computers.
+
+Return ONLY valid JSON:
+{
+  "video_angle": "compelling angle max 100 chars",
+  "cluster": "${cat}",
+  "key_fact": "most interesting verifiable fact",
+  "council_score": 75,
+  "script": {
+    "text": "50-55 word script. Pure intelligent Indian English. No Hindi. Hook with fact. End with debate question. NO CTA.",
+    "mood": "hopeful_future",
+    "scene_prompts": ["specific image prompt showing actual subject not offices", "close-up detail of technology", "wide establishing India shot"]
+  }
+}`;
+
+        const r = await fetch("https://api.openai.com/v1/chat/completions",{
+          method:"POST",
+          headers:{"Authorization":"Bearer "+env.OPENAI_API_KEY,"Content-Type":"application/json"},
+          body:JSON.stringify({model:"gpt-4o-mini",messages:[{role:"user",content:prompt}],
+            temperature:0.8,max_tokens:700,response_format:{type:"json_object"}}),
+          signal: AbortSignal.timeout(30000)
+        });
+        if(!r.ok){console.error("OpenAI error",r.status);continue;}
+        const d = await r.json();
+        const raw = d.choices[0].message.content;
+        const data = JSON.parse(raw);
+        const score = parseInt(data.council_score)||70;
+        if(score < 65){console.log("Score too low:",score,data.video_angle?.slice(0,40));continue;}
+
+        const s = data.script||{};
+        const scriptPkg = {
+          text: s.text||"", reviewed_script: s.text||"",
+          mood: s.mood||"hopeful_future",
+          scene_prompts: s.scene_prompts||[],
+          key_fact: data.key_fact||"", source:"council",
+          word_count: (s.text||"").split(/\s+/).filter(Boolean).length,
+        };
+
+        await sbInsert(env,"topics",{
+          topic: data.video_angle||seed.t,
+          cluster: data.cluster||cat,
+          council_score: score,
+          script_package: scriptPkg,
+          source: "council",
+          used: false,
+          created_at: new Date().toISOString(),
+        });
+        added++;
+        console.log("Replenish ✓ "+cat+": "+data.video_angle?.slice(0,50)+" score="+score);
+      } catch(e) {
+        console.error("Replenish seed error:",seed.t.slice(0,40),e.message);
+      }
+    }
+  }
+  console.log("Replenish done: "+added+" topics added");
+}
 
 // ── HELPERS ───────────────────────────────────────────────────
 const CATEGORIES={AI:{label:"AI & ML",color:"#00e5ff",emoji:"\uD83E\uDD16"},Space:{label:"Space & Defence",color:"#b388ff",emoji:"\uD83D\uDE80"},Gadgets:{label:"Gadgets & Tech",color:"#ffd740",emoji:"\uD83D\uDCF1"},DeepTech:{label:"Deep Tech",color:"#ff6b35",emoji:"\uD83D\uDD2C"},GreenTech:{label:"Green & Energy",color:"#00e676",emoji:"\u26A1"},Startups:{label:"Startups",color:"#ff6b9d",emoji:"\uD83D\uDCA1"}};
@@ -1098,19 +991,6 @@ async function callCouncil(env,topic,source,category){
     body:JSON.stringify({action:"full-pipeline",topic,source,category})});
   if(!r.ok)throw new Error("Council returned "+r.status);
   return r.json();
-}
-async function triggerReplenish(env,target,categories){
-  const url=env.TOPIC_COUNCIL_URL||"";
-  if(!url){console.error("Replenish: TOPIC_COUNCIL_URL not set");return;}
-  console.log("Replenish: POST",url,"target="+target);
-  try{
-    const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({action:"replenish",target,categories:categories||ALL_CATS}),
-      signal:AbortSignal.timeout(120000)
-    });
-    const txt=await r.text().catch(()=>"(no body)");
-    console.log("Replenish response:",r.status,txt.slice(0,200));
-  }catch(e){console.error("Replenish:",e.message);}
 }
 async function createJob(t,env){return await sbInsert(env,"jobs",{topic:t.topic,cluster:t.category||"AI",status:"pending",script_package:t.script_package||null,council_score:t.council_score||0,retries:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString()});}
 async function processQueue(env,ctx){const ago=new Date(Date.now()-15*60000).toISOString();try{for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=lt.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"pending",retries:(j.retries||0)+1,updated_at:new Date().toISOString()});for(const j of await sbGet(env,"jobs?status=eq.processing&updated_at=lt."+ago+"&retries=gte.3"))await sbPatch(env,"jobs?id=eq."+j.id,{status:"failed",error:"max_retries_exceeded",updated_at:new Date().toISOString()});const pending=await sbGet(env,"jobs?status=eq.pending&order=created_at.asc&limit=1");if(!pending.length)return;await sbPatch(env,"jobs?id=eq."+pending[0].id,{status:"processing",started_at:new Date().toISOString(),updated_at:new Date().toISOString()});ctx.waitUntil(triggerRender(pending[0],env));}catch(e){console.error("Queue:",e.message);}}
