@@ -374,6 +374,14 @@ IMPORTANT: If this headline describes something that already happened before {to
 the video_angle must frame it as "India did X" or "How India achieved X" — not as upcoming news.
 Only use future tense if the event genuinely has not happened yet as of {today}.
 
+SCENE PROMPT RULES — CRITICAL — must show the ACTUAL subject of this headline:
+- Cars/EVs/roads → show cars, charging stations, highways. NOT office workers.
+- Space/rockets/satellites → show launch pads, rockets, control rooms, satellites.
+- Solar/green energy → show solar panels, wind turbines, farms. NOT offices.
+- AI/software → ONLY then show engineers at computers.
+- Startups/funding → show young founders in startup offices, pitch rooms.
+- Each prompt must be photorealistic India, natural daylight, no text, no logos.
+
 Respond ONLY with valid JSON (no markdown, no extra text):
 {{
   "video_angle": "Compelling angle for a Short (max 120 chars, plain English)",
@@ -386,12 +394,12 @@ Respond ONLY with valid JSON (no markdown, no extra text):
   "relevance_score": 85,
   "council_score": 82,
   "script": {{
-    "text": "Write a 50-55 word script in pure intelligent Indian English. No Hindi. No Hinglish. Confident educated Indian voice. Anchor to key_fact. First sentence hooks with a specific number or fact. End with a debate question about India's future. Count words carefully — must be 50-55.",
+    "text": "Write a 45-55 word script (MINIMUM 45 words, MAXIMUM 55 words). Count each word. Pure intelligent Indian English. No Hindi. No Hinglish. Confident educated Indian voice. Anchor to key_fact. First sentence hooks with a specific number or fact. End with a debate question. NO subscribe CTA.",
     "mood": "One of: cinematic_epic, breaking_news, hopeful_future, cold_tech, vibrant_pop, nostalgic_film, warm_human",
     "scene_prompts": [
-      "Scene 1: photorealistic modern Indian setting, specific visual brief",
-      "Scene 2: different angle, no text or logos",
-      "Scene 3: wide or establishing shot"
+      "Write specific image prompt for this topic — the exact technology/product/event described, Indian faces and setting, no offices unless topic is about offices",
+      "Different angle on same topic — close-up or detail shot showing the specific technology or moment",
+      "Wide establishing shot related to this topic — Indian scale, optimistic, natural daylight"
     ]
   }}
 }}"""

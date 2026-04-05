@@ -214,7 +214,7 @@ Topic: {topic}
 {fact_section}
 
 STRICT RULES:
-- Between 48 and 55 words total. Count carefully. Too short = rejected.
+- Between 48 and 55 words total. Count every word carefully. Must be 48-55. Too short = rejected.
 - Indian English. Clear, confident, modern. Not American or British.
 - NO Hindi words. NO Hinglish. Pure English only.
 - Max 12 words per sentence.
@@ -250,7 +250,7 @@ Return ONLY the script as plain text. No labels. No JSON. No numbering."""
             script = " ".join(lines)
             word_count = len(script.split())
             print(f"  Script attempt {attempt+1} ({word_count} words): {script[:80]}...")
-            if word_count >= 40:
+            if word_count >= 45:
                 return script, lines
             print(f"  Script too short ({word_count} words) — retrying")
         except Exception as e:
