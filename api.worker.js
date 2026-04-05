@@ -463,10 +463,13 @@ export default {
     if (url.pathname === "/sync-analytics" && request.method === "POST") {
       try {
         await syncYouTubeAnalytics(env);
-        // Return updated counts after sync
         const rows = await sbGet(env,"analytics?select=video_id,youtube_views,youtube_likes,score&order=score.desc&limit=5").catch(()=>[]);
-        return cors({status:"synced", rows_updated: rows.length, sample: rows.slice(0,3)});
-      } catch(e) { return cors({status:"error", error: e.message}); }
+        const jobs = await sbGet(env,"jobs?status=eq.complete&youtube_id=not.is.null&select=id,youtube_id&limit=5").catch(()=>[]);
+        return cors({status:"synced", analytics_rows: rows.length, jobs_with_youtube: jobs.length, sample_jobs: jobs.slice(0,3), sample_analytics: rows.slice(0,3)});
+      } catch(e) {
+        console.error("sync-analytics error:", e.message);
+        return cors({status:"error", error: e.message});
+      }
     }
 
     if (url.pathname === "/staging") {
@@ -877,30 +880,37 @@ async function _runReplenish(env, cats, target) {
     for (const seed of shuffled) {
       if (added >= target) break;
       try {
+        const headline = seed.t;
         const prompt = `You are a content council for India20Sixty — YouTube Shorts about India's near future.
 Today is ${today}. Evaluate this India tech headline for a 25-second Short.
 
-HEADLINE: ${seed.t}
+HEADLINE: ${headline}
 CATEGORY: ${cat}
 
-IMPORTANT: Frame past events as "India did X", future as upcoming. Correct tense only.
+TENSE: Past events before today → past tense. Future events → future tense only if genuinely upcoming.
 
-SCENE PROMPT RULES — show the ACTUAL subject:
-- Cars/EVs → cars, roads, charging. NOT offices.
-- Space → rockets, launch pads, satellites. NOT offices.
-- Solar/Green → panels, farms. NOT offices.
-- AI → ONLY then show engineers at computers.
+SCENE PROMPTS — write 3 specific image prompts derived from the headline words themselves.
+Extract the PHYSICAL SUBJECT from the headline:
+- headline has "satellite" → show satellite hardware or launch pad
+- headline has "rocket/ISRO" → show rocket on launch pad Sriharikota
+- headline has "EV/electric" → show electric vehicle on Indian highway
+- headline has "solar" → show solar panels in Indian field
+- headline has "farmer" → show Indian farmer with agricultural technology
+- headline has "drone" → show drone in flight over India
+- headline has "chip/semiconductor" → show cleanroom with silicon wafers
+- headline has "AI/software" → ONLY then show engineers at computers
+Each prompt must be under 80 characters. No template text. No brackets.
 
-Return ONLY valid JSON:
+Return ONLY valid JSON (no markdown):
 {
-  "video_angle": "compelling angle max 100 chars",
+  "video_angle": "compelling specific angle max 100 chars",
   "cluster": "${cat}",
-  "key_fact": "most interesting verifiable fact",
+  "key_fact": "most interesting verifiable fact from headline",
   "council_score": 75,
   "script": {
-    "text": "50-55 word script. Pure intelligent Indian English. No Hindi. Hook with fact. End with debate question. NO CTA.",
+    "text": "50-55 word script. Pure Indian English. Hook with fact. Debate question end. No CTA.",
     "mood": "hopeful_future",
-    "scene_prompts": ["specific image prompt showing actual subject not offices", "close-up detail of technology", "wide establishing India shot"]
+    "scene_prompts": ["[write actual hook shot prompt here — physical subject from headline, India setting]", "[write actual detail shot prompt here — close-up of technology]", "[write actual wide shot prompt here — India scale]"]
   }
 }`;
 
@@ -919,10 +929,21 @@ Return ONLY valid JSON:
         if(score < 65){console.log("Score too low:",score,data.video_angle?.slice(0,40));continue;}
 
         const s = data.script||{};
+        // Validate scene prompts — strip template placeholders GPT sometimes outputs
+        let rawPrompts = s.scene_prompts||[];
+        const validated = rawPrompts.slice(0,3).map((sp,i) => {
+          sp = String(sp).replace(/^\[|\]$/g,'').replace(/^Hook:|^Detail:|^Wide:/i,'').trim();
+          if(sp.length < 20 || sp.includes('[write') || sp.toUpperCase().includes('WRITE ACTUAL'))
+            sp = `photorealistic India, ${headline.slice(0,50)}, ${['establishing shot','close-up detail','wide view'][i]}, natural daylight`;
+          return sp.slice(0,120);
+        });
+        while(validated.length < 3)
+          validated.push(`photorealistic India, ${headline.slice(0,50)}, natural daylight, no text`);
+
         const scriptPkg = {
           text: s.text||"", reviewed_script: s.text||"",
           mood: s.mood||"hopeful_future",
-          scene_prompts: s.scene_prompts||[],
+          scene_prompts: validated,
           key_fact: data.key_fact||"", source:"council",
           word_count: (s.text||"").split(/\s+/).filter(Boolean).length,
         };

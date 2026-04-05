@@ -375,23 +375,28 @@ HEADLINE: {headline}
 SUMMARY: {summary[:200]}
 CATEGORY HINT: {category_hint}
 
-IMPORTANT: If this headline describes something that already happened before {today}, 
-the video_angle must frame it as "India did X" or "How India achieved X" — not as upcoming news.
-Only use future tense if the event genuinely has not happened yet as of {today}.
+TENSE RULE: If this happened before {today} → use past tense ("India built", "India launched").
+Only future tense if genuinely not yet happened as of {today}.
 
-SCENE PROMPT RULES — CRITICAL — must show the ACTUAL subject of this headline:
-- Cars/EVs/roads → show cars, charging stations, highways. NOT office workers.
-- Space/rockets/satellites → show launch pads, rockets, control rooms, satellites.
-- Solar/green energy → show solar panels, wind turbines, farms. NOT offices.
-- AI/software → ONLY then show engineers at computers.
-- Startups/funding → show young founders in startup offices, pitch rooms.
-- Each prompt must be photorealistic India, natural daylight, no text, no logos.
+SCENE PROMPT RULES — CRITICAL:
+The 3 scene prompts must show the PHYSICAL OBJECT or PLACE from this headline.
+Derive the subject directly from the headline words:
+- "satellite" → show satellite in orbit or on ground
+- "rocket launch" → show rocket on launch pad or launching  
+- "EV car" → show electric car on road or charging
+- "solar farm" → show solar panels in field
+- "farmer" → show farmer in field with technology
+- "hospital" / "doctor" → show hospital, medical equipment
+- "drone" → show drone in flight
+- "chip" / "semiconductor" → show chip fabrication cleanroom
+NEVER show office workers unless the headline is literally about software engineers.
+Each prompt: under 80 characters, photorealistic India, natural daylight, no text.
 
-Respond ONLY with valid JSON (no markdown, no extra text):
+Respond ONLY with valid JSON (no markdown):
 {{
-  "video_angle": "Compelling angle for a Short (max 120 chars, plain English)",
+  "video_angle": "Compelling angle max 100 chars plain English",
   "cluster": "One of: AI, Space, Gadgets, DeepTech, GreenTech, Startups",
-  "key_fact": "Single most interesting verifiable fact from this story",
+  "key_fact": "Single most interesting verifiable fact",
   "virality_score": 75,
   "factual_strength": 80,
   "visual_potential": 75,
@@ -399,12 +404,12 @@ Respond ONLY with valid JSON (no markdown, no extra text):
   "relevance_score": 85,
   "council_score": 82,
   "script": {{
-    "text": "Write a 45-55 word script (MINIMUM 45 words, MAXIMUM 55 words). Count each word. Pure intelligent Indian English. No Hindi. No Hinglish. Confident educated Indian voice. Anchor to key_fact. First sentence hooks with a specific number or fact. End with a debate question. NO subscribe CTA.",
+    "text": "45-55 words. Pure Indian English. Hook with fact. Debate question at end. No CTA.",
     "mood": "One of: cinematic_epic, breaking_news, hopeful_future, cold_tech, vibrant_pop, nostalgic_film, warm_human",
     "scene_prompts": [
-      "Write specific image prompt for this topic — the exact technology/product/event described, Indian faces and setting, no offices unless topic is about offices",
-      "Different angle on same topic — close-up or detail shot showing the specific technology or moment",
-      "Wide establishing shot related to this topic — Indian scale, optimistic, natural daylight"
+      "Hook shot: [WRITE THE SPECIFIC PHYSICAL SUBJECT FROM THIS HEADLINE, e.g. Indian rocket on launch pad Sriharikota dawn light]",
+      "Detail shot: [CLOSE-UP OF THE SPECIFIC TECHNOLOGY OR MOMENT FROM THIS HEADLINE]",
+      "Wide shot: [WIDE ESTABLISHING SHOT SHOWING INDIA-SCALE OF THIS SPECIFIC TOPIC]"
     ]
   }}
 }}"""
@@ -423,6 +428,29 @@ Respond ONLY with valid JSON (no markdown, no extra text):
     if score < 65: return None  # Lowered from 70 to 65
 
     s = data.get("script", {})
+    raw_prompts = s.get("scene_prompts", [])
+
+    # Validate and fix scene prompts — ensure they don't contain template instructions
+    TEMPLATE_PHRASES = ["WRITE THE SPECIFIC", "CLOSE-UP OF THE SPECIFIC",
+                        "WIDE ESTABLISHING SHOT", "[", "Hook shot:", "Detail shot:", "Wide shot:"]
+    validated_prompts = []
+    headline_words = [w.lower() for w in headline.split() if len(w) > 3]
+
+    for i, sp in enumerate(raw_prompts[:3]):
+        sp = str(sp).strip()
+        # Strip template placeholders GPT sometimes includes
+        for bad in TEMPLATE_PHRASES:
+            if bad in sp:
+                sp = sp.replace(bad, "").strip(" :-[]")
+        # If still has bracket remnants or is too short, rebuild from headline
+        if len(sp) < 20 or sp.startswith("[") or "WRITE" in sp.upper():
+            labels = ["hook establishing shot", "close-up detail", "wide shot"]
+            sp = f"photorealistic India, {headline[:60]}, {labels[i]}, natural daylight, no text"
+        validated_prompts.append(sp[:120])  # enforce 120 char max
+
+    # Ensure we always have 3 prompts
+    while len(validated_prompts) < 3:
+        validated_prompts.append(f"photorealistic India, {headline[:60]}, natural daylight, no text")
     return {
         "video_angle":    data.get("video_angle", headline),
         "cluster":        data.get("cluster", category_hint),
@@ -432,7 +460,7 @@ Respond ONLY with valid JSON (no markdown, no extra text):
             "text":            s.get("text",""),
             "reviewed_script": s.get("text",""),
             "mood":            s.get("mood","hopeful_future"),
-            "scene_prompts":   s.get("scene_prompts",[]),
+            "scene_prompts":   validated_prompts,
             "captions":        [],
             "key_fact":        data.get("key_fact",""),
             "source":          "council",
