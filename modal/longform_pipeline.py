@@ -85,32 +85,39 @@ def sb_insert(table, data):
 
 
 def _check_and_auto_render(job_id: str):
-    """Check if all segments have voice. If so, trigger render automatically."""
+    """After every segment update: check if all segments have voice + media. If so, auto-render."""
     try:
-        # Get job auto_mode setting
         jobs = sb_get(f"longform_jobs?id=eq.{job_id}&select=auto_mode,status")
-        if not jobs or jobs[0].get("status") in ("rendering", "complete", "failed"):
-            return  # Already rendering or done
+        if not jobs:
+            return
+        job_status = jobs[0].get("status", "")
+        if job_status in ("rendering", "complete", "failed", "ready_to_render"):
+            return  # Already handled
         if not jobs[0].get("auto_mode", False):
-            return  # Manual mode — don't auto-render
+            return  # Manual mode
 
-        # Check all segments have voice
         segs = sb_get(f"longform_segments?job_id=eq.{job_id}&select=segment_idx,voice_r2_url,media")
         if not segs:
             return
-        all_have_voice = all(s.get("voice_r2_url") for s in segs)
-        if not all_have_voice:
-            ready_count = sum(1 for s in segs if s.get("voice_r2_url"))
-            print(f"  Auto-render check: {ready_count}/{len(segs)} segments have voice")
-            return
 
-        print(f"  All {len(segs)} segments have voice — triggering auto render")
-        log(job_id, f"All segments ready — auto-rendering")
+        # Count unique segment indices (not rows — duplicates can exist)
+        all_idxs   = set(s["segment_idx"] for s in segs)
+        total      = len(all_idxs)
+        voice_idxs = set(s["segment_idx"] for s in segs if s.get("voice_r2_url"))
+        have_voice = len(voice_idxs)
+
+        print(f"  Auto-render check: voice={have_voice}/{total} segments={sorted(all_idxs)} voiced={sorted(voice_idxs)}")
+
+        if have_voice < total:
+            return  # Still waiting for voice
+
+        print(f"  ✓ All {total} segments have voice — triggering auto render")
+        log(job_id, f"All {total} segments voice ready — auto-rendering")
         sb_patch(f"longform_jobs?id=eq.{job_id}",
                  {"status": "rendering", "updated_at": datetime.utcnow().isoformat()})
         _handle_render_full.spawn({"job_id": job_id})
     except Exception as e:
-        print(f"  _check_and_auto_render failed (non-fatal): {e}")
+        print(f"  _check_and_auto_render error (non-fatal): {e}")
 
 def _upload_bytes_to_r2(data: bytes, r2_key: str, content_type: str,
                          r2_account_id: str, r2_access_key: str, r2_secret: str,
@@ -293,19 +300,26 @@ def _handle_generate_script(data: dict):
         })
         log(job_id, f"Script done: {len(result['segments'])} segments, mood={result['mood']}")
 
-        # AUTO MODE — spawn voice + images for all segments
-        # Stagger to avoid hitting GPU limit (10 GPUs on Starter plan)
+        # AUTO MODE — spawn voice first (render blocker), then images
+        # Stagger voice to avoid GPU stampede on Starter plan (10 GPU limit)
         if auto_mode:
-            log(job_id, "Auto mode: spawning voice + images for all segments")
+            log(job_id, "Auto mode: spawning voice for all segments first, then images")
             import time
             for s in result["segments"]:
                 try:
                     _handle_segment_voice.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
-                    _handle_segment_images.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
-                    print(f"  Spawned voice+images for seg {s['segment_idx']}")
-                    time.sleep(2)  # 2s stagger between segments to avoid GPU stampede
+                    print(f"  Spawned voice for seg {s['segment_idx']}")
+                    time.sleep(3)  # 3s stagger between voice spawns
                 except Exception as ae:
-                    print(f"  Auto spawn failed seg {s['segment_idx']}: {ae}")
+                    print(f"  Voice spawn failed seg {s['segment_idx']}: {ae}")
+            # Spawn images after all voice jobs started
+            time.sleep(2)
+            for s in result["segments"]:
+                try:
+                    _handle_segment_images.spawn({"job_id": job_id, "segment_idx": s["segment_idx"]})
+                    print(f"  Spawned images for seg {s['segment_idx']}")
+                except Exception as ae:
+                    print(f"  Images spawn failed seg {s['segment_idx']}: {ae}")
     except Exception as e:
         msg = str(e)[:400]
         print(f"  Script failed: {msg}")
@@ -317,7 +331,7 @@ def _handle_generate_script(data: dict):
 # HANDLER: GENERATE SEGMENT VOICE
 # ==========================================
 
-@app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=120)
+@app.function(image=image, secrets=secrets, cpu=0.5, memory=512, timeout=300)
 def _handle_segment_voice(data: dict):
     job_id      = data["job_id"]
     segment_idx = data.get("segment_idx")
@@ -329,11 +343,23 @@ def _handle_segment_voice(data: dict):
     try:
         segs = sb_get(
             f"longform_segments?job_id=eq.{job_id}"
-            f"&segment_idx=eq.{segment_idx}&select=script,duration_target"
+            f"&segment_idx=eq.{segment_idx}&select=script,duration_target,voice_r2_url,status"
         )
         if not segs or not segs[0].get("script"):
             print("  No script for this segment")
             return
+        if segs[0].get("voice_r2_url"):
+            print(f"  Voice already exists for seg {segment_idx} — skipping")
+            return
+        if segs[0].get("status") == "generating_voice":
+            print(f"  Seg {segment_idx} already generating voice — skipping duplicate")
+            return
+
+        # Mark as generating to prevent duplicate runs
+        sb_patch(
+            f"longform_segments?job_id=eq.{job_id}&segment_idx=eq.{segment_idx}",
+            {"status": "generating_voice", "updated_at": datetime.utcnow().isoformat()}
+        )
 
         voice_result = _voice_gen().remote(
             job_id=f"{job_id}_seg{segment_idx}",
