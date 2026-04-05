@@ -190,7 +190,7 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             devanagari = len(_re.findall(r'[\u0900-\u097F]', raw_text))
             hindi_ratio = devanagari / max(len(raw_text), 1)
 
-            if hindi_ratio > 0.02 or word_count < 30:
+            if hindi_ratio > 0.02 or word_count < 42:
                 print(f"  Council script rejected: {word_count} words, {devanagari} Devanagari chars — falling through to scriptwriter")
                 script_package = None  # fall through to research + scriptwriter
             else:
@@ -281,6 +281,12 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
                     f.write(audio_bytes)
             else:
                 raise Exception("Voice worker returned no audio bytes")
+
+            # Hard duration gate — reject anything under 20 seconds
+            # 14-16s videos come from short council scripts that slipped through
+            if audio_dur < 20:
+                raise Exception(f"Audio too short: {audio_dur:.1f}s (minimum 20s). Script was likely under 42 words. Job will be retried with scriptwriter.")
+
             log(f"Voice: {audio_dur:.1f}s engine={voice_result.get('engine','?')}")
 
             print("\n--- Render ---")

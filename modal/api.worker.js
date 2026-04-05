@@ -243,41 +243,36 @@ export default {
         const cluster = url.searchParams.get("cluster") || "";
         const jobType = url.searchParams.get("job_type") || "";
         const r2Base  = (env.R2_BASE_URL||"").replace(/\/$/,"");
+        let images = [];
 
-        // Primary: query image_cache table
+        // Try image_cache table first
         try {
-          // Use basic columns first — works even without migration
           let ep = "image_cache?select=id,r2_key,public_url,topic,scene_idx,created_at,cluster,engine,job_type,job_id&order=created_at.desc&limit=500";
           if (cluster) ep += "&cluster=eq." + cluster;
           if (jobType) ep += "&job_type=eq." + jobType;
           const rows = await sbGet(env, ep);
-          if (rows.length > 0) {
-            return cors({
-              images: rows.map(r => ({
-                id:       r.id,
-                key:      r.r2_key,
-                url:      r.public_url || (r2Base && r.r2_key ? r2Base+"/"+r.r2_key : ""),
-                topic:    r.topic || r.job_id || "India Tech",
-                cluster:  r.cluster || "AI",
-                engine:   r.engine  || "FLUX",
-                job_type: r.job_type || "shorts",
-                scene_idx:r.scene_idx || 0,
-                uploaded: r.created_at,
-                has_url:  !!(r.public_url || r2Base),
-              })),
-              total: rows.length,
-              source: "image_cache",
-            });
-          }
+          images = rows.map(r => ({
+            id:       r.id,
+            key:      r.r2_key,
+            url:      r.public_url || (r2Base && r.r2_key ? r2Base+"/"+r.r2_key : ""),
+            topic:    r.topic || r.job_id || "India Tech",
+            cluster:  r.cluster || "AI",
+            engine:   r.engine  || "FLUX",
+            job_type: r.job_type || "shorts",
+            scene_idx:r.scene_idx || 0,
+            uploaded: r.created_at,
+            has_url:  !!(r.public_url || r2Base),
+          }));
+          console.log("image_cache rows:", images.length);
         } catch(e) {
           console.error("image_cache query failed:", e.message);
         }
 
-        // Fallback: scan R2 under images/ prefix
-        if (env.R2) {
+        // If no rows in image_cache, fall back to R2 scan
+        if (!images.length && env.R2) {
           const prefix = cluster ? `images/${cluster}/` : "images/";
           const listed = await env.R2.list({prefix, limit:500});
-          const images = (listed.objects||[])
+          images = (listed.objects||[])
             .filter(o => o.key.match(/\.(png|jpg|jpeg)$/i))
             .sort((a,b) => new Date(b.uploaded) - new Date(a.uploaded))
             .map(o => {
@@ -290,13 +285,15 @@ export default {
                 engine:   "FLUX",
                 job_type: "shorts",
                 uploaded: o.uploaded,
+                has_url:  !!r2Base,
               };
             });
-          return cors({images, total:images.length, source:"r2"});
+          console.log("R2 fallback images:", images.length);
         }
 
-        return cors({images:[], total:0, source:"empty",
-          note:"Run Supabase migration and configure R2 binding to see images"});
+        return cors({images, total:images.length,
+          source: images.length ? "ok" : "empty",
+          note: images.length ? null : "No images yet — generate a Short to populate the library"});
       } catch(e) { return cors({error:e.message,images:[]}); }
     }
 
@@ -883,6 +880,8 @@ Return ONLY valid JSON array:
         if (event==="render_complete") { await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"complete",youtube_id:payload.youtube_id||null,video_r2_url:payload.video_r2_url||null,updated_at:new Date().toISOString()}); }
         if (event==="render_failed") { await sbPatch(env,"longform_jobs?id=eq."+job_id,{status:"failed",error:payload.error||"render failed",updated_at:new Date().toISOString()}); }
         if (event==="script_ready") {
+          // Delete existing segments first — prevents duplicates on retry
+          await sbDelete(env,"longform_segments?job_id=eq."+job_id).catch(()=>{});
           for (const seg of (payload.segments||[])) {
             await sbInsert(env,"longform_segments",{
               job_id,

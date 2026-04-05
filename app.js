@@ -142,7 +142,7 @@ function showPage(name, btn) {
   if (name === 'queue')     { loadQueue_panel(); }
   if (name === 'library')   { loadLibrary(); }
   if (name === 'calendar')  { loadCalendar(); renderCalendar(); }
-  if (name === 'analytics') { renderAnalytics(); }
+  if (name === 'analytics') { loadAnalytics(); }
   if (name === 'topics')    { renderTopicsPage(); }
   if (name === 'settings')  { loadSettings(); }
 }
@@ -234,7 +234,7 @@ function switchCreateTab(name, el) {
   var panel = document.getElementById('cpanel-' + name);
   if (panel) panel.classList.add('active');
   if (name === 'library')  loadLibrary();
-  if (name === 'longform') loadLongformJobs();
+  if (name === 'longform') { loadLongformJobs(); loadLfTopicIdeas(); }
   if (name === 'manual')   initManualPanel();
 }
 
@@ -1830,10 +1830,18 @@ async function killTopic(topicId, btn) {
 async function loadAnalytics() {
   try {
     var r = await fetch(API_BASE + '/analytics');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
-    allAnalytics = d.analytics || []; analyticsJobs = d.jobs || [];
+    if (d.error) throw new Error(d.error);
+    allAnalytics = d.analytics || [];
+    analyticsJobs = d.jobs || [];
     if (currentPage === 'analytics') renderAnalytics();
-  } catch(e) {}
+  } catch(e) {
+    var vg = document.getElementById('video-grid');
+    if (vg && currentPage === 'analytics') {
+      vg.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.75rem;padding:20px">Analytics error: ' + e.message + '</div>';
+    }
+  }
 }
 
 function renderAnalytics() {

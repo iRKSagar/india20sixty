@@ -205,7 +205,7 @@ def _generate_script(api_key: str, topic: str, fact_package: dict, subscribe_cta
 
     from datetime import datetime as _dt
     today = _dt.utcnow().strftime("%B %Y")  # e.g. "April 2026"
-    cta = "\n- End with exactly: Follow India20Sixty for daily India tech updates." if subscribe_cta else ""
+    cta = ""  # NO CTA ever — Shorts must never include subscribe prompts
 
     prompt = f"""Write a YouTube Shorts voiceover script for India20Sixty — India's near future channel.
 Today is {today}. Treat events before {today} as past history — use past tense for them.
@@ -220,7 +220,8 @@ STRICT RULES:
 - Max 12 words per sentence.
 - Open with a fact that stops the scroll.
 - Use correct tense — past for what already happened, future for what is coming.
-- NEVER start with "Fact:" — state facts directly.{cta}
+- NEVER start with "Fact:" — state facts directly.
+- NO subscribe CTA. NO "Follow us". End sentence 6 with a debate question ONLY.
 
 6 sentences (each 8-10 words):
 1. Hook — the real fact or number
@@ -448,13 +449,15 @@ def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict) -> lis
                     f"""Create ONE striking image prompt for a YouTube Short hook frame.
 Channel: India20Sixty — India's near future (tech, space, innovation, startups)
 Topic: "{topic}"{fact_hint}
-Requirements:
-- Unmistakably Indian — Indian faces, architecture, technology or landscape
-- ONE dominant subject taking up 70% of frame
-- Natural or dramatic lighting — NOT golden hour, NOT orange/saffron tones
-- Photorealistic, contemporary India — not traditional/historical
-- No text, no logos, no watermarks
-Return ONLY the image prompt as a single descriptive string."""}],
+
+CRITICAL — show THE SPECIFIC SUBJECT of this topic:
+- If topic is about cars/EVs → show cars, roads, EV charging, NOT offices
+- If topic is about space/rockets → show launch pad, rocket, satellite, NOT generic city
+- If topic is about solar/green → show solar panels, installations, NOT engineers at desks
+- If topic is about AI/software → THEN show engineers at computers
+- Always: Indian faces, Indian setting, natural daylight, photorealistic, no text
+
+Return ONLY the image prompt as one sentence under 100 characters."""}],
                   "temperature": 0.9, "max_tokens": 200},
             timeout=20,
         )
@@ -472,12 +475,19 @@ Return ONLY the image prompt as a single descriptive string."""}],
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
                   "messages": [{"role": "user", "content":
-                    f"""Create 2 cinematic image prompts for Indian tech/innovation YouTube Short.
-Topic: "{topic}"{fact_hint}
-Scene 2 (Insight/Story): {style1}, {shot1} — technology in Indian context
-Scene 3 (Hopeful Ending): {style2}, {shot2} — optimistic wide India shot
-Both must feel distinctly Indian.
-Return ONLY: ["scene2_prompt", "scene3_prompt"]"""}],
+                    f"""Create 2 image prompts for a YouTube Short about: "{topic}"{fact_hint}
+
+CRITICAL — both prompts must show the ACTUAL SUBJECT of this topic (not generic offices):
+- Cars/EVs → cars, charging, roads
+- Space → rockets, satellites, launch pads  
+- Solar/Green → panels, farms, installations
+- AI → engineers at computers (only for AI topics)
+- Startups → founders, pitch rooms, startup offices
+
+Scene 2 (detail/insight): close-up of the specific technology or key moment, Indian setting
+Scene 3 (wide/hopeful): wide optimistic shot related to this topic, India scale, natural daylight
+
+Return ONLY: ["scene2_prompt_under_80chars", "scene3_prompt_under_80chars"]"""}],
                   "temperature": 0.9, "max_tokens": 250},
             timeout=20,
         )
