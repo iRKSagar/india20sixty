@@ -90,43 +90,48 @@ BLACKLIST = [
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-@app.function(image=image, secrets=secrets, cpu=0.25, memory=256, timeout=30)
-@modal.fastapi_endpoint(method="GET")
-def council():
-    return _health()
-
-
 @app.function(image=image, secrets=secrets, cpu=1.0, memory=1024, timeout=300)
-@modal.fastapi_endpoint(method="POST")
-async def council_post(request: Request):
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
+@modal.asgi_app(label="india20sixty-topic-council")
+def council_app():
+    from fastapi import FastAPI
+    web = FastAPI()
 
-    action = body.get("action", "replenish")
-    print(f"[Council] action={action}")
-
-    if action == "health":
+    @web.get("/")
+    def health():
         return _health()
 
-    if action == "full-pipeline":
-        topic    = body.get("topic", "")
-        category = body.get("category", "AI")
-        source   = body.get("source", "manual")
-        if not topic:
-            return JSONResponse({"error": "Missing topic"}, status_code=400)
-        r = _council_score(topic, "", category)
-        if not r:
-            return JSONResponse({"error": "Score below 65"}, status_code=422)
-        return {"topic": r["video_angle"], "cluster": r["cluster"],
-                "council_score": r["council_score"],
-                "script_package": r.get("script_package"), "source": source}
+    @web.post("/")
+    async def post(request: Request):
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
 
-    cats   = [c for c in (body.get("categories") or ALL_CATS) if c in ALL_CATS] or ALL_CATS
-    target = int(body.get("target") or 12)
-    return _replenish(cats, target)
+        action = body.get("action", "replenish")
+        print(f"[Council] action={action}")
+
+        if action == "health":
+            return _health()
+
+        if action == "full-pipeline":
+            topic    = body.get("topic", "")
+            category = body.get("category", "AI")
+            source   = body.get("source", "manual")
+            if not topic:
+                return JSONResponse({"error": "Missing topic"}, status_code=400)
+            r = _council_score(topic, "", category)
+            if not r:
+                return JSONResponse({"error": "Score below 65"}, status_code=422)
+            return {"topic": r["video_angle"], "cluster": r["cluster"],
+                    "council_score": r["council_score"],
+                    "script_package": r.get("script_package"), "source": source}
+
+        cats   = [c for c in (body.get("categories") or ALL_CATS) if c in ALL_CATS] or ALL_CATS
+        target = int(body.get("target") or 12)
+        return _replenish(cats, target)
+
+    return web
 
 
 def _health() -> dict:
