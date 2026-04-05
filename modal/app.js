@@ -234,6 +234,7 @@ function switchCreateTab(name, el) {
   var panel = document.getElementById('cpanel-' + name);
   if (panel) panel.classList.add('active');
   if (name === 'manual')   { initManualPanel(); updateManualSummary(); }
+  if (name === 'freeimg')  { initFreeImagesPanel(); }
   if (name === 'longform') { loadLongformJobs(); loadLfTopicIdeas(); }
 }
 
@@ -488,25 +489,27 @@ async function loadManualQueueTopics(cat, el) {
   if (!container) return;
   container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">Loading...</div>';
   try {
+    // Fetch if allTopics not loaded yet
+    if (!allTopics.length) await loadTopics();
     var topics = allTopics.filter(function(t) {
       return !t.used && t.council_score >= 70 && (!cat || t.cluster === cat);
     }).sort(function(a,b) { return b.council_score - a.council_score; }).slice(0,20);
     _manualTopicsCache = topics;
     if (!topics.length) {
-      container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">No topics in queue. Replenish first.</div>';
+      container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">No topics in queue. <button class="btn btn-ghost btn-sm" onclick="openReplenishModal()">Replenish</button></div>';
       return;
     }
     container.innerHTML = topics.map(function(t, i) {
       var cat2 = CATS[t.cluster] || null;
       var hasScript = !!(t.script_package && t.script_package.text);
       return '<div onclick="selectManualTopicByIdx(' + i + ')" style="'
-        + 'padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color .15s;margin-bottom:4px"'
+        + 'padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color .15s"'
         + ' onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">'
         + '<div style="font-size:.78rem;font-weight:600;margin-bottom:3px">' + esc(t.topic) + '</div>'
         + '<div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.6rem;color:var(--muted)">'
         + (cat2 ? '<span style="color:' + cat2.color + '">' + cat2.emoji + ' ' + t.cluster + '</span>' : '')
         + '<span>Score: ' + t.council_score + '</span>'
-        + (hasScript ? '<span style="color:var(--green)">&#10003; Script ready</span>' : '<span style="color:var(--yellow)">&#9888; No script</span>')
+        + (hasScript ? '<span style="color:var(--green)">&#10003; Script ready</span>' : '')
         + '</div>'
         + '</div>';
     }).join('');
@@ -554,11 +557,210 @@ function selectManualTopic(id, topic, cluster, score, scriptPkg) {
 
 function clearManualTopic() {
   manualState.topicId = null; manualState.topic = ''; manualState.scriptPkg = null;
-  document.getElementById('m-selected-topic').style.display = 'none';
-  document.getElementById('m-step-script').style.display    = 'none';
-  document.getElementById('m-step-visuals').style.display   = 'none';
-  document.getElementById('m-step-voice').style.display     = 'none';
-  document.getElementById('m-step-actions').style.display   = 'none';
+  var el = document.getElementById('m-selected-topic');
+  if (el) el.style.display = 'none';
+  ['m-step-script','m-step-visuals','m-step-voice','m-step-actions'].forEach(function(id) {
+    var e = document.getElementById(id); if (e) e.style.display = 'none';
+  });
+  updateManualSummary();
+}
+
+// ── FREE IMAGES PANEL ────────────────────────────────────────────
+var fiState = { topicSrc:'queue', topicId:null, topic:'', cluster:'AI', scriptPkg:null, picks:[null,null,null], fiCat:null };
+var _fiTopicsCache = [];
+
+function initFreeImagesPanel() {
+  buildFiCatStrip();
+  loadFiQueueTopics(null);
+}
+
+function buildFiCatStrip() {
+  var strip = document.getElementById('fi-cat-strip');
+  if (!strip) return;
+  strip.innerHTML = '<div class="cat-pill" onclick="loadFiQueueTopics(null,this)" style="border-color:var(--accent);color:var(--accent)">All</div>'
+    + Object.entries(CATS).map(function(e) {
+        return '<div class="cat-pill" onclick="loadFiQueueTopics(\'' + e[0] + '\',this)">' + e[1].emoji + ' ' + e[1].label + '</div>';
+      }).join('');
+}
+
+async function loadFiQueueTopics(cat, el) {
+  fiState.fiCat = cat;
+  if (el) {
+    document.querySelectorAll('#fi-cat-strip .cat-pill').forEach(function(p) { p.style.borderColor=''; p.style.color=''; });
+    el.style.borderColor = cat ? (CATS[cat]?.color||'var(--accent)') : 'var(--accent)';
+    el.style.color       = cat ? (CATS[cat]?.color||'var(--accent)') : 'var(--accent)';
+  }
+  var container = document.getElementById('fi-topic-cards');
+  if (!container) return;
+  container.innerHTML = '<div style="padding:12px;color:var(--muted);font-family:var(--mono);font-size:.72rem">Loading...</div>';
+  try {
+    if (!allTopics.length) await loadTopics();
+    var topics = allTopics.filter(function(t) {
+      return !t.used && t.council_score >= 70 && (!cat || t.cluster === cat);
+    }).sort(function(a,b) { return b.council_score - a.council_score; }).slice(0,20);
+    _fiTopicsCache = topics;
+    if (!topics.length) {
+      container.innerHTML = '<div style="padding:12px;color:var(--muted);font-family:var(--mono);font-size:.72rem">No topics. <button class="btn btn-ghost btn-sm" onclick="openReplenishModal()">Replenish</button></div>';
+      return;
+    }
+    container.innerHTML = topics.map(function(t, i) {
+      var c = CATS[t.cluster]||{};
+      return '<div onclick="selectFiTopic(' + i + ')" style="padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer"'
+        + ' onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">'
+        + '<div style="font-size:.78rem;font-weight:600;margin-bottom:2px">' + esc(t.topic) + '</div>'
+        + '<div style="font-family:var(--mono);font-size:.6rem;color:' + (c.color||'var(--muted)') + '">' + (c.emoji||'') + ' ' + t.cluster + ' · Score: ' + t.council_score + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    container.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:8px">' + e.message + '</div>';
+  }
+}
+
+function setFiTopicSrc(src) {
+  fiState.topicSrc = src;
+  document.getElementById('fi-src-queue').className  = 'btn btn-sm' + (src==='queue'  ? ' btn-primary' : '');
+  document.getElementById('fi-src-custom').className = 'btn btn-sm' + (src==='custom' ? ' btn-primary' : '');
+  document.getElementById('fi-queue-panel').style.display  = src==='queue'  ? '' : 'none';
+  document.getElementById('fi-custom-panel').style.display = src==='custom' ? '' : 'none';
+}
+
+function selectFiTopic(idx) {
+  var t = _fiTopicsCache[idx]; if (!t) return;
+  fiState.topicId = t.id; fiState.topic = t.topic; fiState.cluster = t.cluster; fiState.scriptPkg = t.script_package;
+  var disp = document.getElementById('fi-topic-display');
+  if (disp) { disp.style.display=''; document.getElementById('fi-topic-text').textContent=t.topic; document.getElementById('fi-topic-meta').textContent=(CATS[t.cluster]?.emoji||'')+' '+t.cluster+' · Score: '+t.council_score; }
+  // Show image picker step
+  var step = document.getElementById('fi-step-images'); if (step) step.style.display='';
+  loadFiLibrary();
+}
+
+function setFiCustomTopic() {
+  var val = (document.getElementById('fi-custom-topic').value||'').trim(); if (!val) return;
+  fiState.topicId=null; fiState.topic=val; fiState.cluster='AI'; fiState.scriptPkg=null;
+  var disp = document.getElementById('fi-topic-display');
+  if (disp) { disp.style.display=''; document.getElementById('fi-topic-text').textContent=val; document.getElementById('fi-topic-meta').textContent='Custom topic'; }
+  var step = document.getElementById('fi-step-images'); if (step) step.style.display='';
+  loadFiLibrary();
+}
+
+function clearFiTopic() {
+  fiState.topicId=null; fiState.topic=''; fiState.scriptPkg=null; fiState.picks=[null,null,null];
+  var disp = document.getElementById('fi-topic-display'); if (disp) disp.style.display='none';
+  var step = document.getElementById('fi-step-images'); if (step) step.style.display='none';
+  var create = document.getElementById('fi-step-create'); if (create) create.style.display='none';
+  resetFiPicks();
+}
+
+async function loadFiLibrary() {
+  var grid = document.getElementById('fi-lib-grid'); if (!grid) return;
+  grid.innerHTML = '<div style="padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">Loading library...</div>';
+  try {
+    if (!allImages.length) { var r=await fetch(API_BASE+'/image-library'); var d=await r.json(); allImages=d.images||[]; }
+    renderFiGrid();
+    buildFiFilter();
+  } catch(e) { grid.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.72rem;padding:8px">'+e.message+'</div>'; }
+}
+
+var _fiClusterFilter = 'all';
+function buildFiFilter() {
+  var strip = document.getElementById('fi-lib-filter'); if (!strip) return;
+  var clusters = [...new Set(allImages.map(function(i){return i.cluster||'AI'}))].filter(Boolean);
+  strip.innerHTML = '<div class="cat-pill" onclick="setFiFilter(\'all\',this)" style="border-color:var(--accent);color:var(--accent)">All ('+allImages.length+')</div>'
+    + clusters.map(function(c){
+        var cat=CATS[c]||{}; var cnt=allImages.filter(function(i){return i.cluster===c;}).length;
+        return '<div class="cat-pill" onclick="setFiFilter(\''+c+'\',this)">'+( cat.emoji||'')+ ' '+c+' ('+cnt+')</div>';
+      }).join('');
+}
+
+function setFiFilter(c, el) {
+  _fiClusterFilter=c;
+  document.querySelectorAll('#fi-lib-filter .cat-pill').forEach(function(p){p.style.borderColor='';p.style.color='';});
+  if(el){el.style.borderColor='var(--accent)';el.style.color='var(--accent)';}
+  renderFiGrid();
+}
+
+function renderFiGrid() {
+  var grid = document.getElementById('fi-lib-grid'); if (!grid) return;
+  var imgs = _fiClusterFilter==='all' ? allImages : allImages.filter(function(i){return i.cluster===_fiClusterFilter;});
+  if (!imgs.length) { grid.innerHTML='<div style="color:var(--muted);font-family:var(--mono);font-size:.72rem;padding:16px">No images yet — run Full Auto first.</div>'; return; }
+  grid.innerHTML = imgs.map(function(img, i) {
+    var isPicked = fiState.picks.some(function(p){return p&&p.url===img.url;});
+    var pickIdx  = fiState.picks.findIndex(function(p){return p&&p.url===img.url;});
+    var labels   = ['H','S','P'];
+    return '<div class="fi-img-card" data-imgurl="'+esc(img.url||'')+'" data-imgkey="'+esc(img.key||'')+'" onclick="toggleFiPick(this)"'
+      + ' style="cursor:pointer;border-radius:8px;overflow:hidden;border:3px solid '+(isPicked?'var(--accent)':'transparent')+';position:relative">'
+      + (img.url ? '<img src="'+esc(img.url)+'" loading="lazy" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block">' : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2)"></div>')
+      + (isPicked ? '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:800">'+labels[pickIdx]+'</div>' : '')
+      + '<div style="padding:3px 5px;font-family:var(--mono);font-size:.52rem;color:var(--muted);background:rgba(0,0,0,.5)">'+ esc((img.topic||'').slice(0,18)) +'</div>'
+      + '</div>';
+  }).join('');
+}
+
+function toggleFiPick(el) {
+  var url = el.dataset.imgurl; var key = el.dataset.imgkey;
+  var existing = fiState.picks.findIndex(function(p){return p&&p.url===url;});
+  if (existing>-1) {
+    fiState.picks[existing]=null;
+  } else {
+    var slot = fiState.picks.findIndex(function(p){return !p;});
+    if (slot===-1) { showToast('Already 3 picked. Click one to deselect.'); return; }
+    fiState.picks[slot]={url:url,key:key};
+  }
+  updateFiPicks();
+  renderFiGrid();
+}
+
+function resetFiPicks() {
+  fiState.picks=[null,null,null];
+  updateFiPicks();
+}
+
+function updateFiPicks() {
+  var labels=['Hook','Story','Payoff'];
+  var filled=fiState.picks.filter(function(p){return !!p;}).length;
+  var cnt=document.getElementById('fi-img-count'); if(cnt) cnt.textContent=filled+' / 3';
+  // Update preview slots
+  for(var i=0;i<3;i++){
+    var slot=document.getElementById('fi-pick-'+i);
+    if(!slot) continue;
+    if(fiState.picks[i]&&fiState.picks[i].url){
+      slot.innerHTML='<img src="'+esc(fiState.picks[i].url)+'" style="width:100%;height:100%;object-fit:cover">'
+        +'<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);font-family:var(--mono);font-size:.52rem;color:var(--accent);padding:2px 4px">'+labels[i]+'</div>';
+      slot.style.border='2px solid var(--accent)';
+    } else {
+      slot.innerHTML=labels[i];
+      slot.style.border='2px dashed var(--border2)';
+    }
+  }
+  // Show/hide create step
+  var createStep=document.getElementById('fi-step-create');
+  if(createStep) createStep.style.display = filled===3 ? '' : 'none';
+}
+
+async function submitFreeImages() {
+  if (!fiState.topic) { showToast('Pick a topic first'); return; }
+  if (fiState.picks.filter(function(p){return!!p;}).length!==3) { showToast('Pick exactly 3 images'); return; }
+  var btn=document.getElementById('fi-step-create')?.querySelector('button');
+  var result=document.getElementById('fi-result');
+  if(btn){btn.disabled=true;btn.textContent='Creating...';}
+  if(result) result.innerHTML='<span style="color:var(--muted)">Submitting...</span>';
+  try {
+    var urls=fiState.picks.map(function(p){return p.url;});
+    var r=await fetch(API_BASE+'/run-with-images',{
+      method:'POST', headers:{'content-type':'application/json'},
+      body:JSON.stringify({image_urls:urls, topic:fiState.topic, category:fiState.cluster, topic_id:fiState.topicId||null})
+    });
+    var d=await r.json();
+    if(d.error) throw new Error(d.error);
+    if(result) result.innerHTML='<span style="color:var(--green)">&#10003; Job created: '+d.job_id+'<br>Script, voice, render &amp; publish running automatically.</span>';
+    // Reset
+    fiState.picks=[null,null,null]; updateFiPicks();
+    setTimeout(function(){loadJobs();loadTopicsCount();},2000);
+  } catch(e) {
+    if(result) result.innerHTML='<span style="color:var(--red)">&#10007; '+e.message+'</span>';
+  } finally {
+    if(btn){btn.disabled=false;btn.textContent='&#9654; Create &amp; Publish';}
+  }
 }
 
 async function generateManualScript() {
@@ -1285,23 +1487,40 @@ async function doReplenish() {
     .map(function(d) { return d.dataset.cat; });
   var target = parseInt(document.getElementById('tgt-slider').value);
   closeReplenishModal();
-  var pending = '<span style="color:var(--yellow)">&#8635; Replenishing topics... (10-30s on Modal)</span>';
+  var pending = '<span style="color:var(--yellow)">&#8635; Replenishing topics... (~30-60s)</span>';
   showDebug('debug-topics', pending);
   showDebug('debug-create', pending);
-  showPage('topics', document.querySelector('.nav-btn[onclick*="topics"]'));
   try {
     var r = await fetch(API_BASE + '/replenish', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ categories: cats, target: target })
     });
     var d = await r.json();
-    var ok = '<span style="color:var(--green)">&#10003; Replenish triggered — topics appear in ~60s. Categories: ' + (cats.join(', ') || 'all') + '</span>';
-    showDebug('debug-topics', ok);
-    showDebug('debug-create', ok);
-    setTimeout(loadTopicsCount, 20000);
-    setTimeout(loadTopicsCount, 40000);
-    setTimeout(function() { loadTopicsCount(); loadTopics(); }, 65000);
-    setTimeout(function() { loadTopicsCount(); loadTopics(); }, 120000);
+    if (d.error) throw new Error(d.error + (d.detail ? ': ' + d.detail : ''));
+
+    // Replenish is fire-and-forget — council runs ~60s in background
+    var msg = d.message || 'Topic council running...';
+    showDebug('debug-topics', '<span style="color:var(--yellow)">&#8635; ' + msg + '</span>');
+    showDebug('debug-create', '<span style="color:var(--yellow)">&#8635; ' + msg + '</span>');
+
+    // Poll every 15s for up to 3 minutes
+    var polls = 0;
+    var prevCount = allTopics.filter(function(t){return !t.used;}).length;
+    var poller = setInterval(async function() {
+      polls++;
+      await loadTopicsCount();
+      await loadTopics();
+      var newCount = allTopics.filter(function(t){return !t.used;}).length;
+      if (newCount > prevCount) {
+        clearInterval(poller);
+        var added = newCount - prevCount;
+        showDebug('debug-topics', '<span style="color:var(--green)">&#10003; ' + added + ' topics added. Total ready: ' + newCount + '</span>');
+        showDebug('debug-create', '<span style="color:var(--green)">&#10003; ' + added + ' topics added.</span>');
+      } else if (polls >= 12) {
+        clearInterval(poller);
+        showDebug('debug-topics', '<span style="color:var(--muted)">&#10003; Replenish complete. Check Topics tab.</span>');
+      }
+    }, 15000);
   } catch(e) {
     var err = '<span style="color:var(--red)">&#10007; Replenish failed: ' + e.message + '</span>';
     showDebug('debug-topics', err);

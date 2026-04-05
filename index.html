@@ -480,98 +480,138 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 
 <!-- CREATE ─────────────────────────────────────────────────── -->
 <div class="page" id="page-create">
-  <div id="debug-create"></div>
-  <div class="create-tabs" style="grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px">
+  <div class="create-tabs" style="grid-template-columns:repeat(4,1fr)">
     <div class="create-tab active" id="ctab-auto" onclick="switchCreateTab('auto',this)">
       <div class="create-tab-icon">&#9889;</div>
       <div class="create-tab-title">Full Auto</div>
-      <div class="create-tab-desc">Pick topic → one button → published to YouTube. Zero decisions.</div>
+      <div class="create-tab-desc">One click. Topic &#8594; Script &#8594; Images &#8594; Voice &#8594; YouTube.</div>
+    </div>
+    <div class="create-tab" id="ctab-freeimg" onclick="switchCreateTab('freeimg',this)">
+      <div class="create-tab-icon">&#128444;</div>
+      <div class="create-tab-title">Free Images</div>
+      <div class="create-tab-desc">Pick topic + 3 library images. Script, voice, render, publish &#8594; all auto.</div>
     </div>
     <div class="create-tab" id="ctab-manual" onclick="switchCreateTab('manual',this)">
       <div class="create-tab-icon">&#9999;&#65039;</div>
-      <div class="create-tab-title">Manual Control</div>
-      <div class="create-tab-desc">You control each step. Mix auto and manual at every stage.</div>
+      <div class="create-tab-title">Manual</div>
+      <div class="create-tab-desc">Full control. Auto or manual at every stage.</div>
     </div>
-  </div>
-  <div style="margin-bottom:16px">
-    <div class="create-tab" id="ctab-longform" onclick="switchCreateTab('longform',this)" style="border-radius:10px;padding:10px 16px;display:flex;align-items:center;gap:12px">
-      <div style="font-size:1.1rem">&#127916;</div>
-      <div>
-        <div class="create-tab-title" style="font-size:.82rem">Long-form Video</div>
-        <div class="create-tab-desc">3–12 min documentary with 6 chapters. Full auto or per-segment manual control.</div>
-      </div>
+    <div class="create-tab" id="ctab-longform" onclick="switchCreateTab('longform',this)">
+      <div class="create-tab-icon">&#127916;</div>
+      <div class="create-tab-title">Long-form</div>
+      <div class="create-tab-desc">3&#8211;12 min. 6 chapters. Auto or per-segment.</div>
     </div>
   </div>
 
-  <!-- ── FULL AUTO PANEL ─────────────────────────────────────── -->
+  <!-- ── FULL AUTO ─────────────────────────────────────────── -->
   <div class="create-panel active" id="cpanel-auto">
-    <div class="panel" style="margin-bottom:12px">
-      <div class="panel-head"><span class="panel-title">&#9889; Full Auto</span></div>
+    <div class="panel" style="margin-bottom:0">
+      <div class="panel-head"><span class="panel-title">Full Auto &#8212; Zero Touch</span></div>
       <div style="padding:16px">
-
-        <!-- Pipeline preview -->
-        <div style="display:flex;align-items:center;gap:0;margin-bottom:16px;overflow-x:auto;padding:12px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.1);border-radius:10px">
-          <div style="text-align:center;min-width:70px">
-            <div style="font-size:1rem">&#128240;</div>
-            <div style="font-family:var(--mono);font-size:.55rem;color:var(--accent)">Topic</div>
-            <div style="font-family:var(--mono);font-size:.5rem;color:var(--muted)">from queue</div>
-          </div>
-          <div style="color:var(--muted);font-size:.7rem;padding:0 4px">&#8594;</div>
-          <div style="text-align:center;min-width:70px">
-            <div style="font-size:1rem">&#128196;</div>
-            <div style="font-family:var(--mono);font-size:.55rem;color:var(--accent)">Script</div>
-            <div style="font-family:var(--mono);font-size:.5rem;color:var(--muted)">AI writes</div>
-          </div>
-          <div style="color:var(--muted);font-size:.7rem;padding:0 4px">&#8594;</div>
-          <div style="text-align:center;min-width:70px">
-            <div style="font-size:1rem">&#128444;&#65039;</div>
-            <div style="font-family:var(--mono);font-size:.55rem;color:var(--accent)">Images</div>
-            <div style="font-family:var(--mono);font-size:.5rem;color:var(--muted)">FLUX GPU</div>
-          </div>
-          <div style="color:var(--muted);font-size:.7rem;padding:0 4px">&#8594;</div>
-          <div style="text-align:center;min-width:70px">
-            <div style="font-size:1rem">&#127908;</div>
-            <div style="font-family:var(--mono);font-size:.55rem;color:var(--accent)">Voice</div>
-            <div style="font-family:var(--mono);font-size:.5rem;color:var(--muted)">Chatterbox</div>
-          </div>
-          <div style="color:var(--muted);font-size:.7rem;padding:0 4px">&#8594;</div>
-          <div style="text-align:center;min-width:70px">
-            <div style="font-size:1rem">&#127916;</div>
-            <div style="font-family:var(--mono);font-size:.55rem;color:var(--accent)">Render</div>
-            <div style="font-family:var(--mono);font-size:.5rem;color:var(--muted)">ffmpeg</div>
-          </div>
-          <div style="color:var(--muted);font-size:.7rem;padding:0 4px">&#8594;</div>
-          <div style="text-align:center;min-width:70px">
-            <div style="font-size:1rem">&#128640;</div>
-            <div style="font-family:var(--mono);font-size:.55rem;color:var(--green)">YouTube</div>
-            <div style="font-family:var(--mono);font-size:.5rem;color:var(--muted)">published</div>
-          </div>
+        <div style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:14px;padding:10px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.12);border-radius:8px;line-height:1.7">
+          Picks best topic from queue &#8594; generates script &#8594; FLUX images &#8594; Chatterbox voice &#8594; renders &#8594; publishes to YouTube.<br>Nothing needed from you after clicking Create.
         </div>
-
-        <!-- Category preference -->
         <div class="form-group" style="margin-bottom:14px">
-          <label class="form-label" style="font-size:.72rem;color:var(--muted)">Category preference (optional — leave blank for best available)</label>
+          <label class="form-label">Category preference (optional)</label>
           <div class="cat-grid" id="auto-cat-strip"></div>
         </div>
-
-        <button class="btn btn-primary" id="auto-create-btn" onclick="doAutoCreate()" style="width:100%;justify-content:center;padding:14px;font-size:.92rem;letter-spacing:.02em">
-          &#9654; Create &amp; Publish Now
+        <button class="btn btn-primary" id="auto-create-btn" onclick="doAutoCreate()" style="width:100%;justify-content:center;padding:14px;font-size:.9rem">
+          &#9654; Create Video Now
         </button>
-        <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);text-align:center;margin-top:8px">
-          Runs in background ~4 min. Check Queue for progress.
-        </div>
+        <div id="debug-create" style="margin-top:8px;font-family:var(--mono);font-size:.68rem;color:var(--muted)"></div>
       </div>
       <div class="quick-actions">
-        <button class="btn btn-ghost btn-sm"   onclick="doGenerateTopic()">&#10022; Gen Topic</button>
-        <button class="btn btn-purple btn-sm"  onclick="openReplenishModal()">&#8635; Replenish</button>
-        <button class="btn btn-red btn-sm"     onclick="doKillIncomplete()">&#9940; Kill Stuck</button>
-        <button class="btn btn-ghost btn-sm"   onclick="doRestoreFailed()">&#8617; Restore</button>
-        <button class="btn btn-orange btn-sm"  onclick="doTestRender()">&#9741; Test Modal</button>
+        <button class="btn btn-ghost btn-sm"  onclick="doGenerateTopic()">&#10022; Generate Topic</button>
+        <button class="btn btn-purple btn-sm" onclick="openReplenishModal()">&#8635; Replenish Queue</button>
+        <button class="btn btn-red btn-sm"    onclick="doKillIncomplete()">&#9940; Kill Stuck</button>
+        <button class="btn btn-ghost btn-sm"  onclick="doRestoreFailed()">&#8617; Restore Failed</button>
+        <button class="btn btn-orange btn-sm" onclick="doTestRender()">&#9741; Test Modal</button>
       </div>
     </div>
   </div>
 
-  <!-- ── MANUAL PANEL ───────────────────────────────────────── -->
+  <!-- ── FREE IMAGES ───────────────────────────────────────── -->
+  <div class="create-panel" id="cpanel-freeimg">
+
+    <!-- Step 1: Topic -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--accent);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">1</span>
+          <span style="font-size:.82rem;font-weight:700">Pick Topic</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button id="fi-src-queue"  onclick="setFiTopicSrc('queue')"  class="btn btn-primary btn-sm" style="font-size:.7rem">From Queue</button>
+          <button id="fi-src-custom" onclick="setFiTopicSrc('custom')" class="btn btn-sm"             style="font-size:.7rem">Custom</button>
+        </div>
+      </div>
+      <div id="fi-queue-panel">
+        <div id="fi-cat-strip" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px"></div>
+        <div id="fi-topic-cards" style="max-height:200px;overflow-y:auto;display:grid;gap:5px">
+          <div style="text-align:center;padding:16px;color:var(--muted);font-family:var(--mono);font-size:.72rem">Loading topics...</div>
+        </div>
+      </div>
+      <div id="fi-custom-panel" style="display:none">
+        <input id="fi-custom-topic" type="text" placeholder="e.g. India's first space station 2035"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
+        <button class="btn btn-primary btn-sm" style="margin-top:8px;font-size:.72rem" onclick="setFiCustomTopic()">Use This Topic</button>
+      </div>
+      <div id="fi-topic-display" style="display:none;margin-top:10px;padding:10px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);border-radius:8px">
+        <div style="font-family:var(--mono);font-size:.62rem;color:var(--accent)">Selected:</div>
+        <div id="fi-topic-text" style="font-size:.82rem;font-weight:600;margin:2px 0"></div>
+        <div id="fi-topic-meta" style="font-family:var(--mono);font-size:.6rem;color:var(--muted)"></div>
+        <button onclick="clearFiTopic()" style="margin-top:4px;font-size:.6rem;color:var(--muted);background:none;border:none;cursor:pointer">&#10005; change</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Pick 3 images from library -->
+    <div id="fi-step-images" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--purple);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">2</span>
+          <span style="font-size:.82rem;font-weight:700">Pick 3 Images from Library</span>
+          <span id="fi-img-count" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 / 3</span>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="font-size:.65rem" onclick="loadFiLibrary()">&#8635; Refresh</button>
+      </div>
+      <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-bottom:10px">
+        Select exactly 3 images &#8212; Hook, Story, Payoff. Script, voice, render and publish all happen automatically.
+      </div>
+
+      <!-- Selected previews -->
+      <div id="fi-picks-row" style="display:flex;gap:8px;margin-bottom:12px">
+        <div id="fi-pick-0" style="flex:1;aspect-ratio:9/16;max-height:100px;border:2px dashed var(--border2);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:var(--muted);overflow:hidden;position:relative">Hook</div>
+        <div id="fi-pick-1" style="flex:1;aspect-ratio:9/16;max-height:100px;border:2px dashed var(--border2);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:var(--muted);overflow:hidden;position:relative">Story</div>
+        <div id="fi-pick-2" style="flex:1;aspect-ratio:9/16;max-height:100px;border:2px dashed var(--border2);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:var(--muted);overflow:hidden;position:relative">Payoff</div>
+      </div>
+
+      <!-- Filter row -->
+      <div id="fi-lib-filter" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px"></div>
+
+      <!-- Image grid -->
+      <div id="fi-lib-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;max-height:350px;overflow-y:auto"></div>
+    </div>
+
+    <!-- Step 3: Create button (shown after 3 images picked) -->
+    <div id="fi-step-create" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="background:var(--green);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">3</span>
+        <span style="font-size:.82rem;font-weight:700">Create</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:12px;padding:8px;background:var(--bg);border-radius:6px;line-height:1.7">
+        &#129302; Script auto-generated from topic<br>
+        &#127912; Your 3 library images<br>
+        &#127908; Chatterbox AI voice auto-generated<br>
+        &#9654; Renders and publishes to YouTube automatically
+      </div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;padding:12px" onclick="submitFreeImages()">
+        &#9654; Create &amp; Publish
+      </button>
+      <div id="fi-result" style="margin-top:10px;font-family:var(--mono);font-size:.72rem;text-align:center"></div>
+    </div>
+  </div>
+
+  <!-- ── MANUAL ──────────────────────────────────────────────── -->
   <div class="create-panel" id="cpanel-manual">
 
     <!-- Step 1: Topic -->
@@ -593,14 +633,20 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
         </div>
       </div>
       <div id="mts-custom-panel" style="display:none">
-        <input id="m-custom-topic" type="text" placeholder="e.g. India first space station 2035"
+        <input id="m-custom-topic" type="text" placeholder="e.g. India's first space station 2035"
           style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
         <button class="btn btn-primary btn-sm" style="margin-top:8px;font-size:.72rem" onclick="setCustomManualTopic()">Use This Topic</button>
+      </div>
+      <div id="m-selected-topic" style="display:none;margin-top:10px;padding:10px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);border-radius:8px">
+        <div style="font-family:var(--mono);font-size:.62rem;color:var(--accent)">Selected:</div>
+        <div id="m-sel-name" style="font-size:.82rem;font-weight:600;margin:2px 0"></div>
+        <div id="m-sel-meta" style="font-family:var(--mono);font-size:.6rem;color:var(--muted)"></div>
+        <button onclick="clearManualTopic()" style="margin-top:4px;font-size:.6rem;color:var(--muted);background:none;border:none;cursor:pointer">&#10005; change</button>
       </div>
     </div>
 
     <!-- Step 2: Script -->
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+    <div id="m-step-script" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px">
           <span style="background:var(--green);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">2</span>
@@ -608,52 +654,50 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
           <span id="m-wc" style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">0 words &#183; ~0s</span>
         </div>
         <div style="display:flex;gap:4px">
-          <button class="btn btn-sm" style="font-size:.68rem" onclick="generateManualScript()">&#9889; Auto-generate</button>
-          <button class="btn btn-sm" style="font-size:.68rem" onclick="regenManualScript()">&#8635; Regen</button>
-          <button class="btn btn-sm" style="font-size:.68rem" onclick="copyManualScript()">&#128203; Copy</button>
+          <button class="btn btn-sm" style="font-size:.68rem" onclick="generateManualScript()">&#9889; Auto</button>
+          <button class="btn btn-sm" style="font-size:.68rem" onclick="regenManualScript()">&#8635;</button>
+          <button class="btn btn-sm" style="font-size:.68rem" onclick="copyManualScript()">&#128203;</button>
         </div>
       </div>
       <textarea id="m-script" rows="5" oninput="updateManualWordCount()"
         style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:.8rem;resize:vertical;box-sizing:border-box;line-height:1.6"
-        placeholder="Click Auto-generate or write your own script here.&#10;48&#8211;55 words &#183; Indian English &#183; No CTA &#183; End with a debate question"></textarea>
-      <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:4px">
-        48&#8211;55 words &#183; Indian English only &#183; No subscribe CTA &#183; End with a debate question
-      </div>
+        placeholder="Click Auto or write your own. 48&#8211;55 words, Indian English, end with a debate question."></textarea>
+      <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:4px">48&#8211;55 words &#183; Indian English &#183; No CTA &#183; End with debate question</div>
     </div>
 
-    <!-- Step 3: Images — each slot independently auto/library/upload -->
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+    <!-- Step 3: Images -->
+    <div id="m-step-visuals" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:8px">
           <span style="background:var(--purple);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">3</span>
           <span style="font-size:.82rem;font-weight:700">Images</span>
-          <span style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">3 scenes &#183; each: auto / library / upload</span>
+          <span style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">3 scenes</span>
         </div>
-        <button class="btn btn-sm" style="font-size:.68rem" onclick="autoGenAllManualImgs()">&#9889; Auto all 3</button>
+        <button class="btn btn-sm" style="font-size:.65rem" onclick="autoGenAllManualImgs()">&#9889; Auto-gen all</button>
       </div>
       <div id="m-img-prompts">
         <!-- Scene 1 -->
         <div style="margin-bottom:8px;padding:10px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-            <div style="font-size:.7rem;font-weight:600;color:var(--text)">Scene 1 &#8212; Hook</div>
+            <div style="font-size:.7rem;font-weight:600">Scene 1 &#8212; Hook</div>
             <div style="display:flex;gap:3px">
               <button class="btn btn-sm" style="font-size:.58rem;padding:2px 7px" onclick="autoGenManualImg(0)">&#9889; Auto</button>
               <button class="btn btn-sm" style="font-size:.58rem;padding:2px 7px;color:var(--accent)" onclick="openManualLibPicker(0)">&#128444; Library</button>
               <label class="btn btn-sm" style="font-size:.58rem;padding:2px 7px;cursor:pointer">&#8679; Upload<input type="file" accept="image/*" style="display:none" onchange="uploadManualImg(event,0)"></label>
             </div>
           </div>
-          <textarea id="m-img-p1" rows="2" placeholder="Image prompt (auto-fills after script generation)"
+          <textarea id="m-img-p1" rows="2" placeholder="Image prompt (auto-fills from script)"
             style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:5px;color:var(--text);font-size:.7rem;resize:none;box-sizing:border-box"></textarea>
           <div id="m-img-p1-preview" style="margin-top:5px;display:none;align-items:center;gap:8px">
             <img id="m-img-p1-thumb" src="" style="width:40px;height:71px;object-fit:cover;border-radius:4px;border:2px solid var(--accent)">
-            <span style="font-family:var(--mono);font-size:.6rem;color:var(--green)">&#10003; Set from library</span>
+            <span style="font-family:var(--mono);font-size:.6rem;color:var(--green)">&#10003; Set</span>
             <button onclick="clearManualImgPick(0)" style="font-size:.6rem;color:var(--red);background:none;border:none;cursor:pointer">&#10005;</button>
           </div>
         </div>
         <!-- Scene 2 -->
         <div style="margin-bottom:8px;padding:10px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-            <div style="font-size:.7rem;font-weight:600;color:var(--text)">Scene 2 &#8212; Story</div>
+            <div style="font-size:.7rem;font-weight:600">Scene 2 &#8212; Story</div>
             <div style="display:flex;gap:3px">
               <button class="btn btn-sm" style="font-size:.58rem;padding:2px 7px" onclick="autoGenManualImg(1)">&#9889; Auto</button>
               <button class="btn btn-sm" style="font-size:.58rem;padding:2px 7px;color:var(--accent)" onclick="openManualLibPicker(1)">&#128444; Library</button>
@@ -664,14 +708,14 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
             style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:5px;color:var(--text);font-size:.7rem;resize:none;box-sizing:border-box"></textarea>
           <div id="m-img-p2-preview" style="margin-top:5px;display:none;align-items:center;gap:8px">
             <img id="m-img-p2-thumb" src="" style="width:40px;height:71px;object-fit:cover;border-radius:4px;border:2px solid var(--accent)">
-            <span style="font-family:var(--mono);font-size:.6rem;color:var(--green)">&#10003; Set from library</span>
+            <span style="font-family:var(--mono);font-size:.6rem;color:var(--green)">&#10003; Set</span>
             <button onclick="clearManualImgPick(1)" style="font-size:.6rem;color:var(--red);background:none;border:none;cursor:pointer">&#10005;</button>
           </div>
         </div>
         <!-- Scene 3 -->
         <div style="padding:10px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-            <div style="font-size:.7rem;font-weight:600;color:var(--text)">Scene 3 &#8212; Payoff</div>
+            <div style="font-size:.7rem;font-weight:600">Scene 3 &#8212; Payoff</div>
             <div style="display:flex;gap:3px">
               <button class="btn btn-sm" style="font-size:.58rem;padding:2px 7px" onclick="autoGenManualImg(2)">&#9889; Auto</button>
               <button class="btn btn-sm" style="font-size:.58rem;padding:2px 7px;color:var(--accent)" onclick="openManualLibPicker(2)">&#128444; Library</button>
@@ -682,7 +726,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
             style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:5px;color:var(--text);font-size:.7rem;resize:none;box-sizing:border-box"></textarea>
           <div id="m-img-p3-preview" style="margin-top:5px;display:none;align-items:center;gap:8px">
             <img id="m-img-p3-thumb" src="" style="width:40px;height:71px;object-fit:cover;border-radius:4px;border:2px solid var(--accent)">
-            <span style="font-family:var(--mono);font-size:.6rem;color:var(--green)">&#10003; Set from library</span>
+            <span style="font-family:var(--mono);font-size:.6rem;color:var(--green)">&#10003; Set</span>
             <button onclick="clearManualImgPick(2)" style="font-size:.6rem;color:var(--red);background:none;border:none;cursor:pointer">&#10005;</button>
           </div>
         </div>
@@ -691,7 +735,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     </div>
 
     <!-- Step 4: Voice -->
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
+    <div id="m-step-voice" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px">
           <span style="background:var(--yellow);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">4</span>
@@ -700,18 +744,18 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
         <div style="display:flex;gap:4px">
           <button id="vtog-ai"     onclick="setManualVoiceMode('ai')"     class="btn btn-primary btn-sm" style="font-size:.7rem">&#129302; AI Auto</button>
           <button id="vtog-record" onclick="setManualVoiceMode('record')" class="btn btn-sm"             style="font-size:.7rem">&#127908; Record Later</button>
-          <button id="vtog-upload" onclick="setManualVoiceMode('upload')" class="btn btn-sm"             style="font-size:.7rem">&#8679; Upload File</button>
+          <button id="vtog-upload" onclick="setManualVoiceMode('upload')" class="btn btn-sm"             style="font-size:.7rem">&#8679; Upload</button>
         </div>
       </div>
       <div id="vvoice-ai" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);padding:8px;background:var(--bg);border-radius:6px">
-        &#129302; Chatterbox voice clone — Indian English, free GPU. Generates automatically.
+        &#129302; Chatterbox voice clone &#8212; Indian English, free GPU. Generates automatically.
       </div>
       <div id="vvoice-record" style="display:none;font-family:var(--mono);font-size:.68rem;color:var(--muted);padding:8px;background:var(--bg);border-radius:6px">
-        &#127908; Silent video renders first. Go to Queue &#8594; record your voice in Studio &#8594; publish.
+        &#127908; Silent video renders first. Queue &#8594; record in Studio &#8594; publish.
       </div>
       <div id="vvoice-upload" style="display:none">
         <label style="display:block;border:2px dashed var(--border2);border-radius:8px;padding:16px;text-align:center;cursor:pointer">
-          <div style="font-size:.8rem;font-weight:600;margin-bottom:4px">&#127908; Click to upload voice</div>
+          <div style="font-size:.8rem;font-weight:600;margin-bottom:4px">&#127908; Upload voice recording</div>
           <div style="font-family:var(--mono);font-size:.62rem;color:var(--muted)">.mp3 &#183; .wav &#183; .m4a &#183; .webm</div>
           <input type="file" accept="audio/*" style="display:none" onchange="handleManualVoiceUpload(event)">
         </label>
@@ -720,32 +764,15 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     </div>
 
     <!-- Step 5: Create -->
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+    <div id="m-step-actions" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
         <span style="background:var(--green);color:#000;font-size:.65rem;font-weight:800;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center">5</span>
         <span style="font-size:.82rem;font-weight:700">Create</span>
       </div>
-
-      <!-- What will run summary -->
-      <div id="m-summary" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:12px;padding:10px;background:var(--bg);border-radius:8px;line-height:1.9"></div>
-
-      <!-- Remaining steps that will auto-run notice -->
-      <div id="m-auto-remainder" style="font-family:var(--mono);font-size:.62rem;padding:8px 10px;background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.15);border-radius:6px;margin-bottom:12px;color:var(--muted);line-height:1.7">
-        <span style="color:var(--green);font-weight:600">Steps not manually set will run automatically:</span><br>
-        Any images not picked from library → FLUX auto-generated<br>
-        Voice set to AI Auto → Chatterbox generates from script
-      </div>
-
+      <div id="m-summary" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:12px;padding:10px;background:var(--bg);border-radius:8px;line-height:1.8"></div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" style="flex:1;justify-content:center;padding:12px" onclick="submitManualJob('create')">
-          &#9654; Create &amp; Publish
-        </button>
-        <button class="btn btn-ghost" style="flex:1;justify-content:center;padding:12px" onclick="submitManualJob('stage')">
-          &#9646;&#9646; Stage for Review
-        </button>
-      </div>
-      <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);text-align:center;margin-top:6px">
-        Stage = renders video, holds before YouTube publish. Review in Queue tab.
+        <button class="btn btn-primary" style="flex:1;justify-content:center;padding:12px" onclick="submitManualJob('create')">&#9654; Create &amp; Publish</button>
+        <button class="btn btn-ghost"   style="flex:1;justify-content:center;padding:12px" onclick="submitManualJob('stage')">&#9646;&#9646; Stage for Review</button>
       </div>
       <div id="m-result" style="margin-top:10px;font-family:var(--mono);font-size:.72rem;text-align:center"></div>
     </div>
