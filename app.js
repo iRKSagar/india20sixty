@@ -233,9 +233,8 @@ function switchCreateTab(name, el) {
   if (el) el.classList.add('active');
   var panel = document.getElementById('cpanel-' + name);
   if (panel) panel.classList.add('active');
-  if (name === 'library')  loadLibrary();
+  if (name === 'manual')   { initManualPanel(); updateManualSummary(); }
   if (name === 'longform') { loadLongformJobs(); loadLfTopicIdeas(); }
-  if (name === 'manual')   initManualPanel();
 }
 
 // ── QUEUE TABS ──────────────────────────────────────────────────
@@ -431,17 +430,18 @@ async function doAutoCreate() {
 // ============================================================
 
 var manualState = {
-  topicSrc:    'queue',   // 'queue' | 'custom'
+  topicSrc:    'queue',
   topicId:     null,
   topic:       '',
   cluster:     'AI',
   script:      '',
   scriptPkg:   null,
-  visualMode:  localStorage.getItem('m_visual') || 'images',  // 'images' | 'video'
-  voiceMode:   localStorage.getItem('m_voice')  || 'ai',      // 'ai' | 'record' | 'upload'
-  imgUrls:     [null, null, null],   // uploaded/generated image URLs
-  videoUrl:    null,                 // uploaded video R2 URL
-  voiceUrl:    null,                 // uploaded voice R2 URL
+  visualMode:  localStorage.getItem('m_visual') || 'images',
+  voiceMode:   localStorage.getItem('m_voice')  || 'ai',
+  imgUrls:     [null, null, null],
+  libPicks:    [null, null, null],   // library image picks per slot {url, key}
+  videoUrl:    null,
+  voiceUrl:    null,
   manualCat:   null,
 };
 
@@ -659,8 +659,16 @@ function setManualVoiceMode(mode) {
 function updateManualSummary() {
   var el = document.getElementById('m-summary');
   if (!el) return;
-  var visual = manualState.visualMode === 'images' ? '&#128444; 3 auto-gen images (~3 Leonardo credits)' : '&#127909; Uploaded video (0 credits)';
-  var voice  = manualState.voiceMode  === 'ai'     ? '&#129302; AI Voice (~200 ElevenLabs chars)'
+  var hasLibPicks = manualState.libPicks && manualState.libPicks.every(function(p) { return p && p.url; });
+  var pickedCount = manualState.libPicks ? manualState.libPicks.filter(function(p) { return p && p.url; }).length : 0;
+  var visual = hasLibPicks
+    ? '&#128444; Library images (0 credits — 3/3 selected)'
+    : pickedCount > 0
+    ? '&#128444; ' + pickedCount + '/3 library images picked — or FLUX auto-gen'
+    : manualState.visualMode === 'images'
+    ? '&#128444; 3 FLUX images (~$0.045 GPU credits)'
+    : '&#127909; Uploaded video (0 credits)';
+  var voice  = manualState.voiceMode  === 'ai'     ? '&#129302; AI Voice (Chatterbox — free)'
              : manualState.voiceMode  === 'record'  ? '&#127908; Record in Studio after render'
              : '&#8679; Uploaded audio (0 credits)';
   var words  = (manualState.script || '').trim().split(/\s+/).filter(Boolean).length;
@@ -747,17 +755,28 @@ async function doManualCreate(action) {
 
     // Step 3: Trigger pipeline based on visual + voice mode
     if (manualState.visualMode === 'images') {
-      // Images mode — get image prompts from textareas
-      var imgPrompts = [
-        document.getElementById('m-img-p1')?.value || '',
-        document.getElementById('m-img-p2')?.value || '',
-        document.getElementById('m-img-p3')?.value || '',
-      ];
-      // Trigger full pipeline with script override
-      var pr = await fetch(API_BASE + '/run-topic', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ topic_id: manualState.topicId || null, topic, script })
-      });
+      // Check if user picked library images for all 3 slots
+      var hasLibPicks = manualState.libPicks.every(function(p) { return p && p.url; });
+      if (hasLibPicks) {
+        // Use library images — no image generation credits
+        var libUrls = manualState.libPicks.map(function(p) { return p.url; });
+        var pr = await fetch(API_BASE + '/run-with-images', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ image_urls: libUrls, topic: topic, script: script, category: manualState.cluster })
+        });
+        var pd = await pr.json();
+        if (pd.error) throw new Error(pd.error);
+        jobId = pd.job_id || jobId;
+      } else {
+        // Auto-generate images via pipeline
+        var pr = await fetch(API_BASE + '/run-topic', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ topic_id: manualState.topicId || null, topic, script })
+        });
+        var pd = await pr.json();
+        if (pd.error) throw new Error(pd.error);
+        jobId = pd.job_id || jobId;
+      }
     }
 
     if (manualState.voiceMode === 'ai' && manualState.visualMode === 'video') {
@@ -776,7 +795,8 @@ async function doManualCreate(action) {
 
     // Reset state
     manualState.topicId = null; manualState.topic = ''; manualState.scriptPkg = null;
-    manualState.videoFile = null; manualState.voiceFile = null; manualState.imgUrls = [null,null,null];
+    manualState.videoFile = null; manualState.voiceFile = null;
+    manualState.imgUrls = [null,null,null]; manualState.libPicks = [null,null,null];
     clearManualTopic();
     setTimeout(function() { loadJobs(); loadTopicsCount(); }, 1500);
 
@@ -1518,6 +1538,22 @@ function setLibJobType(jt, el) {
   loadLibrary();
 }
 
+async function backfillLibrary() {
+  var btn = document.querySelector('button[onclick="backfillLibrary()"]');
+  if (btn) { btn.disabled = true; btn.textContent = '⟳ Scanning R2...'; }
+  try {
+    var r = await fetch(API_BASE + '/image-library/backfill', { method: 'POST' });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    showToast('Backfill done: ' + d.inserted + ' images added, ' + d.skipped + ' already existed');
+    loadLibrary();
+  } catch(e) {
+    showToast('Backfill failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↓ Backfill R2'; }
+  }
+}
+
 async function loadLibrary() {
   var grid2 = document.getElementById('lib-grid2');
   if (grid2) grid2.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--muted);font-family:var(--mono);font-size:.75rem">&#9203; Loading...</div>';
@@ -1563,52 +1599,154 @@ function filterLib(topic, el) {
 }
 
 function renderLibrary() {
-  var html2 = allImages.length ? allImages.map(function(img) {
-    var sel2  = libSelectedImages2.some(function(s) { return s.url === img.url; });
-    var idx2  = libSelectedImages2.findIndex(function(s) { return s.url === img.url; });
+  // Filter by topic if set
+  var filtered = libTopicFilter === 'all'
+    ? allImages
+    : allImages.filter(function(img) { return img.topic === libTopicFilter; });
+
+  var makeCard = function(img, selFn, selArr, cntId, btnId) {
+    var sel   = selArr.some(function(s) { return s.url === img.url; });
+    var idx   = selArr.findIndex(function(s) { return s.url === img.url; });
     var cat   = CATS[img.cluster] || null;
     var engBadge = img.engine && img.engine !== 'unknown'
-      ? '<div style="position:absolute;top:4px;left:4px;font-family:var(--mono);font-size:.52rem;'
-        + 'background:rgba(0,0,0,.7);color:' + (img.engine.includes('FLUX') ? 'var(--accent)' : 'var(--muted)') + ';'
-        + 'padding:1px 4px;border-radius:3px">' + img.engine.replace('FLUX-A10G','FLUX').slice(0,10) + '</div>'
+      ? '<div style="position:absolute;top:4px;left:4px;font-family:var(--mono);font-size:.52rem;background:rgba(0,0,0,.7);color:'
+        + (img.engine.includes('FLUX') ? 'var(--accent)' : 'var(--muted)')
+        + ';padding:1px 4px;border-radius:3px">' + img.engine.replace('FLUX-A10G','FLUX').slice(0,10) + '</div>'
       : '';
     var jtBadge = img.job_type === 'longform'
-      ? '<div style="position:absolute;top:4px;right:4px;font-family:var(--mono);font-size:.52rem;'
-        + 'background:rgba(179,136,255,.3);color:var(--purple);padding:1px 4px;border-radius:3px">LF</div>'
+      ? '<div style="position:absolute;bottom:24px;right:4px;font-family:var(--mono);font-size:.52rem;background:rgba(179,136,255,.3);color:var(--purple);padding:1px 4px;border-radius:3px">LF</div>'
       : '';
-    var clBadge = cat
-      ? '<div style="font-size:.55rem;color:' + cat.color + ';padding:1px 0">' + cat.emoji + ' ' + img.cluster + '</div>'
-      : '';
-    var selBadge = sel2
-      ? '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;z-index:2">' + (idx2+1) + '</div>'
-      : '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.3);z-index:2"></div>';
+    var selBadge = sel
+      ? '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;z-index:2">' + (idx+1) + '</div>'
+      : '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.4);background:rgba(0,0,0,.25);z-index:2"></div>';
+    var clBadge = cat ? '<span style="font-size:.55rem;color:' + cat.color + '">' + cat.emoji + ' ' + img.cluster + '</span>' : '';
     var imgContent = img.url
-      ? '<img src="' + img.url + '" loading="lazy" '
-        + 'style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" '
-        + 'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">'
-        + '<div style="display:none;width:100%;aspect-ratio:9/16;background:var(--surface2);align-items:center;justify-content:center;flex-direction:column;gap:4px">'
-        + '<span style="font-size:1.2rem">🖼</span>'
-        + '<span style="font-family:var(--mono);font-size:.55rem;color:var(--muted)">Load failed</span></div>'
-      : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px">'
-        + '<span style="font-size:1.2rem">🖼</span>'
-        + '<span style="font-family:var(--mono);font-size:.55rem;color:var(--muted)">No R2 URL</span>'
-        + '<span style="font-family:var(--mono);font-size:.5rem;color:var(--muted2)">Add R2 creds to Modal</span></div>';
-    return '<div class="lib-img-card ' + (sel2 ? 'selected' : '') + '" '
+      ? '<img src="' + img.url + '" loading="lazy" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" onerror="this.style.display=\'none\'">'
+      : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:1.2rem">🖼</div>';
+    return '<div class="lib-img-card ' + (sel ? 'selected' : '') + '" '
       + 'data-imgurl="' + (img.url||'').replace(/"/g,'&quot;') + '" '
       + 'data-imgkey="' + (img.key||'').replace(/"/g,'&quot;') + '" '
       + 'data-imgid="' + (img.id||'') + '" '
-      + 'onclick="toggleLib2(this)" style="position:relative;cursor:pointer">'
-      + imgContent
-      + engBadge + jtBadge + selBadge
-      + '<div class="lib-topic">' + clBadge + esc((img.topic||'').slice(0,24)) + '</div>'
+      + 'data-selfn="' + selFn + '" '
+      + 'onclick="' + selFn + '(this,\'' + cntId + '\',\'' + btnId + '\')" style="position:relative;cursor:pointer">'
+      + imgContent + engBadge + jtBadge + selBadge
+      + '<div class="lib-topic">' + clBadge + ' <span style="font-size:.58rem">' + esc((img.topic||'').slice(0,20)) + '</span></div>'
       + '</div>';
-  }).join('')
-  : '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--muted);font-family:var(--mono);font-size:.75rem">'
-    + 'No images yet — run Full Auto to start building the library.</div>';
+  };
 
+  var empty = '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--muted);font-family:var(--mono);font-size:.75rem">No images yet — run Full Auto first.</div>';
+
+  // Create → Library tab grid (3-select, no delete)
+  var g1 = document.getElementById('lib-grid');
+  if (g1) {
+    g1.innerHTML = filtered.length
+      ? filtered.map(function(img) { return makeCard(img, '_toggleLibCreate', selectedImages, 'lib-sel-count', 'lib-create-btn'); }).join('')
+      : empty;
+  }
+
+  // Library page grid (multi-select + delete)
   var g2 = document.getElementById('lib-grid2');
-  if (g2) g2.innerHTML = html2;
+  if (g2) {
+    g2.innerHTML = filtered.length
+      ? filtered.map(function(img) { return makeCard(img, '_toggleLibPage', libSelectedImages2, 'lib-sel-count2', 'lib-create-btn2'); }).join('')
+      : empty;
+  }
+
+  buildLibFilter();
   _updateLibDeleteBtn();
+}
+
+
+// ── MANUAL IMAGE LIBRARY PICKER ─────────────────────────────
+var _manualLibSlot = null;
+
+async function openManualLibPicker(slotIdx) {
+  _manualLibSlot = slotIdx;
+  var labels = ['Hook', 'Story', 'Payoff'];
+
+  var overlay = document.getElementById('manual-lib-picker');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'manual-lib-picker';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;overflow:auto;padding:20px;box-sizing:border-box';
+    document.body.appendChild(overlay);
+  }
+
+  overlay.innerHTML = '<div style="max-width:860px;margin:0 auto">'
+    + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'
+    + '<button class="btn" onclick="document.getElementById(\'manual-lib-picker\').style.display=\'none\'">← Back</button>'
+    + '<div style="font-size:.9rem;font-weight:700">Pick image for slot ' + (slotIdx+1) + ' — ' + (labels[slotIdx]||'') + '</div>'
+    + '</div>'
+    + '<div id="manual-lib-picker-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px">'
+    + '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;padding:20px">Loading...</div>'
+    + '</div></div>';
+  overlay.style.display = 'block';
+
+  // Load images
+  try {
+    if (!allImages.length) {
+      var r = await fetch(API_BASE + '/image-library');
+      var d = await r.json();
+      allImages = d.images || [];
+    }
+    var grid = document.getElementById('manual-lib-picker-grid');
+    if (!allImages.length) {
+      grid.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;padding:20px">No images yet — generate some videos first.</div>';
+      return;
+    }
+    grid.innerHTML = allImages.map(function(img) {
+      var cat = CATS[img.cluster] || { color: 'var(--muted)', emoji: '📷' };
+      var current = manualState.libPicks[slotIdx];
+      var isCurrent = current && current.url === img.url;
+      var border = isCurrent ? 'var(--accent)' : 'transparent';
+      var check = isCurrent ? '<div style="position:absolute;top:4px;right:4px;background:var(--accent);color:#000;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700">&#10003;</div>' : '';
+      var imgEl = img.url
+        ? '<img src="' + esc(img.url) + '" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" onerror="this.parentElement.style.display=\'none\'">'
+        : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2);display:flex;align-items:center;justify-content:center">&#128444;</div>';
+      return '<div data-url="' + esc(img.url||'') + '" data-key="' + esc(img.key||'') + '" onclick="pickManualLibImgEl(this)"'
+        + ' style="cursor:pointer;border-radius:8px;overflow:hidden;border:3px solid ' + border + ';position:relative">'
+        + imgEl + check
+        + '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);padding:3px 5px;font-size:.52rem;color:' + cat.color + '">'
+        + cat.emoji + ' ' + esc((img.topic||'').slice(0,16)) + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    var grid = document.getElementById('manual-lib-picker-grid');
+    if (grid) grid.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.75rem;padding:20px">Error: ' + e.message + '</div>';
+  }
+}
+
+function pickManualLibImgEl(el) {
+  var url = el.dataset.url;
+  var key = el.dataset.key;
+  pickManualLibImg(url, key);
+}
+
+function pickManualLibImg(url, key) {
+  var slotIdx = _manualLibSlot;
+  if (slotIdx === null) return;
+  manualState.libPicks[slotIdx] = { url: url, key: key };
+  manualState.imgUrls[slotIdx] = url;
+
+  var n = slotIdx + 1;
+  var preview = document.getElementById('m-img-p' + n + '-preview');
+  var thumb   = document.getElementById('m-img-p' + n + '-thumb');
+  if (preview) preview.style.display = 'flex';
+  if (thumb)   thumb.src = url;
+
+  document.getElementById('manual-lib-picker').style.display = 'none';
+  updateManualSummary();
+  showToast('Slot ' + n + ' set from library (' +
+    manualState.libPicks.filter(function(p){return p&&p.url;}).length + '/3)');
+}
+
+function clearManualImgPick(slotIdx) {
+  manualState.libPicks[slotIdx] = null;
+  manualState.imgUrls[slotIdx] = null;
+  var n = slotIdx + 1;
+  var preview = document.getElementById('m-img-p' + n + '-preview');
+  if (preview) preview.style.display = 'none';
+  updateManualSummary();
 }
 
 function _updateLibDeleteBtn() {
@@ -1652,20 +1790,46 @@ async function deleteSelectedImages() {
   }
 }
 
-function toggleLib1(el) {
+// Unified toggle for Create→Library tab (3 max)
+function _toggleLibCreate(el, cntId, btnId) {
   var url = el.dataset.imgurl;
-  var idx = selectedImages.indexOf(url);
-  if (idx > -1) { selectedImages.splice(idx, 1); }
-  else {
-    if (selectedImages.length >= 3) { alert('Select exactly 3 images. Deselect one first.'); return; }
-    selectedImages.push(url);
+  var key = el.dataset.imgkey;
+  var idx = selectedImages.findIndex(function(s) { return s.url === url; });
+  if (idx > -1) {
+    selectedImages.splice(idx, 1);
+  } else {
+    if (selectedImages.length >= 3) { showToast('Deselect one first — max 3'); return; }
+    selectedImages.push({ url: url, key: key });
   }
-  var sc = document.getElementById('lib-sel-count');
+  var sc = document.getElementById(cntId || 'lib-sel-count');
   if (sc) sc.textContent = selectedImages.length + ' / 3 selected';
-  var btn = document.getElementById('lib-create-btn');
+  var btn = document.getElementById(btnId || 'lib-create-btn');
   if (btn) { btn.disabled = selectedImages.length !== 3; btn.style.opacity = selectedImages.length === 3 ? '1' : '.4'; }
   renderLibrary();
 }
+
+// Unified toggle for Library page (multi-select for delete/use)
+function _toggleLibPage(el, cntId, btnId) {
+  var url = el.dataset.imgurl;
+  var key = el.dataset.imgkey;
+  var id  = el.dataset.imgid;
+  var idx = libSelectedImages2.findIndex(function(s) { return s.url === url; });
+  if (idx > -1) { libSelectedImages2.splice(idx, 1); }
+  else { libSelectedImages2.push({ url: url, key: key, id: id }); }
+  var sc = document.getElementById(cntId || 'lib-sel-count2');
+  if (sc) {
+    var n = libSelectedImages2.length;
+    sc.textContent = n + ' selected';
+  }
+  var btn = document.getElementById(btnId || 'lib-create-btn2');
+  if (btn) { btn.disabled = libSelectedImages2.length !== 3; btn.style.opacity = libSelectedImages2.length === 3 ? '1' : '.4'; }
+  _updateLibDeleteBtn();
+  renderLibrary();
+}
+
+// Legacy aliases
+function toggleLib1(el) { _toggleLibCreate(el, 'lib-sel-count', 'lib-create-btn'); }
+function toggleLib2(el) { _toggleLibPage(el, 'lib-sel-count2', 'lib-create-btn2'); }
 
 function toggleLib2(el) {
   var url = el.dataset.imgurl;
@@ -1687,7 +1851,8 @@ function toggleLib2(el) {
 
 async function createVideoFromLibrary() {
   if (selectedImages.length !== 3) { alert('Select exactly 3 images first.'); return; }
-  await _createFromImages(selectedImages, 'lib-create-btn', 'lib-sel-count', function() { selectedImages = []; });
+  var urls = selectedImages.map(function(s) { return typeof s === 'string' ? s : s.url; });
+  await _createFromImages(urls, 'lib-create-btn', 'lib-sel-count', function() { selectedImages = []; });
 }
 async function createVideoFromLibrary2() {
   if (libSelectedImages2.length !== 3) { alert('Select exactly 3 images first.'); return; }
@@ -1828,6 +1993,26 @@ async function killTopic(topicId, btn) {
 
 // ── ANALYTICS ───────────────────────────────────────────────────
 async function loadAnalytics() {
+  var vg = document.getElementById('video-grid');
+  if (vg && currentPage === 'analytics') {
+    vg.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-family:var(--mono);font-size:.75rem">⟳ Syncing with YouTube...</div>';
+  }
+  // Trigger a sync first, wait for it, then fetch data
+  fetch(API_BASE + '/sync-analytics', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      console.log('Analytics sync result:', d);
+      if (d.error) console.error('Sync error:', d.error);
+      // Re-fetch after sync completes
+      return fetch(API_BASE + '/analytics');
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      allAnalytics = d.analytics || [];
+      analyticsJobs = d.jobs || [];
+      if (currentPage === 'analytics') renderAnalytics();
+    })
+    .catch(function(e) { console.error('Analytics sync chain failed:', e); });
   try {
     var r = await fetch(API_BASE + '/analytics');
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1836,8 +2021,13 @@ async function loadAnalytics() {
     allAnalytics = d.analytics || [];
     analyticsJobs = d.jobs || [];
     if (currentPage === 'analytics') renderAnalytics();
+    // Re-fetch after 10s to get synced numbers
+    if (currentPage === 'analytics') setTimeout(function() {
+      fetch(API_BASE + '/analytics').then(function(r) { return r.json(); }).then(function(d) {
+        allAnalytics = d.analytics || []; renderAnalytics();
+      }).catch(()=>{});
+    }, 10000);
   } catch(e) {
-    var vg = document.getElementById('video-grid');
     if (vg && currentPage === 'analytics') {
       vg.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.75rem;padding:20px">Analytics error: ' + e.message + '</div>';
     }
