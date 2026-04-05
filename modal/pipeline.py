@@ -222,10 +222,27 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
         if image_urls and len(image_urls) >= 3:
             image_paths = _download_library(image_urls, job_id)
         else:
+            # Validate scene prompts are topic-relevant (not generic offices)
+            validated_prompts = []
+            for i in range(3):
+                sp = script_pkg["scene_prompts"][i] if i < len(script_pkg.get("scene_prompts",[])) else ""
+                if not sp:
+                    sp = f"photorealistic India, {topic}, natural daylight, sharp focus"
+                # If non-AI topic has generic office prompt, rebuild from topic
+                office_words = ["engineer at computer", "software engineer", "at workstation", "at desk", "office worker"]
+                ai_cluster = script_pkg.get("cluster", cluster) == "AI"
+                if not ai_cluster and any(w in sp.lower() for w in office_words):
+                    sp = f"photorealistic India, {topic}, natural daylight, Indian people, sharp focus, no text"
+                    print(f"  Scene {i}: office prompt replaced with topic-based prompt")
+                validated_prompts.append(sp)
+
             futures = [
                 _image_gen().spawn(
-                    prompt=script_pkg["scene_prompts"][i],
+                    prompt=validated_prompts[i],
                     scene_idx=i, job_id=job_id,
+                    cluster=script_pkg.get("cluster", cluster),
+                    job_type="shorts",
+                    topic=topic,
                 )
                 for i in range(3)
             ]

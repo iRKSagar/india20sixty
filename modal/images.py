@@ -143,20 +143,73 @@ Pass (ok=true) if:
         return True, f"check failed: {e}"
 
 
-def _make_safe_prompt(original_prompt: str, cluster: str) -> str:
-    """Simplified fallback prompt that stays under CLIP 77-token limit."""
-    safe_anchors = {
-        "Space":    "ISRO Indian rocket engineers at mission control, large monitors, Bengaluru facility",
-        "AI":       "Indian software engineers at workstations, modern tech office, Bengaluru",
-        "Gadgets":  "Indian consumer with new smartphone, modern retail store, urban India",
-        "DeepTech": "Indian scientist with laboratory equipment, clean research facility, India",
-        "GreenTech":"Solar farm technicians, rows of solar panels, rural India, clear sky",
-        "Startups": "Indian entrepreneurs in modern startup office, whiteboard session, Bengaluru",
+def _make_safe_prompt(original_prompt: str, cluster: str, topic: str = "") -> str:
+    """
+    Fallback prompt when quality check fails.
+    Derives the SPECIFIC SUBJECT from the topic/prompt — never defaults to offices.
+    """
+    # Step 1: Extract key subject words from original prompt (first clause)
+    subject_clause = original_prompt.split(",")[0].split(".")[0].strip()
+    if len(subject_clause) > 80:
+        subject_clause = subject_clause[:77]
+
+    # Step 2: Cluster-specific subject anchors — used only if subject extraction fails
+    # These are NEVER offices unless cluster is explicitly about software
+    cluster_subjects = {
+        "Space":    "Indian rocket on launch pad, ISRO facility, Sriharikota",
+        "AI":       "Indian engineers at computers, modern tech office Bengaluru",
+        "Gadgets":  "Indian consumers with modern devices, electronics store India",
+        "DeepTech": "Indian scientists in laboratory, research equipment, IIT campus",
+        "GreenTech":"Solar panels installation, rural India, renewable energy workers",
+        "Startups": "Young Indian founders whiteboard session, startup office",
     }
-    anchor = safe_anchors.get(cluster, "Indian professionals at work, modern India")
-    # Short snippet from original — max 30 chars to stay under CLIP limit
-    snippet = original_prompt[:30].split(",")[0].strip()
-    return f"{anchor}, {snippet}, natural daylight, sharp focus, no text"
+
+    # Step 3: Topic keyword overrides — scan topic for specific subjects
+    topic_lower = (topic + " " + original_prompt).lower()
+    topic_subject = None
+
+    keyword_map = [
+        (["car", "ev", "electric vehicle", "automobile", "automotive", "road"],
+         "Indian electric cars on highway, EV charging station, urban India"),
+        (["rocket", "satellite", "space station", "isro", "gaganyaan", "launch"],
+         "Indian rocket launch pad at Sriharikota, ISRO control room"),
+        (["solar", "wind", "renewable", "green energy", "clean energy"],
+         "Solar farm with panels, renewable energy workers, rural India"),
+        (["drone", "uav", "unmanned"],
+         "Drone flying over Indian cityscape, operator with controller"),
+        (["chip", "semiconductor", "processor", "silicon"],
+         "Semiconductor chip close-up, Indian engineer in cleanroom"),
+        (["phone", "smartphone", "mobile", "5g"],
+         "Indian people with smartphones, 5G tower, urban street India"),
+        (["train", "railway", "metro", "bullet"],
+         "Indian metro train, modern railway station, commuters"),
+        (["hospital", "doctor", "health", "medical", "medicine"],
+         "Indian doctor with patient, modern hospital India"),
+        (["school", "education", "student", "classroom", "teacher"],
+         "Indian students in classroom, teacher at board, rural school"),
+        (["farm", "agriculture", "crop", "farmer"],
+         "Indian farmer in field, agricultural technology, rural India"),
+        (["startup", "founder", "funding", "unicorn", "fintech"],
+         "Young Indian entrepreneurs, startup pitch room, whiteboard"),
+        (["quantum", "biotech", "3d print", "nanotech"],
+         "Indian scientist with advanced research equipment, laboratory"),
+        (["hyperloop", "infrastructure", "bridge", "highway", "construction"],
+         "Indian infrastructure construction, workers on site, modern India"),
+        (["robot", "automation", "machine", "factory"],
+         "Industrial robots in Indian manufacturing plant"),
+        (["data center", "server", "cloud"],
+         "Data center server racks, Indian technician, blue lighting"),
+    ]
+
+    for keywords, subject in keyword_map:
+        if any(kw in topic_lower for kw in keywords):
+            topic_subject = subject
+            break
+
+    # Use topic-derived subject first, then extracted clause, then cluster default
+    final_subject = topic_subject or subject_clause or cluster_subjects.get(cluster, "Indian technology workers")
+
+    return f"photorealistic, {final_subject}, natural daylight, sharp focus, no text no logos"
 
 IMG_WIDTH        = 864
 IMG_HEIGHT       = 1536
@@ -217,8 +270,9 @@ def generate_single_image(
     scene_idx: int,
     job_id: str,
     cluster: str = "AI",
-    job_type: str = "shorts",    # "shorts" | "longform"
-    engine_mode: str = "inbuilt", # "inbuilt" | "external"
+    job_type: str = "shorts",
+    engine_mode: str = "inbuilt",
+    topic: str = "",          # actual topic text for image_cache + fallback
 ) -> dict:
     """
     Generate one image. Auto-saves to R2 + image_cache after success.
@@ -297,7 +351,7 @@ def generate_single_image(
         print(f"  ✗ Quality check FAILED: {quality_reason}")
         print(f"  Regenerating with refined prompt...")
         # Try once more with a more explicit, literal prompt
-        refined = _make_safe_prompt(prompt, cluster)
+        refined = _make_safe_prompt(prompt, cluster, topic)
         print(f"  Refined: {refined[:80]}...")
         tier_used = None
         if engine_mode == "inbuilt":
@@ -342,12 +396,11 @@ def generate_single_image(
     # Step 2: Always insert to image_cache (with or without R2 URL)
     if SUPABASE_URL and tier_used != "R2Library":
         public_url = r2_url or ""
-        # Extract topic from job_id (format: job_id or job_id_segN)
-        topic_hint = job_id.replace("-","").replace("_","")[:20]
         _insert_image_cache(
             SUPABASE_URL, SUPABASE_ANON_KEY,
             job_id, r2_key, public_url, cluster,
-            prompt, tier_used, job_type, scene_idx
+            prompt, tier_used, job_type, scene_idx,
+            topic=topic,
         )
         if not r2_url:
             print(f"  ⚠ image_cache saved without R2 URL — R2 creds missing from Modal secrets")
@@ -366,12 +419,13 @@ def _try_flux(prompt: str, output_path: str) -> bool:
 
     sanitized = _sanitize_prompt(prompt)
 
-    # CLIP hard limit: 77 tokens ≈ ~200 chars total (including STYLE_PREFIX)
-    # Truncate the raw prompt BEFORE prepending the prefix
-    # STYLE_PREFIX ≈ 60 chars, so leave ~140 chars for the actual prompt
+    # CLIP hard limit: 77 tokens ≈ 200 chars total (STYLE_PREFIX ~60 + prompt ~140)
+    # Cut at last comma to avoid truncating mid-subject
     if len(sanitized) > 140:
-        sanitized = sanitized[:137] + "..."
-        print(f"  Prompt truncated to 140 chars for CLIP 77-token limit")
+        truncated = sanitized[:140]
+        last_comma = truncated.rfind(",")
+        sanitized = truncated[:last_comma] if last_comma > 60 else truncated
+        print(f"  Prompt truncated to {len(sanitized)} chars for CLIP 77-token limit")
 
     full_prompt = f"{STYLE_PREFIX} {sanitized}"
     print(f"  Full prompt ({len(full_prompt)} chars): {full_prompt[:120]}...")
@@ -467,7 +521,8 @@ def _upload_to_r2(local_path, r2_key, r2_account_id, r2_access_key,
 
 
 def _insert_image_cache(supabase_url, supabase_key, job_id, r2_key,
-                        public_url, cluster, prompt, engine, job_type, scene_idx):
+                        public_url, cluster, prompt, engine, job_type, scene_idx,
+                        topic: str = ""):
     """Insert image record into Supabase image_cache. Always called — even without R2."""
     try:
         r = requests.post(
@@ -483,6 +538,7 @@ def _insert_image_cache(supabase_url, supabase_key, job_id, r2_key,
                 "r2_key":    r2_key,
                 "public_url":public_url,
                 "cluster":   cluster,
+                "topic":     topic[:200] if topic else "",
                 "prompt":    prompt[:500],
                 "engine":    engine,
                 "job_type":  job_type,
@@ -492,7 +548,7 @@ def _insert_image_cache(supabase_url, supabase_key, job_id, r2_key,
             timeout=10,
         )
         if r.ok:
-            print(f"  image_cache ✓ scene={scene_idx} cluster={cluster}")
+            print(f"  image_cache ✓ scene={scene_idx} cluster={cluster} topic={topic[:40]}")
         else:
             print(f"  image_cache insert failed {r.status_code}: {r.text[:200]}")
     except Exception as e:

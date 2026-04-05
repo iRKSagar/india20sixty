@@ -980,12 +980,13 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 
 <!-- TOPICS ──────────────────────────────────────────────────── -->
 <div class="page" id="page-topics">
-  <div id="debug-topics"></div>
-  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
     <button class="btn btn-ghost btn-sm"   id="bt-all"   onclick="filterTopics('all')">All</button>
     <button class="btn btn-primary btn-sm" id="bt-ready" onclick="filterTopics('ready')">Ready</button>
     <button class="btn btn-ghost btn-sm"   id="bt-used"  onclick="filterTopics('used')">Used</button>
     <button class="btn btn-purple btn-sm"  onclick="openReplenishModal()">&#8635; Replenish</button>
+    <button class="btn btn-ghost btn-sm"   onclick="loadTopics().then(function(){renderTopicsPage();loadTopicsCount();})">&#8635; Refresh</button>
+    <span id="debug-topics" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-left:4px"></span>
   </div>
   <div class="cat-grid" id="topic-cat-strip" style="margin-bottom:12px"></div>
   <div class="panel">
