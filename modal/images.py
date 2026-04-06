@@ -173,7 +173,7 @@ def _make_safe_prompt(original_prompt: str, cluster: str, topic: str = "") -> st
 
     # Cluster gets first priority — never let keyword override the cluster
     cluster_override = {
-        "Space":    ("rocket", "Indian rocket launch pad Sriharikota, ISRO mission control, satellites"),
+        "Space":    ("rocket", "Indian rocket on launch pad Sriharikota, ISRO markings on rocket body, Indian tricolour flag on gantry, dramatic sky"),
         "GreenTech":("solar",  "Solar panels installation India, renewable energy workers, rural landscape"),
         "DeepTech": ("lab",    "Indian scientists in research laboratory, advanced equipment, IIT campus"),
     }

@@ -486,6 +486,7 @@ Rules:
 - Include atmosphere: {hook_atm}
 - Specific to this topic — not generic India cityscape
 - No people at desks. No offices. Show the actual technology or infrastructure.
+- For space/defence topics: include Indian tricolour flag on gantry or ISRO markings — subtle set dressing not graphic overlay
 - Under 120 characters total.
 
 Example for space topic: "Six Indian rockets standing on launch pads at dusk, storm clouds overhead, ocean horizon, ultra-wide cinematic"
@@ -548,10 +549,31 @@ Return ONLY valid JSON array (no markdown): ["scene2_under_120chars", "scene3_un
             f"Wide cinematic India future {topic[:30]} {payoff_atm} optimistic"
         ]
 
+    # Flag branding — add to payoff scene for relevant clusters when no people shown
+    # Space, GreenTech, DeepTech infrastructure shots benefit most
+    # Startups and AI (people-present) don't need it
+    FLAG_CLUSTERS = {"Space", "GreenTech", "DeepTech", "Gadgets"}
+    flag_hint = ""
+    if cluster in FLAG_CLUSTERS:
+        flag_options = [
+            ", small Indian tricolour flag visible on equipment",
+            ", Indian flag patch on uniform in corner",
+            ", Indian flag on rocket body",
+            ", tricolour flag flying at facility edge",
+            ", Indian flag subtle in background",
+        ]
+        flag_hint = random.choice(flag_options)
+
+    payoff_scene = scene_2_3[1] if scene_2_3 and len(scene_2_3) > 1 else _FALLBACKS[2]
+    # Add flag only if scene doesn't already mention people prominently
+    people_words = ["person", "people", "crowd", "man", "woman", "engineer", "farmer", "student"]
+    if flag_hint and not any(w in payoff_scene.lower() for w in people_words):
+        payoff_scene = payoff_scene.rstrip(".,") + flag_hint
+
     return [
         hook_prompt,
         scene_2_3[0] if scene_2_3 else _FALLBACKS[1],
-        scene_2_3[1] if scene_2_3 and len(scene_2_3) > 1 else _FALLBACKS[2],
+        payoff_scene,
     ]
 
 
