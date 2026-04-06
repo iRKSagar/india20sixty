@@ -1040,7 +1040,11 @@ async function syncYouTubeAnalytics(env){
   const ids=jobs.map(j=>j.youtube_id).join(",");
   console.log("Analytics: fetching stats for",jobs.length,"videos:",ids.slice(0,80));
   const res=await fetch("https://www.googleapis.com/youtube/v3/videos?part=statistics&id="+ids+"&access_token="+token);
-  if(!res.ok){const b=await res.text();throw new Error("YouTube API failed "+res.status+": "+b.slice(0,150));}
+  if(!res.ok){
+    const errBody = await res.text();
+    console.error("Analytics: YouTube API failed",res.status, errBody.slice(0,500));
+    throw new Error("YouTube API failed "+res.status+": "+errBody.slice(0,300));
+  }
   const ytData=await res.json();
   const items=ytData.items||[];
   console.log("Analytics: YouTube returned",items.length,"items");
