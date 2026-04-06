@@ -35,22 +35,25 @@ app = modal.App("india20sixty-images")
 CHANNEL_NAME = "india20sixty"
 
 STYLE_PREFIX = (
-    "photorealistic modern India, "
-    "Indian faces natural expressions, "
-    "natural daylight, sharp focus, "
-    "no text no logos, "
+    "cinematic photorealistic India, "
+    "dramatic natural lighting, "
+    "sharp focus, ultra-detailed, "
+    "no text no logos no watermarks, "
 )
 
 NEGATIVE_PROMPT = (
-    "golden hour, orange tint, saffron palette, warm orange grade, ochre, "
+    "golden hour, orange tint, saffron palette, ochre, warm orange grade, "
     "ARRI cinematic, anamorphic flare, "
-    "blurry, cartoon, anime, painting, watermark, text overlay, logo, "
-    "traditional religious imagery unless relevant, "
-    "western faces, european, low quality, overexposed, "
-    "nsfw, ugly, distorted anatomy, extra limbs, deformed hands, "
-    "stock photo look, generic clipart, "
-    "jpeg artifacts, chromatic aberration, "
+    "blurry, soft focus, cartoon, anime, painting, illustration, "
+    "watermark, text overlay, logo, caption, subtitle, "
+    "western faces, european faces, low quality, overexposed, underexposed, "
+    "nsfw, ugly, distorted anatomy, extra limbs, deformed hands, melted faces, "
+    "stock photo look, generic clipart, corporate headshot, "
+    "jpeg artifacts, chromatic aberration, noise, grain, "
     "marigold hues, lotus motif unless relevant, "
+    "office workers unless topic is about software, "
+    "people at computers unless topic is AI or software, "
+    "flat lighting, studio backdrop, white background, "
 )
 
 import re as _re
@@ -168,47 +171,60 @@ def _make_safe_prompt(original_prompt: str, cluster: str, topic: str = "") -> st
     topic_lower = (topic + " " + original_prompt).lower()
     topic_subject = None
 
+    # Cluster gets first priority — never let keyword override the cluster
+    cluster_override = {
+        "Space":    ("rocket", "Indian rocket launch pad Sriharikota, ISRO mission control, satellites"),
+        "GreenTech":("solar",  "Solar panels installation India, renewable energy workers, rural landscape"),
+        "DeepTech": ("lab",    "Indian scientists in research laboratory, advanced equipment, IIT campus"),
+    }
+    if cluster in cluster_override:
+        kw, subject = cluster_override[cluster]
+        return f"photorealistic, {subject}, natural daylight, sharp focus, no text no logos"
+
+    # Keyword map — ordered by specificity, word-boundary matched
     keyword_map = [
-        (["car", "ev", "electric vehicle", "automobile", "automotive", "road"],
-         "Indian electric cars on highway, EV charging station, urban India"),
-        (["rocket", "satellite", "space station", "isro", "gaganyaan", "launch"],
-         "Indian rocket launch pad at Sriharikota, ISRO control room"),
-        (["solar", "wind", "renewable", "green energy", "clean energy"],
-         "Solar farm with panels, renewable energy workers, rural India"),
-        (["drone", "uav", "unmanned"],
+        (["space station", "rocket", "satellite", "isro", "gaganyaan", "launch pad", "spacecraft"],
+         "Indian rocket launch pad Sriharikota, ISRO control room, spacecraft"),
+        (["electric vehicle", "automobile", "automotive", "ev car", "ev launch"],
+         "Indian electric cars highway, EV charging station urban India"),
+        (["solar farm", "solar panel", "wind turbine", "renewable energy", "green hydrogen"],
+         "Solar farm panels India, renewable energy workers, rural landscape"),
+        (["drone", "uav", "unmanned aerial"],
          "Drone flying over Indian cityscape, operator with controller"),
-        (["chip", "semiconductor", "processor", "silicon"],
-         "Semiconductor chip close-up, Indian engineer in cleanroom"),
-        (["phone", "smartphone", "mobile", "5g"],
-         "Indian people with smartphones, 5G tower, urban street India"),
-        (["train", "railway", "metro", "bullet"],
-         "Indian metro train, modern railway station, commuters"),
-        (["hospital", "doctor", "health", "medical", "medicine"],
-         "Indian doctor with patient, modern hospital India"),
-        (["school", "education", "student", "classroom", "teacher"],
-         "Indian students in classroom, teacher at board, rural school"),
-        (["farm", "agriculture", "crop", "farmer"],
-         "Indian farmer in field, agricultural technology, rural India"),
-        (["startup", "founder", "funding", "unicorn", "fintech"],
-         "Young Indian entrepreneurs, startup pitch room, whiteboard"),
-        (["quantum", "biotech", "3d print", "nanotech"],
-         "Indian scientist with advanced research equipment, laboratory"),
-        (["hyperloop", "infrastructure", "bridge", "highway", "construction"],
-         "Indian infrastructure construction, workers on site, modern India"),
-        (["robot", "automation", "machine", "factory"],
-         "Industrial robots in Indian manufacturing plant"),
-        (["data center", "server", "cloud"],
-         "Data center server racks, Indian technician, blue lighting"),
+        (["semiconductor", "chip fabrication", "silicon wafer", "processor"],
+         "Semiconductor chip close-up, Indian engineer cleanroom"),
+        (["smartphone", "mobile phone", "5g tower", "telecom"],
+         "Indian people with smartphones, 5G tower urban India"),
+        (["metro train", "railway", "bullet train", "hyperloop"],
+         "Indian metro train modern station, commuters platform"),
+        (["hospital", "doctor", "healthcare", "medical device"],
+         "Indian doctor with patient, modern hospital"),
+        (["school", "classroom", "education", "teacher", "student"],
+         "Indian students in classroom, teacher at board"),
+        (["farmer", "agriculture", "crop field", "irrigation"],
+         "Indian farmer in field with technology, agricultural drone, rural India"),
+        (["startup", "founder", "venture funding", "unicorn"],
+         "Young Indian entrepreneurs whiteboard session, startup office"),
+        (["quantum", "biotech", "3d printing", "nanotech"],
+         "Indian scientist advanced research equipment, laboratory"),
+        (["infrastructure", "bridge", "highway", "construction", "smart city"],
+         "Indian infrastructure construction, workers on site, modern city"),
+        (["robot", "automation", "factory", "manufacturing"],
+         "Industrial robots Indian manufacturing plant"),
+        (["data center", "cloud computing", "server farm"],
+         "Data center server racks, Indian technician blue lighting"),
+        (["car launch", "new car", "vehicle launch", "road test"],
+         "New Indian car on highway, launch event, modern road"),
     ]
 
+    topic_subject = None
     for keywords, subject in keyword_map:
-        if any(kw in topic_lower for kw in keywords):
+        # Word-boundary matching to avoid partial matches like "farm" in "farmers"
+        if any(re.search(r'\b' + re.escape(kw) + r'\b', topic_lower) for kw in keywords):
             topic_subject = subject
             break
 
-    # Use topic-derived subject first, then extracted clause, then cluster default
     final_subject = topic_subject or subject_clause or cluster_subjects.get(cluster, "Indian technology workers")
-
     return f"photorealistic, {final_subject}, natural daylight, sharp focus, no text no logos"
 
 IMG_WIDTH        = 864

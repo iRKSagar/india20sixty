@@ -181,18 +181,20 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
         # ── STEP 1: RESEARCH ──────────────────────────────────────
         print("\n--- Research ---")
         if script_package and script_package.get("text"):
-            # Validate pre-generated council script before using it
-            raw_text = script_package.get("text", "")
+            raw_text  = script_package.get("text", "")
             word_count = len(raw_text.split())
-
-            # Detect Hindi/Devanagari characters
             import re as _re
             devanagari = len(_re.findall(r'[\u0900-\u097F]', raw_text))
             hindi_ratio = devanagari / max(len(raw_text), 1)
 
             if hindi_ratio > 0.02 or word_count < 45:
-                print(f"  Council script rejected: {word_count} words, {devanagari} Devanagari chars — falling through to scriptwriter")
-                script_package = None  # fall through to research + scriptwriter
+                print(f"  Council script rejected: {word_count} words, {devanagari} Devanagari — running scriptwriter")
+                # Fall through to research + scriptwriter below
+                fact_package = _research().remote(job_id, topic)
+                log(f"Research: {'found' if fact_package.get('found') else 'no anchor'}")
+                print("\n--- Script ---")
+                script_pkg = _scriptwriter().remote(job_id, topic, fact_package, cluster, subscribe_cta)
+                log(f"Script mood={script_pkg['mood']} words={len(script_pkg['script'].split())}")
             else:
                 print(f"  Using pre-generated council script ({word_count} words)")
                 fact_package = {"found": True, "key_fact": script_package.get("key_fact", ""),
@@ -203,13 +205,13 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
                     "mood":            script_package.get("mood", "hopeful_future"),
                     "scene_prompts":   script_package.get("scene_prompts", [f"cinematic modern India scene {i+1}" for i in range(3)]),
                     "captions":        script_package.get("captions", []),
+                    "cluster":         script_package.get("cluster", cluster),
+                    "key_fact":        script_package.get("key_fact", ""),
                 }
                 log(f"Script (council): mood={script_pkg['mood']} words={word_count}")
         else:
             fact_package = _research().remote(job_id, topic)
             log(f"Research: {'found' if fact_package.get('found') else 'no anchor'}")
-
-            # ── STEP 2: SCRIPT ────────────────────────────────────────
             print("\n--- Script ---")
             script_pkg = _scriptwriter().remote(job_id, topic, fact_package, cluster, subscribe_cta)
             log(f"Script mood={script_pkg['mood']} words={len(script_pkg['script'].split())}")

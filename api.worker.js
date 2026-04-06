@@ -857,28 +857,77 @@ Return ONLY valid JSON array:
 
 // ── REPLENISH — runs directly in Worker via ctx.waitUntil ─────
 const SEED_HEADLINES = {
-  AI:       [{t:"India AI startup ecosystem raises record funding 2026",c:"AI"},{t:"IIT researchers develop multilingual AI model for 22 Indian languages",c:"AI"},{t:"India launches national AI compute infrastructure for universities",c:"AI"},{t:"Indian AI firm wins global medical imaging benchmark",c:"AI"},{t:"India's AI regulation framework first draft released",c:"AI"}],
-  Space:    [{t:"ISRO Gaganyaan astronaut training completion announced",c:"Space"},{t:"India commercial space sector attracts 10 new startups via IN-SPACe",c:"Space"},{t:"ISRO successfully tests space docking technology",c:"Space"},{t:"India launches earth observation satellite for 600 million farmers",c:"Space"},{t:"India space station 2035 blueprint released by ISRO",c:"Space"}],
-  Gadgets:  [{t:"India first homegrown 5G chip enters mass production",c:"Gadgets"},{t:"India EV sales cross 1 million units monthly",c:"Gadgets"},{t:"Made in India drone achieves 200km range record",c:"Gadgets"},{t:"India affordable 5G smartphone launched at Rs 8000",c:"Gadgets"},{t:"India semiconductor fabrication plant gets government approval",c:"Gadgets"}],
-  DeepTech: [{t:"IIT Bombay develops room temperature superconductor breakthrough",c:"DeepTech"},{t:"India quantum computing startup achieves 100 qubit milestone",c:"DeepTech"},{t:"Indian biotech firm develops dengue vaccine using AI",c:"DeepTech"},{t:"India 3D printing company manufactures bridge in 72 hours",c:"DeepTech"},{t:"India nanotech research center opens with 500 crore funding",c:"DeepTech"}],
-  GreenTech:[{t:"India achieves 200 GW solar capacity milestone",c:"GreenTech"},{t:"India green hydrogen exports begin to Europe",c:"GreenTech"},{t:"India builds world largest floating solar farm",c:"GreenTech"},{t:"India EV battery recycling industry creates 50000 jobs",c:"GreenTech"},{t:"India wind energy capacity doubles in single year",c:"GreenTech"}],
-  Startups: [{t:"Indian fintech startup becomes youngest decacorn in Asia",c:"Startups"},{t:"India agritech startup brings AI to 100 million farmers",c:"Startups"},{t:"India edtech pivot to skill training creates new unicorn",c:"Startups"},{t:"India health startup digitises primary care for rural areas",c:"Startups"},{t:"India B2B SaaS exports cross 10 billion dollars annually",c:"Startups"}],
+  AI:       [
+    {t:"India AI startup ecosystem raises record funding in 2026",c:"AI"},
+    {t:"IIT researchers develop multilingual AI model for 22 Indian languages",c:"AI"},
+    {t:"India launches national AI compute infrastructure for universities",c:"AI"},
+    {t:"Indian AI firm wins global medical imaging benchmark",c:"AI"},
+    {t:"India AI regulation framework first draft released for public comment",c:"AI"},
+    {t:"Bengaluru AI startup deploys voice assistant for 100 million rural Indians",c:"AI"},
+    {t:"India builds AI model that translates court documents into 12 regional languages",c:"AI"},
+  ],
+  Space:    [
+    {t:"ISRO Gaganyaan astronaut training completion announced for 2026 mission",c:"Space"},
+    {t:"India commercial space sector attracts 10 new startups via IN-SPACe program",c:"Space"},
+    {t:"ISRO successfully tests space docking technology for future station",c:"Space"},
+    {t:"India launches earth observation satellite helping 600 million farmers",c:"Space"},
+    {t:"India space station 2035 blueprint released by ISRO",c:"Space"},
+    {t:"Private Indian rocket startup completes first orbital launch",c:"Space"},
+    {t:"ISRO Chandrayaan-4 mission to collect lunar samples confirmed",c:"Space"},
+  ],
+  Gadgets:  [
+    {t:"India first homegrown 5G chip enters mass production at Pune fab",c:"Gadgets"},
+    {t:"India EV two-wheeler sales cross 1 million units in single month",c:"Gadgets"},
+    {t:"Made in India drone achieves 200km range record breaking world benchmark",c:"Gadgets"},
+    {t:"India affordable 5G smartphone launched at Rs 8000 targeting next billion",c:"Gadgets"},
+    {t:"India semiconductor fabrication plant gets government approval in Gujarat",c:"Gadgets"},
+    {t:"Indian EV startup launches 500km range electric car priced under Rs 15 lakh",c:"Gadgets"},
+    {t:"India launches satellite internet service at Rs 800 per month for villages",c:"Gadgets"},
+  ],
+  DeepTech: [
+    {t:"IIT Bombay develops room temperature superconductor breakthrough",c:"DeepTech"},
+    {t:"India quantum computing startup achieves 100 qubit milestone in Hyderabad",c:"DeepTech"},
+    {t:"Indian biotech firm develops dengue vaccine using AI cutting trial time by half",c:"DeepTech"},
+    {t:"India 3D printing company manufactures entire bridge in 72 hours",c:"DeepTech"},
+    {t:"India nanotech research center opens with 500 crore government funding",c:"DeepTech"},
+    {t:"IIT Madras develops biodegradable plastic that dissolves in 30 days",c:"DeepTech"},
+    {t:"India gene therapy startup gets approval for sickle cell disease treatment",c:"DeepTech"},
+  ],
+  GreenTech:[
+    {t:"India achieves 200 GW solar capacity two years ahead of target",c:"GreenTech"},
+    {t:"India green hydrogen exports begin first shipment to Europe",c:"GreenTech"},
+    {t:"India builds world largest floating solar farm on reservoir",c:"GreenTech"},
+    {t:"India EV battery recycling industry grows to create 50000 new jobs",c:"GreenTech"},
+    {t:"India wind energy capacity doubles in single year crossing 100 GW",c:"GreenTech"},
+    {t:"India launches solar powered cold storage for farmers reducing waste by 40 percent",c:"GreenTech"},
+    {t:"India tidal energy project off Gujarat coast becomes operational",c:"GreenTech"},
+  ],
+  Startups: [
+    {t:"Indian fintech startup becomes youngest decacorn in Asia at 7 years old",c:"Startups"},
+    {t:"India agritech startup brings AI advisory to 100 million smallholder farmers",c:"Startups"},
+    {t:"India edtech pivot to skill training creates new unicorn valued at 2 billion",c:"Startups"},
+    {t:"India health startup digitises primary care reaching 500 million unserved patients",c:"Startups"},
+    {t:"India B2B SaaS exports cross 10 billion dollars annually for first time",c:"Startups"},
+    {t:"India logistics startup cuts rural delivery cost by 60 percent using drones",c:"Startups"},
+    {t:"India cleantech startup raises 500 crore to build EV charging network in tier 2 cities",c:"Startups"},
+  ],
 };
 
 async function _runReplenish(env, cats, target) {
-  console.log("Replenish: cats="+cats+" target="+target);
+  console.log("Replenish: cats="+cats.join(",")+" target="+target);
   const today = new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
   let added = 0;
+  const perCat = Math.max(2, Math.ceil(target / cats.length));
 
   for (const cat of cats) {
     if (added >= target) break;
-    const perCat = Math.ceil((target - added) / (cats.length - cats.indexOf(cat)));
-    const seeds = SEED_HEADLINES[cat] || [];
-    // Shuffle seeds
-    const shuffled = seeds.sort(()=>Math.random()-0.5).slice(0, perCat + 2);
+    const seeds = (SEED_HEADLINES[cat] || []).slice(); // copy
+    // Shuffle
+    seeds.sort(()=>Math.random()-0.5);
+    let catAdded = 0;
 
-    for (const seed of shuffled) {
-      if (added >= target) break;
+    for (const seed of seeds) {
+      if (added >= target || catAdded >= perCat) break;
       try {
         const headline = seed.t;
         const prompt = `You are a content council for India20Sixty — YouTube Shorts about India's near future.
@@ -901,16 +950,20 @@ Extract the PHYSICAL SUBJECT from the headline:
 - headline has "AI/software" → ONLY then show engineers at computers
 Each prompt must be under 80 characters. No template text. No brackets.
 
-Return ONLY valid JSON (no markdown):
+Return ONLY valid JSON (no markdown). Fill every value — no placeholders, no brackets, no template text:
 {
-  "video_angle": "compelling specific angle max 100 chars",
+  "video_angle": "example: How India built its own 5G chip in 3 years",
   "cluster": "${cat}",
-  "key_fact": "most interesting verifiable fact from headline",
-  "council_score": 75,
+  "key_fact": "example: India produced its first 5nm chip at fab in Pune",
+  "council_score": 78,
   "script": {
-    "text": "50-55 word script. Pure Indian English. Hook with fact. Debate question end. No CTA.",
+    "text": "Write 50-55 actual words here. Indian English. Start with the key fact. End with debate question.",
     "mood": "hopeful_future",
-    "scene_prompts": ["[write actual hook shot prompt here — physical subject from headline, India setting]", "[write actual detail shot prompt here — close-up of technology]", "[write actual wide shot prompt here — India scale]"]
+    "scene_prompts": [
+      "HOOK: [ultra-wide India-scale shot of this topic's subject, dramatic sky or mist or dust haze, cinematic, no offices]",
+      "STORY: [medium shot human scale, Indian hands or face with the specific technology, sharp clean detail]",
+      "PAYOFF: [wide cinematic future India transformed by this technology, god rays or soft dawn haze, optimistic]"
+    ]
   }
 }`;
 
@@ -926,7 +979,7 @@ Return ONLY valid JSON (no markdown):
         const raw = d.choices[0].message.content;
         const data = JSON.parse(raw);
         const score = parseInt(data.council_score)||70;
-        if(score < 65){console.log("Score too low:",score,data.video_angle?.slice(0,40));continue;}
+        if(score < 55){console.log("Score too low:",score,data.video_angle?.slice(0,40));continue;}
 
         const s = data.script||{};
         // Validate scene prompts — strip template placeholders GPT sometimes outputs
@@ -948,8 +1001,19 @@ Return ONLY valid JSON (no markdown):
           word_count: (s.text||"").split(/\s+/).filter(Boolean).length,
         };
 
+        const videoAngle = data.video_angle||seed.t;
+
+        // Dedup — skip if a similar topic already exists (unused)
+        const existing = await sbGet(env,"topics?used=eq.false&select=topic&limit=50").catch(()=>[]);
+        const isDup = existing.some(t => {
+          const a = t.topic.toLowerCase().slice(0,40);
+          const b = videoAngle.toLowerCase().slice(0,40);
+          return a === b || (a.length > 20 && b.includes(a.slice(0,20)));
+        });
+        if(isDup){ console.log("Skipping duplicate:",videoAngle.slice(0,50)); continue; }
+
         await sbInsert(env,"topics",{
-          topic: data.video_angle||seed.t,
+          topic: videoAngle,
           cluster: data.cluster||cat,
           council_score: score,
           script_package: scriptPkg,
@@ -957,8 +1021,8 @@ Return ONLY valid JSON (no markdown):
           used: false,
           created_at: new Date().toISOString(),
         });
-        added++;
-        console.log("Replenish ✓ "+cat+": "+data.video_angle?.slice(0,50)+" score="+score);
+        added++; catAdded++;
+        console.log("Replenish ✓ "+cat+"("+catAdded+"/"+perCat+"): "+(data.video_angle||"").slice(0,50)+" score="+score);
       } catch(e) {
         console.error("Replenish seed error:",seed.t.slice(0,40),e.message);
       }

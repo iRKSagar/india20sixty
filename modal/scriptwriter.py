@@ -439,6 +439,33 @@ def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict) -> lis
     shot1  = random.choice(_SHOT_TYPES[1])
     shot2  = random.choice(_SHOT_TYPES[2])
 
+    # Atmospheric moods per scene role
+    HOOK_ATMOSPHERES = [
+        "storm clouds building overhead dramatic sky",
+        "pre-dawn blue hour mist rising from ground",
+        "dust haze catching low slanted light",
+        "monsoon rain-slicked streets reflecting city lights",
+        "morning fog with shafts of light breaking through",
+        "overcast dramatic sky heavy clouds deep shadows",
+    ]
+    STORY_ATMOSPHERES = [
+        "clean sharp lighting crisp detail",
+        "soft diffused natural window light",
+        "cool blue LED ambient light",
+        "warm practical lamp close-up clarity",
+    ]
+    PAYOFF_ATMOSPHERES = [
+        "god rays breaking through clouds over Indian landscape",
+        "soft haze on distant horizon optimistic warm",
+        "clear dawn light hopeful open sky",
+        "gentle bokeh background warm points of light",
+        "wide sky with scattered clouds and shafts of light",
+    ]
+
+    hook_atm   = random.choice(HOOK_ATMOSPHERES)
+    story_atm  = random.choice(STORY_ATMOSPHERES)
+    payoff_atm = random.choice(PAYOFF_ATMOSPHERES)
+
     hook_prompt = None
     try:
         r = requests.post(
@@ -446,27 +473,34 @@ def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict) -> lis
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
                   "messages": [{"role": "user", "content":
-                    f"""Create ONE striking image prompt for a YouTube Short hook frame.
-Channel: India20Sixty — India's near future (tech, space, innovation, startups)
+                    f"""Create ONE cinematic hook image for a YouTube Shorts opening frame.
+Channel: India20Sixty — India's transformation at massive scale.
 Topic: "{topic}"{fact_hint}
 
-CRITICAL — show THE SPECIFIC SUBJECT of this topic:
-- If topic is about cars/EVs → show cars, roads, EV charging, NOT offices
-- If topic is about space/rockets → show launch pad, rocket, satellite, NOT generic city
-- If topic is about solar/green → show solar panels, installations, NOT engineers at desks
-- If topic is about AI/software → THEN show engineers at computers
-- Always: Indian faces, Indian setting, natural daylight, photorealistic, no text
+SCENE ROLE: Hook — stop the scroll. Ultra-wide, enormous scale, dramatic atmosphere.
+ATMOSPHERE to include: {hook_atm}
 
-Return ONLY the image prompt as one sentence under 100 characters."""}],
-                  "temperature": 0.9, "max_tokens": 200},
+Rules:
+- Show the PHYSICAL SUBJECT at MASSIVE SCALE (not one person — thousands, not one panel — millions)
+- Ultra-wide or aerial perspective — the viewer should feel the scale of India
+- Include atmosphere: {hook_atm}
+- Specific to this topic — not generic India cityscape
+- No people at desks. No offices. Show the actual technology or infrastructure.
+- Under 120 characters total.
+
+Example for space topic: "Six Indian rockets standing on launch pads at dusk, storm clouds overhead, ocean horizon, ultra-wide cinematic"
+Example for solar topic: "Ocean of solar panels stretching to horizon Rajasthan desert, dust haze, drone aerial, tiny worker for scale"
+
+Return ONLY the image prompt."""}],
+                  "temperature": 0.9, "max_tokens": 150},
             timeout=20,
         )
         r.raise_for_status()
         hook_prompt = r.json()["choices"][0]["message"]["content"].strip().strip('"')
-        print(f"  Hook prompt: {hook_prompt[:60]}...")
+        print(f"  Hook: {hook_prompt[:80]}...")
     except Exception as e:
         print(f"  Hook prompt failed: {e}")
-        hook_prompt = f"Photorealistic modern India, {topic}, Indian faces and technology, natural daylight, sharp focus"
+        hook_prompt = f"Ultra-wide cinematic India, {topic}, dramatic sky {hook_atm}, massive scale, no text"
 
     scene_2_3 = None
     try:
@@ -475,28 +509,44 @@ Return ONLY the image prompt as one sentence under 100 characters."""}],
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": "gpt-4o-mini",
                   "messages": [{"role": "user", "content":
-                    f"""Create 2 image prompts for a YouTube Short about: "{topic}"{fact_hint}
+                    f"""Create 2 cinematic image prompts for India20Sixty YouTube Short.
+Topic: "{topic}"{fact_hint}
 
-CRITICAL — both prompts must show the ACTUAL SUBJECT of this topic (not generic offices):
-- Cars/EVs → cars, charging, roads
-- Space → rockets, satellites, launch pads  
-- Solar/Green → panels, farms, installations
-- AI → engineers at computers (only for AI topics)
-- Startups → founders, pitch rooms, startup offices
+SCENE 2 — STORY (proof/detail shot):
+Role: Medium shot, human scale, the technology in action. This proves the claim in the script.
+Atmosphere: {story_atm}
+Show: The specific technology, device, or moment at human scale. Indian hands, Indian faces with the technology.
+NOT: Wide shots, generic crowds, offices unless topic is software.
 
-Scene 2 (detail/insight): close-up of the specific technology or key moment, Indian setting
-Scene 3 (wide/hopeful): wide optimistic shot related to this topic, India scale, natural daylight
+SCENE 3 — PAYOFF (vision/future shot):
+Role: Wide cinematic, optimistic, the destination India is heading toward.
+Atmosphere: {payoff_atm}
+Show: India at the destination — not where it is, where it is going in 10 years if this continues.
+Include: {payoff_atm}
+NOT: Present-day ordinary scenes. Show the transformed future India.
 
-Return ONLY: ["scene2_prompt_under_80chars", "scene3_prompt_under_80chars"]"""}],
-                  "temperature": 0.9, "max_tokens": 250},
+Topic-specific rules:
+- Space → Story: astronaut/engineer with equipment. Payoff: Earth from orbit above India's coastline
+- Solar/Green → Story: worker with panel, installation detail. Payoff: entire region powered, night lights
+- EV/Gadgets → Story: hands with device, charging port close-up. Payoff: all-electric traffic at night India
+- AI/DeepTech → Story: screen showing AI output, Indian researcher. Payoff: connected India network visualization
+- Startups → Story: founder at whiteboard, product demo. Payoff: Indian startup expanding globally, world map
+
+Return ONLY valid JSON array (no markdown): ["scene2_under_120chars", "scene3_under_120chars"]"""}],
+                  "temperature": 0.9, "max_tokens": 300},
             timeout=20,
         )
         r.raise_for_status()
         content   = r.json()["choices"][0]["message"]["content"].strip()
         scene_2_3 = json.loads(content[content.find("["):content.rfind("]") + 1])
+        print(f"  Story: {scene_2_3[0][:60]}...")
+        print(f"  Payoff: {scene_2_3[1][:60]}...")
     except Exception as e:
-        print(f"  Scene prompts 2+3 failed: {e}")
-        scene_2_3 = [_FALLBACKS[1], _FALLBACKS[2]]
+        print(f"  Scene 2+3 failed: {e}")
+        scene_2_3 = [
+            f"Indian engineer with {topic[:40]} {story_atm} medium shot photorealistic",
+            f"Wide cinematic India future {topic[:30]} {payoff_atm} optimistic"
+        ]
 
     return [
         hook_prompt,

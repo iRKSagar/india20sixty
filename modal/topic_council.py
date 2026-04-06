@@ -407,9 +407,9 @@ Respond ONLY with valid JSON (no markdown):
     "text": "45-55 words. Pure Indian English. Hook with fact. Debate question at end. No CTA.",
     "mood": "One of: cinematic_epic, breaking_news, hopeful_future, cold_tech, vibrant_pop, nostalgic_film, warm_human",
     "scene_prompts": [
-      "Hook shot: [WRITE THE SPECIFIC PHYSICAL SUBJECT FROM THIS HEADLINE, e.g. Indian rocket on launch pad Sriharikota dawn light]",
-      "Detail shot: [CLOSE-UP OF THE SPECIFIC TECHNOLOGY OR MOMENT FROM THIS HEADLINE]",
-      "Wide shot: [WIDE ESTABLISHING SHOT SHOWING INDIA-SCALE OF THIS SPECIFIC TOPIC]"
+      "HOOK (ultra-wide, massive scale, dramatic atmosphere): [write the specific subject at India-scale with dramatic weather or atmospheric effect — storm clouds, mist, dust haze, god rays — NOT a person at a desk]",
+      "STORY (medium shot, human scale, sharp detail): [write the specific technology or moment at human scale — Indian hands with the device, engineer with equipment, sharp clean lighting]",
+      "PAYOFF (wide cinematic, future vision, optimistic light): [write India at the destination in 10 years — transformed, hopeful, with soft haze or god rays or dawn light — not present-day ordinary]"
     ]
   }}
 }}"""
