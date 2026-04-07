@@ -2133,7 +2133,6 @@ async function loadAll() {
     loadHealth(),
     loadStaging(),
     loadCBDP(),
-    loadManualJobs(),
     loadCalendar(),
   ]);
   updateQueueBadge();
@@ -2146,7 +2145,6 @@ setInterval(function() {
   loadTopicsCount();
   loadStaging();
   loadCBDP();
-  loadManualJobs();
   updateQueueBadge();
   if (currentPage === 'analytics') loadAnalytics();
   if (currentPage === 'calendar')  renderCalendar();
