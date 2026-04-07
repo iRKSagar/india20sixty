@@ -947,27 +947,37 @@ async function doManualCreate(action) {
 
     // Step 3: Trigger pipeline based on visual + voice mode
     if (manualState.visualMode === 'images') {
-      // Check if user picked library images for all 3 slots
       var hasLibPicks = manualState.libPicks.every(function(p) { return p && p.url; });
       if (hasLibPicks) {
-        // Use library images — no image generation credits
+        // Library images — skip image generation
         var libUrls = manualState.libPicks.map(function(p) { return p.url; });
+        if (result) result.innerHTML = '<span style="color:var(--muted)">Triggering pipeline with library images...</span>';
         var pr = await fetch(API_BASE + '/run-with-images', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ image_urls: libUrls, topic: topic, script: script, category: manualState.cluster })
+          body: JSON.stringify({ image_urls: libUrls, topic: topic, script: script, category: manualState.cluster || 'AI', job_id: jobId })
+        });
+        var pd = await pr.json();
+        if (pd.error) throw new Error(pd.error);
+        jobId = pd.job_id || jobId;
+      } else if (manualState.topicId) {
+        // Topic from queue — use run-topic which marks topic as used
+        if (result) result.innerHTML = '<span style="color:var(--muted)">Generating images and rendering...</span>';
+        var pr = await fetch(API_BASE + '/run-topic', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ topic_id: manualState.topicId, topic: topic, script: script })
         });
         var pd = await pr.json();
         if (pd.error) throw new Error(pd.error);
         jobId = pd.job_id || jobId;
       } else {
-        // Auto-generate images via pipeline
-        var pr = await fetch(API_BASE + '/run-topic', {
+        // Custom topic — trigger pipeline directly with the manual job
+        if (result) result.innerHTML = '<span style="color:var(--muted)">Generating images and rendering...</span>';
+        var pr = await fetch(API_BASE + '/trigger-manual-pipeline', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ topic_id: manualState.topicId || null, topic, script })
+          body: JSON.stringify({ job_id: jobId, topic: topic, script: script, cluster: manualState.cluster || 'AI' })
         });
         var pd = await pr.json();
         if (pd.error) throw new Error(pd.error);
-        jobId = pd.job_id || jobId;
       }
     }
 

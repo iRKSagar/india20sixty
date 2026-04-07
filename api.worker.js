@@ -589,6 +589,22 @@ export default {
       } catch(e){return cors({error:e.message},500);}
     }
 
+    if (url.pathname === "/trigger-manual-pipeline" && request.method === "POST") {
+      try {
+        const {job_id,topic,script,cluster}=await request.json().catch(()=>({}));
+        if (!job_id||!topic) return cors({error:"Missing job_id or topic"},400);
+        // Update job status to pending so processQueue picks it up
+        const safeCluster=(cluster&&ALL_CATS.includes(cluster))?cluster:"AI";
+        const scriptPkg={text:(script||"").trim(),source:"manual",word_count:(script||"").split(/\s+/).filter(Boolean).length,generated_at:new Date().toISOString()};
+        await sbPatch(env,"jobs?id=eq."+job_id,{status:"pending",cluster:safeCluster,script_package:scriptPkg,updated_at:new Date().toISOString()});
+        // Get full job and trigger render
+        const jobs=await sbGet(env,"jobs?id=eq."+job_id+"&select=*");
+        if(!jobs.length) return cors({error:"Job not found"},404);
+        ctx.waitUntil(triggerRender(jobs[0],env));
+        return cors({status:"triggered",job_id});
+      } catch(e){return cors({error:e.message},500);}
+    }
+
     if (url.pathname === "/create-manual-job" && request.method === "POST") {
       try {
         const {topic,script,cluster}=await request.json().catch(()=>({}));
