@@ -28,8 +28,10 @@ secrets = [modal.Secret.from_name("india20sixty-secrets")]
 TMP_DIR    = "/tmp/india20sixty-renderer"
 OUT_WIDTH  = 1080
 OUT_HEIGHT = 1920
-FPS        = 25
-XFADE_DUR  = 0.3
+FPS        = 30          # was 25 — smoother motion
+XFADE_DUR  = 0.35        # slightly longer for cinematic feel
+CRF        = 18          # was 22 — better quality encode
+ENCODE_PRESET = "slow"   # was fast — better compression quality
 
 # ==========================================
 # MOTIONS — confirmed safe on Modal debian ffmpeg 5.x
@@ -322,6 +324,103 @@ ENERGY_PACE = {
     "low":    (8.5, 11.0),  # slow lingering
 }
 
+
+
+# ==========================================
+# BACKGROUND MUSIC — mood-mapped ambient tracks
+# Stored in R2 at music/track_name.mp3
+# Mixed at 8% volume under voice in final mux
+# ==========================================
+
+MUSIC_TRACKS = {
+    "cinematic_epic":  "cinematic_rise.mp3",
+    "breaking_news":   "urgent_pulse.mp3",
+    "hopeful_future":  "ambient_hope.mp3",
+    "cold_tech":       "minimal_tech.mp3",
+    "vibrant_pop":     "upbeat_energy.mp3",
+    "nostalgic_film":  "soft_acoustic.mp3",
+    "warm_human":      "gentle_piano.mp3",
+    "dark_serious":    "low_drone.mp3",
+}
+
+MUSIC_VOLUME = 0.08   # 8% — audible but never competes with voice
+
+def _fetch_music(mood: str, job_id: str) -> str | None:
+    """Download mood-matched music track from R2. Returns local path or None."""
+    import requests as _req
+    r2_base = os.environ.get("R2_BASE_URL", "").rstrip("/")
+    if not r2_base:
+        print("  Music: R2_BASE_URL not set — skipping")
+        return None
+    track = MUSIC_TRACKS.get(mood, "ambient_hope.mp3")
+    url   = f"{r2_base}/music/{track}"
+    path  = f"{TMP_DIR}/{job_id}_music.mp3"
+    try:
+        r = _req.get(url, timeout=15, stream=True)
+        if not r.ok:
+            print(f"  Music: {track} not found on R2 ({r.status_code}) — skipping")
+            return None
+        with open(path, "wb") as f:
+            for chunk in r.iter_content(8192): f.write(chunk)
+        print(f"  Music: downloaded {track} ({os.path.getsize(path)//1024}KB)")
+        return path
+    except Exception as e:
+        print(f"  Music: download failed ({e}) — skipping")
+        return None
+
+
+# ==========================================
+
+def _build_word_captions(script, audio_dur):
+    import re
+    if not script or not script.strip(): return []
+    words = re.sub(r'\s+', ' ', script.strip()).split()
+    if not words: return []
+    phrases, chunk = [], []
+    for w in words:
+        chunk.append(w)
+        if len(chunk) >= 4 or w.endswith(('.','?','!',',')):
+            phrases.append(' '.join(chunk).strip(' ,'))
+            chunk = []
+    if chunk: phrases.append(' '.join(chunk).strip(' ,'))
+    total_words = sum(len(p.split()) for p in phrases)
+    captions, t = [], 0.2
+    for phrase in phrases:
+        dur = (len(phrase.split()) / total_words) * (audio_dur - 0.5)
+        captions.append((phrase, round(t,3), round(t+dur,3)))
+        t += dur
+    return captions
+
+def _make_subtitle_filters(captions, cap_y, cap_size, style='box'):
+    parts = []
+    bw = 14 if style == 'box' else 5
+    bc = 'black@0.78' if style == 'box' else 'black@0.85'
+    for text, t_s, t_e in captions:
+        if not text.strip(): continue
+        escaped = _escape_dt(text)
+        parts.append(
+            f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
+            f":borderw={bw}:bordercolor={bc}"
+            f":x=(w-text_w)/2:y={cap_y}"
+            f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
+        )
+    return parts
+
+def _make_end_card_filters(question, audio_dur, start_offset=3.0):
+    if not question or not question.strip(): return []
+    t_s = max(0, audio_dur - start_offset)
+    t_e = audio_dur - 0.3
+    q = question.strip().rstrip('?') + '?'
+    words = q.split()
+    mid = len(words) // 2
+    line1 = _escape_dt(' '.join(words[:mid]))
+    line2 = _escape_dt(' '.join(words[mid:]))
+    y_mid = OUT_HEIGHT // 2 - 80
+    return [
+        f"drawtext=text='{line1}':fontsize=60:fontcolor=white:borderw=16:bordercolor=black@0.82:x=(w-text_w)/2:y={y_mid}:enable='between(t,{t_s:.3f},{t_e:.3f})'",
+        f"drawtext=text='{line2}':fontsize=60:fontcolor=white:borderw=16:bordercolor=black@0.82:x=(w-text_w)/2:y={y_mid+80}:enable='between(t,{t_s:.3f},{t_e:.3f})'",
+    ]
+
 def _pick_motion(pool_key: int, preset: dict, used: set) -> str:
     """Pick a motion from the pool, avoiding recently used ones."""
     import random
@@ -347,13 +446,15 @@ def _pick_transition(scene_idx: int, preset: dict) -> str:
 @app.function(image=image, secrets=secrets, cpu=4.0, memory=4096, timeout=360)
 def render_with_audio(
     job_id: str,
-    image_paths: list,       # list of local paths OR None per scene
-    audio_path: str,         # local path (may not exist in this container)
+    image_paths: list,
+    audio_path: str,
     audio_dur: float,
     captions: list,
     mood: str,
-    image_bytes_list: list = None,   # list of bytes per scene (preferred)
-    audio_bytes: bytes = None,       # audio bytes (preferred over path)
+    image_bytes_list: list = None,
+    audio_bytes: bytes = None,
+    script: str = "",           # full script text for word-synced captions
+    end_question: str = "",     # debate question for end card
 ) -> str:
     """
     Render 3 images + audio into a final MP4.
@@ -397,6 +498,15 @@ def render_with_audio(
     preset = MOOD_PRESETS.get(mood, MOOD_PRESETS.get("hopeful_future"))
     used_motions = set()
 
+    # Build word-synced captions from script
+    word_captions = _build_word_captions(script, audio_dur) if script else []
+    print(f"  Word captions: {len(word_captions)} phrases")
+
+    # Build end card filters from debate question
+    end_card_filters = _make_end_card_filters(end_question, audio_dur) if end_question else []
+    if end_card_filters:
+        print(f"  End card: last 3s — '{end_question[:50]}...'")
+
     # Pre-select varied motions — no consecutive repeats across scenes
     scene_motions = []
     for i in range(len(image_paths)):
@@ -408,11 +518,25 @@ def render_with_audio(
 
     print(f"  Motions: {' | '.join(a+'+'+b for a,b in scene_motions)}")
 
+    # Assign captions per scene based on time windows
+    scene_word_caps = [[], [], []]
+    for phrase, t_s, t_e in word_captions:
+        scene_idx = min(int(t_s / scene_dur), 2)
+        # Offset time within scene
+        off_s = t_s - scene_idx * scene_dur
+        off_e = t_e - scene_idx * scene_dur
+        scene_word_caps[scene_idx].append((phrase, max(0, off_s), max(0, off_e)))
+
     clip_paths = []
     for i, img in enumerate(image_paths):
         m_a, m_b = scene_motions[i]
-        clip = _render_scene_clip(job_id, img, scene_dur, i, captions, mood,
-                                  motion_override=m_a, motion_b_override=m_b)
+        clip = _render_scene_clip(
+            job_id, img, scene_dur, i, captions, mood,
+            motion_override=m_a, motion_b_override=m_b,
+            word_captions=scene_word_caps[i],
+            is_last=(i == len(image_paths) - 1),
+            end_card_filters=end_card_filters if i == len(image_paths) - 1 else [],
+        )
         clip_paths.append(clip)
 
     transitioned = _apply_xfade(job_id, clip_paths, scene_dur, mood)
@@ -421,26 +545,53 @@ def render_with_audio(
         try: os.remove(cp)
         except Exception: pass
 
+    # Download mood-matched music track
+    music_path = _fetch_music(mood, job_id)
+
     fade_st = audio_dur - 0.5
     try:
-        _run_ffmpeg([
-            "ffmpeg", "-y",
-            "-i", transitioned, "-i", audio_path,
-            "-vf", f"fade=t=out:st={fade_st:.2f}:d=0.5",
-            "-map", "0:v", "-map", "1:a",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
-            "-t", str(audio_dur),          # NOT -shortest
-            "-movflags", "+faststart", video_path
-        ], "final-mux")
+        if music_path and os.path.exists(music_path):
+            # Three-stream mux: video + voice + music
+            # Music looped to fill duration, mixed at MUSIC_VOLUME under voice
+            _run_ffmpeg([
+                "ffmpeg", "-y",
+                "-i", transitioned,          # 0: video
+                "-i", audio_path,            # 1: voice
+                "-stream_loop", "-1",
+                "-i", music_path,            # 2: music (looped)
+                "-filter_complex",
+                (f"[1:a]volume=1.0[voice];"
+                 f"[2:a]volume={MUSIC_VOLUME}[music];"
+                 f"[voice][music]amix=inputs=2:duration=first:dropout_transition=2[audio];"
+                 f"[0:v]fade=t=in:st=0:d=0.3,fade=t=out:st={fade_st:.2f}:d=0.5[video]"),
+                "-map", "[video]", "-map", "[audio]",
+                "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", str(CRF),
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", str(audio_dur),
+                "-movflags", "+faststart", video_path
+            ], "final-mux-music")
+            try: os.remove(music_path)
+            except Exception: pass
+        else:
+            # No music — voice only
+            _run_ffmpeg([
+                "ffmpeg", "-y",
+                "-i", transitioned, "-i", audio_path,
+                "-vf", f"fade=t=in:st=0:d=0.3,fade=t=out:st={fade_st:.2f}:d=0.5",
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", str(CRF),
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", str(audio_dur),
+                "-movflags", "+faststart", video_path
+            ], "final-mux")
     except Exception as e:
-        print(f"  Fade mux failed ({e}), plain mux")
+        print(f"  Music mux failed ({e}), falling back to plain mux")
         _run_ffmpeg([
             "ffmpeg", "-y",
             "-i", transitioned, "-i", audio_path,
             "-map", "0:v", "-map", "1:a",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:v", "libx264", "-preset", "fast", "-crf", str(CRF),
+            "-c:a", "aac", "-b:a", "192k",
             "-t", str(audio_dur),
             "-movflags", "+faststart", video_path
         ], "final-mux-plain")
@@ -535,6 +686,9 @@ def _render_scene_clip(
     motion_override: str = None,
     motion_b_override: str = None,
     transition_override: str = None,
+    word_captions: list = None,     # [(text, t_start, t_end)] within this scene
+    is_last: bool = False,
+    end_card_filters: list = None,  # drawtext filters for end card (last scene only)
 ) -> str:
     """
     Render one image as TWO sub-clips with a hard cut between them.
@@ -597,41 +751,50 @@ def _render_scene_clip(
     x_b = motion_b["x"](sdx_b, sdy_b, n_b)
     y_b = motion_b["y"](sdx_b, sdy_b, n_b)
 
-    def make_vf(x_expr, y_expr, caps_for_sub, sub_dur):
+    def make_vf(x_expr, y_expr, caps_for_sub, sub_dur, sub_offset=0.0):
         third = sub_dur / 3.0
         parts = [
             f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
-            grade["ccm"],        # colorchannelmixer — split-tone grade
-            grade["eq"],         # eq — contrast/brightness/saturation (no gamma params)
-            grade["sharp"],      # unsharp — edge sharpening
-            grade["noise"],      # noise=c0f=t+u — animated grain per-frame
-            grade["vignette"],   # vignette=angle=X — numeric only (NOT PI/X)
+            grade["ccm"],
+            grade["eq"],
+            grade["sharp"],
+            grade["noise"],
+            grade["vignette"],
             "setsar=1",
-            # Watermark — borderw (box=1 unreliable on some Modal ffmpeg builds)
-            f"drawtext=text='{wm}':fontsize=44:fontcolor=white@0.9"
-            f":borderw=4:bordercolor=black@0.95:x=28:y=h-88",
+            # Watermark — upgraded style
+            f"drawtext=text='\u25B6 India20Sixty':fontsize=36:fontcolor=white@0.85"
+            f":borderw=3:bordercolor=black@0.90:x=28:y=h-68",
         ]
-        for ci, cap in enumerate(caps_for_sub):
-            if not cap.strip():
-                continue
-            escaped = _escape_dt(cap)
-            t_s, t_e = ci * third, (ci + 1) * third
-            if caption_style == "box":
-                # Heavy border creates solid box illusion — confirmed safe on Modal
-                parts.append(
-                    f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
-                    f":borderw=13:bordercolor=black@0.72"
-                    f":x=(w-text_w)/2:y={cap_y}"
-                    f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
-                )
-            else:
-                # Plain — standard bordered text
-                parts.append(
-                    f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
-                    f":borderw=5:bordercolor=black@0.85"
-                    f":x=(w-text_w)/2:y={cap_y}"
-                    f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
-                )
+
+        # Word-synced captions (preferred over old caption system)
+        if word_captions:
+            sub_caps = _make_subtitle_filters(word_captions, cap_y, cap_size, caption_style)
+            parts.extend(sub_caps)
+        else:
+            # Legacy caption system
+            for ci, cap in enumerate(caps_for_sub):
+                if not cap.strip(): continue
+                escaped = _escape_dt(cap)
+                t_s, t_e = ci * third, (ci + 1) * third
+                if caption_style == "box":
+                    parts.append(
+                        f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
+                        f":borderw=13:bordercolor=black@0.72"
+                        f":x=(w-text_w)/2:y={cap_y}"
+                        f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
+                    )
+                else:
+                    parts.append(
+                        f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
+                        f":borderw=5:bordercolor=black@0.85"
+                        f":x=(w-text_w)/2:y={cap_y}"
+                        f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
+                    )
+
+        # End card on last scene
+        if is_last and end_card_filters:
+            parts.extend(end_card_filters)
+
         return ",".join(parts)
 
     scene_caps = captions[scene_idx * 3: scene_idx * 3 + 3]
@@ -644,7 +807,7 @@ def _render_scene_clip(
 
     _run_ffmpeg([
         "ffmpeg", "-y", "-loop", "1", "-r", str(FPS), "-i", pre_path,
-        "-vf", make_vf(x_a, y_a, [scene_caps[0], scene_caps[1], ""], dur_a),
+        "-vf", make_vf(x_a, y_a, [scene_caps[0], scene_caps[1], ""], dur_a, 0.0),
         "-t", str(dur_a), "-r", str(FPS),
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", sub_a
@@ -652,7 +815,7 @@ def _render_scene_clip(
 
     _run_ffmpeg([
         "ffmpeg", "-y", "-loop", "1", "-r", str(FPS), "-i", pre_path,
-        "-vf", make_vf(x_b, y_b, ["", scene_caps[2], ""], dur_b),
+        "-vf", make_vf(x_b, y_b, ["", scene_caps[2], ""], dur_b, dur_a),
         "-t", str(dur_b), "-r", str(FPS),
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", sub_b

@@ -183,6 +183,15 @@ def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, 
     mood                   = _mood_classifier(OPENAI_API_KEY, script, cluster)
     scene_prompts          = _generate_scene_prompts(OPENAI_API_KEY, topic, fact_package, cluster)
 
+    # Extract debate question — always the last sentence
+    import re as _re
+    sentences = [s.strip() for s in _re.split(r'(?<=[.?!])\s+', reviewed_script.strip()) if s.strip()]
+    end_question = ""
+    if sentences and sentences[-1].endswith("?"):
+        end_question = sentences[-1]
+        # Strip emotion tags from end card display
+        end_question = _re.sub(r"</?(?:excited|happy|sad|whisper|angry)[^>]*>", "", end_question).strip()
+
     return {
         "script":          script,
         "reviewed_script": reviewed_script,
@@ -191,6 +200,7 @@ def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, 
         "mood":            mood,
         "mood_label":      MOOD_PRESETS[mood]["label"],
         "scene_prompts":   scene_prompts,
+        "end_question":    end_question,
     }
 
 

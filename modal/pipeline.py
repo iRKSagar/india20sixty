@@ -313,13 +313,15 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
 
             video_path = _render_audio().remote(
                 job_id=job_id,
-                image_paths=[None] * 3,      # renderer ignores paths when bytes provided
-                audio_path="",               # renderer ignores path when bytes provided
+                image_paths=[None] * 3,
+                audio_path="",
                 audio_dur=audio_dur,
                 captions=script_pkg["captions"],
                 mood=script_pkg["mood"],
                 image_bytes_list=image_bytes_list,
                 audio_bytes=audio_bytes,
+                script=script_pkg.get("reviewed_script", script_pkg.get("script", "")),
+                end_question=script_pkg.get("end_question", ""),
             )
             # video_path is now bytes returned from renderer
             video_bytes = video_path  # rename for clarity
@@ -585,6 +587,7 @@ def _make_pkg(script_pkg, fact_package):
         "mood_label":   script_pkg.get("mood_label", ""),
         "scene_prompts":script_pkg.get("scene_prompts", []),
         "key_fact":     script_pkg.get("key_fact", ""),
+        "end_question": script_pkg.get("end_question", ""),
         "source":       script_pkg.get("source", "pipeline"),
         "generated_at": datetime.utcnow().isoformat(),
     }
