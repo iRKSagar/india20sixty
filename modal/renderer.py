@@ -374,23 +374,38 @@ def _fetch_music(mood: str, job_id: str) -> str | None:
 def _build_word_captions(script, audio_dur):
     import re
     if not script or not script.strip(): return []
-    # Strip ElevenLabs emotion tags — never show these to viewer
     script = re.sub(r"</?(?:excited|happy|sad|whisper|angry)[^>]*>", "", script).strip()
-    words = re.sub(r'\s+', ' ', script).split()
+    # Remove em dashes and ellipsis — don't show in captions
+    script = script.replace('—', ' ').replace('...', ' ')
+    script = re.sub(r'\s+', ' ', script).strip()
+    words = script.split()
     if not words: return []
+
+    # Group into short phrases — max 4 words OR break on punctuation
+    # Short phrases fit on one line at font size 48 on 1080px width
     phrases, chunk = [], []
     for w in words:
         chunk.append(w)
-        if len(chunk) >= 4 or w.endswith(('.','?','!',',')):
-            phrases.append(' '.join(chunk).strip(' ,'))
+        ends_phrase = w.endswith(('.','?','!',',',':'))
+        if len(chunk) >= 4 or ends_phrase:
+            phrase = ' '.join(chunk).strip(' ,')
+            if phrase: phrases.append(phrase)
             chunk = []
-    if chunk: phrases.append(' '.join(chunk).strip(' ,'))
+    if chunk:
+        phrase = ' '.join(chunk).strip(' ,')
+        if phrase: phrases.append(phrase)
+
+    if not phrases: return []
+
     total_words = sum(len(p.split()) for p in phrases)
-    captions, t = [], 0.2
+    captions, t = [], 0.15  # tiny delay before first caption
     for phrase in phrases:
-        dur = (len(phrase.split()) / total_words) * (audio_dur - 0.5)
-        captions.append((phrase, round(t,3), round(t+dur,3)))
+        # Each phrase shown for time proportional to its word count
+        dur = (len(phrase.split()) / total_words) * (audio_dur - 0.4)
+        dur = max(dur, 0.5)  # minimum 0.5s per phrase
+        captions.append((phrase, round(t, 3), round(t + dur, 3)))
         t += dur
+
     return captions
 
 def _make_subtitle_filters(captions, cap_y, cap_size, style='box'):
@@ -410,18 +425,25 @@ def _make_subtitle_filters(captions, cap_y, cap_size, style='box'):
 
 def _make_end_card_filters(question, audio_dur, start_offset=3.0):
     if not question or not question.strip(): return []
+    import re as _re
     t_s = max(0, audio_dur - start_offset)
-    t_e = audio_dur - 0.3
-    q = question.strip().rstrip('?') + '?'
+    t_e = audio_dur - 0.2
+    q = _re.sub(r"</?[^>]+>", "", question).strip().rstrip('?').strip() + '?'
+    q = q.replace('—', '-').replace('...', '')
     words = q.split()
-    mid = len(words) // 2
+    if not words: return []
+    mid = max(1, len(words) // 2)
     line1 = _escape_dt(' '.join(words[:mid]))
-    line2 = _escape_dt(' '.join(words[mid:]))
-    y_mid = OUT_HEIGHT // 2 - 80
-    return [
-        f"drawtext=text='{line1}':fontsize=60:fontcolor=white:borderw=16:bordercolor=black@0.82:x=(w-text_w)/2:y={y_mid}:enable='between(t,{t_s:.3f},{t_e:.3f})'",
-        f"drawtext=text='{line2}':fontsize=60:fontcolor=white:borderw=16:bordercolor=black@0.82:x=(w-text_w)/2:y={y_mid+80}:enable='between(t,{t_s:.3f},{t_e:.3f})'",
+    line2 = _escape_dt(' '.join(words[mid:])) if words[mid:] else None
+    # Lower third — above YouTube channel name UI
+    y1 = int(OUT_HEIGHT * 0.72)
+    y2 = y1 + 68
+    filters = [
+        f"drawtext=text='{line1}':fontsize=50:fontcolor=white:borderw=14:bordercolor=black@0.85:x=(w-text_w)/2:y={y1}:enable='between(t,{t_s:.3f},{t_e:.3f})'",
     ]
+    if line2:
+        filters.append(f"drawtext=text='{line2}':fontsize=50:fontcolor=white:borderw=14:bordercolor=black@0.85:x=(w-text_w)/2:y={y2}:enable='between(t,{t_s:.3f},{t_e:.3f})'")
+    return filters
 
 def _pick_motion(pool_key: int, preset: dict, used: set) -> str:
     """Pick a motion from the pool, avoiding recently used ones."""
@@ -701,8 +723,8 @@ def _render_scene_clip(
     import random
     clip_path = f"{TMP_DIR}/{job_id}_clip{scene_idx}.mp4"
     pre_path  = f"{TMP_DIR}/{job_id}_pre{scene_idx}.jpg"
-    cap_y     = int(OUT_HEIGHT * 0.73)
-    cap_size  = 58
+    cap_y     = int(OUT_HEIGHT * 0.68)   # 68% — above YouTube's channel name overlay at bottom
+    cap_size  = 48                        # smaller — prevents long phrases overflowing screen width
     wm        = _escape_dt("@India20Sixty")
 
     preset = MOOD_PRESETS.get(mood, MOOD_PRESETS.get("hopeful_future"))
@@ -755,8 +777,13 @@ def _render_scene_clip(
     x_b = motion_b["x"](sdx_b, sdy_b, n_b)
     y_b = motion_b["y"](sdx_b, sdy_b, n_b)
 
-    def make_vf(x_expr, y_expr, caps_for_sub, sub_dur, sub_offset=0.0):
-        third = sub_dur / 3.0
+    def make_vf(x_expr, y_expr, sub_offset, sub_dur):
+        """
+        sub_offset: global time offset this sub-clip starts at (seconds)
+        sub_dur: duration of this sub-clip
+        Captions enabled only within this sub-clip's time window.
+        """
+        sub_end = sub_offset + sub_dur
         parts = [
             f"crop={OUT_WIDTH}:{OUT_HEIGHT}:{x_expr}:{y_expr}",
             grade["ccm"],
@@ -765,38 +792,38 @@ def _render_scene_clip(
             grade["noise"],
             grade["vignette"],
             "setsar=1",
-            # Watermark — upgraded style
-            f"drawtext=text='\u25B6 India20Sixty':fontsize=36:fontcolor=white@0.85"
-            f":borderw=3:bordercolor=black@0.90:x=28:y=h-68",
+            # Watermark — TOP LEFT, away from YouTube UI (bottom) and captions (lower third)
+            f"drawtext=text='\u25B6 India20Sixty':fontsize=32:fontcolor=white@0.80"
+            f":borderw=2:bordercolor=black@0.85:x=24:y=54",
         ]
 
-        # Word-synced captions (preferred over old caption system)
+        # Word-synced captions — only show phrases that fall in this sub-clip's time window
+        # Times in word_captions are GLOBAL (0 to audio_dur)
+        # ffmpeg t resets to 0 at start of each sub-clip, so offset the enable window
         if word_captions:
-            sub_caps = _make_subtitle_filters(word_captions, cap_y, cap_size, caption_style)
-            parts.extend(sub_caps)
-        else:
-            # Legacy caption system
-            for ci, cap in enumerate(caps_for_sub):
-                if not cap.strip(): continue
-                escaped = _escape_dt(cap)
-                t_s, t_e = ci * third, (ci + 1) * third
-                if caption_style == "box":
-                    parts.append(
-                        f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
-                        f":borderw=13:bordercolor=black@0.72"
-                        f":x=(w-text_w)/2:y={cap_y}"
-                        f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
-                    )
-                else:
-                    parts.append(
-                        f"drawtext=text='{escaped}':fontsize={cap_size}:fontcolor=white"
-                        f":borderw=5:bordercolor=black@0.85"
-                        f":x=(w-text_w)/2:y={cap_y}"
-                        f":enable='between(t,{t_s:.3f},{t_e:.3f})'"
-                    )
+            for text, t_s, t_e in word_captions:
+                # Only include if this phrase overlaps with this sub-clip's global window
+                if t_e <= sub_offset or t_s >= sub_end:
+                    continue
+                # Convert global time to local sub-clip time
+                local_s = max(0.0, t_s - sub_offset)
+                local_e = min(sub_dur, t_e - sub_offset)
+                if local_e <= local_s:
+                    continue
+                escaped = _escape_dt(text)
+                bw = 14 if caption_style == 'box' else 5
+                bc = 'black@0.78' if caption_style == 'box' else 'black@0.85'
+                # Cap font size and enforce max width to prevent overflow
+                safe_size = min(cap_size, 52)
+                parts.append(
+                    f"drawtext=text='{escaped}':fontsize={safe_size}:fontcolor=white"
+                    f":borderw={bw}:bordercolor={bc}"
+                    f":x=(w-text_w)/2:y={cap_y}"
+                    f":enable='between(t,{local_s:.3f},{local_e:.3f})'"
+                )
 
-        # End card on last scene
-        if is_last and end_card_filters:
+        # End card on last scene's last sub-clip
+        if is_last and end_card_filters and sub_offset > 0:
             parts.extend(end_card_filters)
 
         return ",".join(parts)
@@ -811,7 +838,7 @@ def _render_scene_clip(
 
     _run_ffmpeg([
         "ffmpeg", "-y", "-loop", "1", "-r", str(FPS), "-i", pre_path,
-        "-vf", make_vf(x_a, y_a, [scene_caps[0], scene_caps[1], ""], dur_a, 0.0),
+        "-vf", make_vf(x_a, y_a, 0.0, dur_a),
         "-t", str(dur_a), "-r", str(FPS),
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", sub_a
@@ -819,7 +846,7 @@ def _render_scene_clip(
 
     _run_ffmpeg([
         "ffmpeg", "-y", "-loop", "1", "-r", str(FPS), "-i", pre_path,
-        "-vf", make_vf(x_b, y_b, ["", scene_caps[2], ""], dur_b, dur_a),
+        "-vf", make_vf(x_b, y_b, dur_a, dur_b),
         "-t", str(dur_b), "-r", str(FPS),
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", sub_b
