@@ -846,11 +846,18 @@ Return ONLY valid JSON array:
     // Analytics sync + replenish — fires on the 2:30 AM UTC slot (quietest time)
     if (cron==="30 2 * * *") {
       ctx.waitUntil(syncYouTubeAnalytics(env));
-      try {
-        const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id");
-        if(av.length<5) ctx.waitUntil(_runReplenish(env,ALL_CATS,12));
-        console.log("Topics ready:", av.length);
-      } catch(e){}
+      // Auto-replenish when queue below 10 — replenish one category at a time for reliability
+      const av=await sbGet(env,"topics?used=eq.false&council_score=gte.70&select=id,cluster").catch(()=>[]);
+      if(av.length<10){
+        // Find which categories are low and replenish those first
+        const catCounts = {};
+        ALL_CATS.forEach(c=>catCounts[c]=0);
+        av.forEach(t=>{ if(catCounts[t.cluster]!==undefined) catCounts[t.cluster]++; });
+        const lowCats = ALL_CATS.filter(c=>catCounts[c]<2);
+        const repCats = lowCats.length ? lowCats : ALL_CATS;
+        console.log("Auto-replenish: queue="+av.length+" low cats="+repCats.join(","));
+        ctx.waitUntil(_runReplenish(env, repCats, repCats.length * 2));
+      }
     }
   }
 };
@@ -921,13 +928,15 @@ async function _runReplenish(env, cats, target) {
 
   for (const cat of cats) {
     if (added >= target) break;
-    const seeds = (SEED_HEADLINES[cat] || []).slice(); // copy
-    // Shuffle
-    seeds.sort(()=>Math.random()-0.5);
+    const seeds = (SEED_HEADLINES[cat] || []).slice().sort(()=>Math.random()-0.5);
     let catAdded = 0;
 
     for (const seed of seeds) {
       if (added >= target || catAdded >= perCat) break;
+      // Small delay between GPT calls to stay within CF CPU budget
+      if (catAdded > 0 || cats.indexOf(cat) > 0) {
+        await new Promise(r => setTimeout(r, 200));
+      }
       try {
         const headline = seed.t;
         const prompt = `You are a content council for India20Sixty — YouTube Shorts about India's near future.

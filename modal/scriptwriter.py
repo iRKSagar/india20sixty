@@ -181,7 +181,7 @@ def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, 
     reviewed_script        = _pronunciation_fix(script)
     captions               = _extract_captions(OPENAI_API_KEY, script_lines)
     mood                   = _mood_classifier(OPENAI_API_KEY, script, cluster)
-    scene_prompts          = _generate_scene_prompts(OPENAI_API_KEY, topic, fact_package)
+    scene_prompts          = _generate_scene_prompts(OPENAI_API_KEY, topic, fact_package, cluster)
 
     return {
         "script":          script,
@@ -428,7 +428,7 @@ _FALLBACKS = [
 ]
 
 
-def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict) -> list:
+def _generate_scene_prompts(api_key: str, topic: str, fact_package: dict, cluster: str = "AI") -> list:
     import random
     fact_hint = ""
     if fact_package and fact_package.get("found"):

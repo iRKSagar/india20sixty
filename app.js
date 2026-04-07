@@ -201,17 +201,6 @@ function setAutoCat(cat, el) {
     el.style.borderColor = col; el.style.color = col;
   }
 }
-function setManualCat(cat, el) {
-  manualCat = cat;
-  document.querySelectorAll('#manual-cat-strip .cat-pill').forEach(function(p) {
-    p.classList.remove('active'); p.style.borderColor = ''; p.style.color = '';
-  });
-  if (el) {
-    el.classList.add('active');
-    var col = (CATS[cat] && CATS[cat].color) || 'var(--accent)';
-    el.style.borderColor = col; el.style.color = col;
-  }
-}
 function setTopicCat(cat, el) {
   topicCat = cat;
   document.querySelectorAll('#topic-cat-strip .cat-pill').forEach(function(p) {
@@ -306,7 +295,8 @@ function renderJobs() {
 async function loadJobs() {
   try {
     var r = await fetch(API_BASE + '/jobs');
-    allJobs = await r.json();
+    var data = await r.json();
+    allJobs = Array.isArray(data) ? data : [];
     var run  = allJobs.filter(function(j) { return ACTIVE_STATUSES.includes(j.status); });
     var ok   = allJobs.filter(function(j) {
       var d = new Date(j.updated_at || j.created_at);
@@ -1007,21 +997,19 @@ async function doManualCreate(action) {
   }
 }
 
-function updateWordCount() { updateManualWordCount(); } // backward compat alias
+ // backward compat alias
 
 // ── QUEUE PAGE ──────────────────────────────────────────────────
-async function loadQueue_panel() {
-  await Promise.all([loadStaging(), loadCBDP(), loadManualJobs()]);
-  updateQueueBadge();
-}
-
 function updateQueueBadge() {
-  var total = allStaged.length + allReview.length + allManual.length;
+  var s = Array.isArray(allStaged) ? allStaged.length : 0;
+  var r = Array.isArray(allReview) ? allReview.length : 0;
+  var m = Array.isArray(allManual) ? allManual.length : 0;
+  var total = s + r + m;
   var el = document.getElementById('queue-badge');
   if (el) el.textContent = total;
-  setText('qc-voice',  allStaged.length);
-  setText('qc-review', allReview.length);
-  setText('qc-manual', allManual.length);
+  setText('qc-voice',  s);
+  setText('qc-review', r);
+  setText('qc-manual', m);
 }
 
 // ── STAGING (Awaiting Voice) ─────────────────────────────────────
@@ -1152,123 +1140,6 @@ async function rejectReview(jobId, btn) {
 }
 
 // ── MANUAL JOBS ─────────────────────────────────────────────────
-async function loadManualJobs() {
-  try {
-    var r = await fetch(API_BASE + '/manual-jobs');
-    allManual = await r.json();
-    renderManualGrid();
-  } catch(e) { console.error('loadManualJobs:', e); }
-}
-
-function renderManualGrid() {
-  var el = document.getElementById('manual-grid'); if (!el) return;
-  if (!allManual.length) {
-    el.innerHTML = '<div class="empty" style="grid-column:1/-1">'
-      + '<span class="empty-icon">&#9999;</span>'
-      + 'No manual jobs yet.<br>'
-      + '<span style="font-size:.8rem">Go to Create \u2192 Manual to write a script and create a job.</span>'
-      + '</div>';
-    return;
-  }
-  el.innerHTML = allManual.map(function(j) {
-    var cat    = CATS[j.cluster] || { color:'var(--muted)', emoji:'\uD83D\uDCF9', label: j.cluster || '?' };
-    var pkg    = j.script_package || {};
-    var scr    = pkg.text || '';
-    var words  = pkg.word_count || (scr.split(/\s+/).filter(Boolean).length);
-    var isWaitingVideo  = j.status === 'manual_pending';
-    var isWaitingVoice  = j.status === 'staged' && j.has_video;
-    var isProcessing    = ['voice','upload','mixing'].includes(j.status);
-    var isDone          = j.status === 'complete' || j.status === 'test_complete';
-    return '<div class="queue-card" style="cursor:default">'
-      + '<div class="queue-card-head">'
-      + '<div class="queue-card-topic">' + (j.topic || 'Untitled') + '</div>'
-      + '<div class="queue-card-meta">'
-      + '<span style="font-size:.63rem;color:' + cat.color + '">' + cat.emoji + ' ' + cat.label + '</span>'
-      + badge(j.status)
-      + '<span style="font-family:var(--mono);font-size:.57rem;color:var(--muted)">' + words + ' words</span>'
-      + '</div></div>'
-      + '<div style="padding:10px 14px">'
-      // Step indicator
-      + '<div class="state-step ' + (!j.has_video && !isDone ? 'ss-current' : 'ss-done') + '" style="margin-bottom:5px">'
-      + '1 Job created' + (isWaitingVideo ? ' \u2014 waiting for video upload' : ' \u2713')
-      + '</div>'
-      + '<div class="state-step ' + (isWaitingVoice ? 'ss-current' : (isDone || isProcessing ? 'ss-done' : 'ss-pending')) + '" style="margin-bottom:5px">'
-      + '2 Video uploaded' + (isWaitingVoice ? ' \u2713 \u2014 generate voice to publish' : (isDone || isProcessing ? ' \u2713' : ''))
-      + '</div>'
-      + '<div class="state-step ' + (isDone ? 'ss-done' : (isProcessing ? 'ss-current' : 'ss-pending')) + '">'
-      + '3 Voice + Publish' + (isDone ? ' \u2713' : (isProcessing ? ' \u2014 in progress...' : ''))
-      + '</div>'
-      + '</div>'
-      + (scr ? '<div class="queue-card-body" style="max-height:44px">' + scr.slice(0, 90) + (scr.length > 90 ? '\u2026' : '') + '</div>' : '')
-      + '<div class="queue-card-foot">'
-      // Action buttons per state
-      + (isWaitingVideo
-        ? '<label class="btn btn-primary btn-sm" style="flex:1;cursor:pointer;justify-content:center">'
-          + '\u2191 Upload Video'
-          + '<input type="file" accept="video/*" style="display:none" data-jid="' + j.id + '" onchange="uploadManualVideo(this)">'
-          + '</label>'
-        : '')
-      + (isWaitingVoice
-        ? '<button class="btn btn-primary btn-sm" style="flex:1" data-jid="' + j.id + '" onclick="generateManualVoice(this.dataset.jid,this)">\uD83C\uDFA4 Generate Voice + Publish</button>'
-        : '')
-      + (isProcessing
-        ? '<span style="font-family:var(--mono);font-size:.65rem;color:var(--yellow)">\u23F3 In progress...</span>'
-        : '')
-      + (isDone
-        ? (j.youtube_id && j.youtube_id !== 'TEST_MODE'
-            ? '<a class="yt-link" href="https://youtube.com/watch?v=' + j.youtube_id + '" target="_blank">\u25B6 Watch on YouTube</a>'
-            : '<span style="font-family:var(--mono);font-size:.65rem;color:var(--green)">\u2713 Complete</span>')
-        : '')
-      + (j.has_video && j.video_public_url && !isDone
-        ? '<a href="' + j.video_public_url + '" target="_blank" class="btn btn-ghost btn-sm">\u25B6</a>'
-        : '')
-      + '</div></div>';
-  }).join('');
-}
-
-async function uploadManualVideo(input) {
-  var jobId = input.dataset.jid;
-  var file  = input.files[0];
-  if (!file) return;
-  // Find the button wrapper and show progress
-  var label = input.parentElement;
-  label.textContent = '\u23F3 Uploading ' + Math.round(file.size / 1024 / 1024 * 10) / 10 + 'MB...';
-  try {
-    var r = await fetch(API_BASE + '/upload-manual-video?job_id=' + jobId, {
-      method: 'POST',
-      headers: { 'Content-Type': 'video/mp4' },
-      body: file
-    });
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-    await loadManualJobs();
-    updateQueueBadge();
-  } catch(e) {
-    alert('Upload failed: ' + e.message);
-    label.innerHTML = '\u2191 Upload Video<input type="file" accept="video/*" style="display:none" data-jid="' + jobId + '" onchange="uploadManualVideo(this)">';
-  }
-}
-
-async function generateManualVoice(jobId, btn) {
-  if (!confirm('Generate AI voice from the script and publish to YouTube?')) return;
-  btn.disabled = true; btn.textContent = '\uD83C\uDFA4 Starting...';
-  try {
-    var r = await fetch(API_BASE + '/add-voice-and-publish', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: jobId })
-    });
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-    btn.textContent = '\u2713 Processing...';
-    btn.style.background = 'var(--green)';
-    setTimeout(function() { loadManualJobs(); loadJobs(); }, 3000);
-  } catch(e) {
-    btn.textContent = '\uD83C\uDFA4 Generate Voice + Publish';
-    btn.disabled = false;
-    alert('Failed: ' + e.message);
-  }
-}
-
 // ── SETTINGS ───────────────────────────────────────────────────
 var currentSettings = {};
 
@@ -1859,7 +1730,7 @@ function renderLibrary() {
   var g1 = document.getElementById('lib-grid');
   if (g1) {
     g1.innerHTML = filtered.length
-      ? filtered.map(function(img) { return makeCard(img, '_toggleLibCreate', selectedImages, 'lib-sel-count', 'lib-create-btn'); }).join('')
+      ? '' /* create-tab library grid removed */
       : empty;
   }
 
@@ -1867,7 +1738,7 @@ function renderLibrary() {
   var g2 = document.getElementById('lib-grid2');
   if (g2) {
     g2.innerHTML = filtered.length
-      ? filtered.map(function(img) { return makeCard(img, '_toggleLibPage', libSelectedImages2, 'lib-sel-count2', 'lib-create-btn2'); }).join('')
+      ? filtered.map(function(img) { return makeCard(img, 'toggleLib2', libSelectedImages2, 'lib-sel-count2', 'lib-create-btn2'); }).join('')
       : empty;
   }
 
@@ -1941,24 +1812,6 @@ function pickManualLibImgEl(el) {
   pickManualLibImg(url, key);
 }
 
-function pickManualLibImg(url, key) {
-  var slotIdx = _manualLibSlot;
-  if (slotIdx === null) return;
-  manualState.libPicks[slotIdx] = { url: url, key: key };
-  manualState.imgUrls[slotIdx] = url;
-
-  var n = slotIdx + 1;
-  var preview = document.getElementById('m-img-p' + n + '-preview');
-  var thumb   = document.getElementById('m-img-p' + n + '-thumb');
-  if (preview) preview.style.display = 'flex';
-  if (thumb)   thumb.src = url;
-
-  document.getElementById('manual-lib-picker').style.display = 'none';
-  updateManualSummary();
-  showToast('Slot ' + n + ' set from library (' +
-    manualState.libPicks.filter(function(p){return p&&p.url;}).length + '/3)');
-}
-
 function clearManualImgPick(slotIdx) {
   manualState.libPicks[slotIdx] = null;
   manualState.imgUrls[slotIdx] = null;
@@ -2010,119 +1863,28 @@ async function deleteSelectedImages() {
 }
 
 // Unified toggle for Create→Library tab (3 max)
-function _toggleLibCreate(el, cntId, btnId) {
-  var url = el.dataset.imgurl;
-  var key = el.dataset.imgkey;
-  var idx = selectedImages.findIndex(function(s) { return s.url === url; });
-  if (idx > -1) {
-    selectedImages.splice(idx, 1);
-  } else {
-    if (selectedImages.length >= 3) { showToast('Deselect one first — max 3'); return; }
-    selectedImages.push({ url: url, key: key });
-  }
-  var sc = document.getElementById(cntId || 'lib-sel-count');
-  if (sc) sc.textContent = selectedImages.length + ' / 3 selected';
-  var btn = document.getElementById(btnId || 'lib-create-btn');
-  if (btn) { btn.disabled = selectedImages.length !== 3; btn.style.opacity = selectedImages.length === 3 ? '1' : '.4'; }
-  renderLibrary();
-}
-
 // Unified toggle for Library page (multi-select for delete/use)
-function _toggleLibPage(el, cntId, btnId) {
-  var url = el.dataset.imgurl;
-  var key = el.dataset.imgkey;
-  var id  = el.dataset.imgid;
-  var idx = libSelectedImages2.findIndex(function(s) { return s.url === url; });
-  if (idx > -1) { libSelectedImages2.splice(idx, 1); }
-  else { libSelectedImages2.push({ url: url, key: key, id: id }); }
-  var sc = document.getElementById(cntId || 'lib-sel-count2');
-  if (sc) {
-    var n = libSelectedImages2.length;
-    sc.textContent = n + ' selected';
-  }
-  var btn = document.getElementById(btnId || 'lib-create-btn2');
-  if (btn) { btn.disabled = libSelectedImages2.length !== 3; btn.style.opacity = libSelectedImages2.length === 3 ? '1' : '.4'; }
-  _updateLibDeleteBtn();
-  renderLibrary();
-}
-
 // Legacy aliases
-function toggleLib1(el) { _toggleLibCreate(el, 'lib-sel-count', 'lib-create-btn'); }
-function toggleLib2(el) { _toggleLibPage(el, 'lib-sel-count2', 'lib-create-btn2'); }
-
 function toggleLib2(el) {
-  var url = el.dataset.imgurl;
-  var key = el.dataset.imgkey || '';
-  var id  = el.dataset.imgid  || '';
-  var idx = libSelectedImages2.findIndex(function(s) { return s.url === url; });
-  if (idx > -1) {
-    libSelectedImages2.splice(idx, 1);
-  } else {
-    libSelectedImages2.push({ url: url, key: key, id: id });
-  }
-  var sc = document.getElementById('lib-sel-count2');
-  if (sc) sc.textContent = libSelectedImages2.length + ' selected';
-  var btn = document.getElementById('lib-create-btn2');
-  if (btn) { btn.disabled = libSelectedImages2.length !== 3; btn.style.opacity = libSelectedImages2.length === 3 ? '1' : '.4'; }
+  var url=el.dataset.imgurl, key=el.dataset.imgkey, id=el.dataset.imgid;
+  if(!url) return;
+  var idx=libSelectedImages2.findIndex(function(s){return s.url===url;});
+  if(idx>-1){libSelectedImages2.splice(idx,1);}
+  else{libSelectedImages2.push({url:url,key:key,id:id});}
+  var sc=document.getElementById('lib-sel-count2');
+  if(sc) sc.textContent=libSelectedImages2.length+' selected';
+  var btn=document.getElementById('lib-create-btn2');
+  if(btn){btn.disabled=libSelectedImages2.length!==3;btn.style.opacity=libSelectedImages2.length===3?'1':'.4';}
   _updateLibDeleteBtn();
   renderLibrary();
 }
+
 
 async function createVideoFromLibrary() {
   if (selectedImages.length !== 3) { alert('Select exactly 3 images first.'); return; }
   var urls = selectedImages.map(function(s) { return typeof s === 'string' ? s : s.url; });
   await _createFromImages(urls, 'lib-create-btn', 'lib-sel-count', function() { selectedImages = []; });
 }
-async function createVideoFromLibrary2() {
-  if (libSelectedImages2.length !== 3) { alert('Select exactly 3 images first.'); return; }
-  var urls = libSelectedImages2.map(function(s) { return s.url; });
-  await _createFromImages(urls, 'lib-create-btn2', 'lib-sel-count2', function() { libSelectedImages2 = []; _updateLibDeleteBtn(); });
-}
-async function _createFromImages(imgs, btnId, cntId, resetFn) {
-  var btn = document.getElementById(btnId);
-  btn.disabled = true; btn.textContent = '\u23F3 Creating...';
-  try {
-    var r = await fetch(API_BASE + '/run-with-images', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image_urls: imgs })
-    });
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-    resetFn();
-    renderLibrary();
-    setText(cntId, '0 / 3 selected');
-    btn.textContent = '\u2713 Job created!';
-    setTimeout(function() { loadJobs(); showPage('home', document.querySelector('.nav-btn')); }, 1200);
-  } catch(e) {
-    btn.textContent = '\u25B6 Create Video'; btn.disabled = false; btn.style.opacity = '1';
-    alert('Failed: ' + e.message);
-  }
-}
-
-async function uploadLibImages(input) {
-  var files = Array.from(input.files);
-  if (!files.length) return;
-  var btn = input.parentElement;
-  var orig = btn.innerHTML;
-  var topic = prompt('Tag these images (for filtering):', 'uploaded');
-  if (!topic) topic = 'uploaded';
-  var ok = 0, fail = 0;
-  for (var i = 0; i < files.length; i++) {
-    var f = files[i];
-    btn.innerHTML = '\u23F3 ' + f.name.slice(0, 20) + '... (' + (i + 1) + '/' + files.length + ')';
-    try {
-      var r = await fetch(API_BASE + '/upload-image?topic=' + encodeURIComponent(topic) + '&filename=' + encodeURIComponent(f.name), {
-        method: 'POST', headers: { 'Content-Type': f.type || 'image/png' }, body: f
-      });
-      var d = await r.json();
-      if (d.error) throw new Error(d.error);
-      ok++;
-    } catch(e) { fail++; }
-  }
-  btn.innerHTML = orig; input.value = '';
-  loadLibrary();
-}
-
 // ── TOPICS PAGE ─────────────────────────────────────────────────
 function filterTopics(f) {
   topicFilter = f;
@@ -2132,6 +1894,8 @@ function filterTopics(f) {
   });
   renderTopicsPage();
 }
+
+var _renderingTopics = {}; // topicId → true while pipeline is running
 
 function renderTopicsPage() {
   var topics = allTopics;
@@ -2144,22 +1908,27 @@ function renderTopicsPage() {
   el.innerHTML = topics.map(function(t) {
     var cat    = CATS[t.cluster] || null;
     var canGen = !t.used && t.council_score >= 70;
+    var isRendering = !!_renderingTopics[t.id];
     var dateStr = t.created_at ? ago(t.created_at) + ' ago' : '';
-    return '<div class="topic-row">'
+    var statusBadge = isRendering
+      ? '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(255,215,64,.15);color:var(--yellow);padding:1px 6px;border-radius:3px;animation:pulse 1.5s infinite">&#9654; Rendering...</span>'
+      : t.used
+      ? '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(0,230,118,.1);color:var(--green);padding:1px 6px;border-radius:3px">&#10003; Used</span>'
+      : '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(255,82,82,.1);color:var(--red);padding:1px 6px;border-radius:3px">Ready</span>';
+    return '<div class="topic-row" id="trow-' + t.id + '">'
       + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">'
       + '<div style="flex:1;min-width:0">'
-      + '<div class="topic-text">' + t.topic + '</div>'
+      + '<div class="topic-text">' + esc(t.topic) + '</div>'
       + '<div style="display:flex;align-items:center;gap:7px;margin-top:4px;flex-wrap:wrap">'
       + '<span class="score-pill ' + scClass(t.council_score) + '">' + t.council_score + '</span>'
-      + (t.used ? '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(0,230,118,.1);color:var(--green);padding:1px 6px;border-radius:3px">Used</span>'
-                : '<span style="font-family:var(--mono);font-size:.56rem;background:rgba(255,82,82,.1);color:var(--red);padding:1px 6px;border-radius:3px">Ready</span>')
+      + statusBadge
       + (cat ? '<span style="font-size:.63rem;color:' + cat.color + '">' + cat.emoji + ' ' + cat.label + '</span>' : '')
       + (dateStr ? '<span style="font-family:var(--mono);font-size:.56rem;color:var(--muted)">&#128337; ' + dateStr + '</span>' : '')
       + '</div></div>'
       + '<div style="display:flex;gap:6px;flex-shrink:0;align-items:center">'
-      + (canGen ? '<button class="btn btn-primary btn-sm" data-tid="' + t.id + '" onclick="generateNow(this.dataset.tid,this)">\u25B6 Now</button>' : '')
-      + (canGen ? '<button class="btn btn-sm" style="background:rgba(179,136,255,.12);color:var(--purple);border:1px solid rgba(179,136,255,.25);font-size:.68rem" data-topic="' + esc(t.topic) + '" data-cluster="' + (t.cluster||'AI') + '" onclick="useLfTopic(this.dataset.topic,this.dataset.cluster)">&#127916; LF</button>' : '')
-      + (!t.used ? '<button class="btn btn-sm" style="background:rgba(255,82,82,.12);color:var(--red);border:1px solid rgba(255,82,82,.25);padding:4px 8px;font-size:.7rem" data-tid="' + t.id + '" onclick="killTopic(this.dataset.tid,this)" title="Kill this topic">\u2715</button>' : '')
+      + (canGen && !isRendering ? '<button class="btn btn-primary btn-sm" data-tid="' + t.id + '" onclick="generateNow(this.dataset.tid,this)">&#9654; Now</button>' : '')
+      + (canGen && !isRendering ? '<button class="btn btn-sm" style="background:rgba(179,136,255,.12);color:var(--purple);border:1px solid rgba(179,136,255,.25);font-size:.68rem" data-topic="' + esc(t.topic) + '" data-cluster="' + (t.cluster||'AI') + '" onclick="useLfTopic(this.dataset.topic,this.dataset.cluster)">&#127916; LF</button>' : '')
+      + (!t.used && !isRendering ? '<button class="btn btn-sm" style="background:rgba(255,82,82,.12);color:var(--red);border:1px solid rgba(255,82,82,.25);padding:4px 8px;font-size:.7rem" data-tid="' + t.id + '" onclick="killTopic(this.dataset.tid,this)" title="Kill this topic">&#10005;</button>' : '')
       + '</div>'
       + '</div></div>';
   }).join('');
@@ -2180,7 +1949,9 @@ async function useLfTopic(topic, cluster) {
 }
 async function generateNow(topicId, btn) {
   if (!confirm('Generate a video from this topic right now?')) return;
-  btn.disabled = true; btn.textContent = '\u23F3...';
+  btn.disabled = true; btn.textContent = '\u23F3 Starting...';
+  _renderingTopics[topicId] = true;
+  renderTopicsPage(); // immediately show Rendering... badge
   try {
     var r = await fetch(API_BASE + '/run-topic', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2188,9 +1959,19 @@ async function generateNow(topicId, btn) {
     });
     var d = await r.json();
     if (d.error) throw new Error(d.error);
-    btn.textContent = '\u2713 Done!'; btn.style.color = 'var(--green)';
-    setTimeout(function() { loadJobs(); loadTopicsCount(); renderTopicsPage(); }, 800);
-  } catch(e) { btn.textContent = '\u25B6 Now'; btn.disabled = false; alert('Failed: ' + e.message); }
+    showToast('Pipeline started — rendering in background (~5 min)');
+    // Keep rendering badge for 5 minutes then clear
+    setTimeout(function() {
+      delete _renderingTopics[topicId];
+      loadTopicsCount();
+      renderTopicsPage();
+    }, 5 * 60 * 1000);
+    setTimeout(function() { loadJobs(); }, 2000);
+  } catch(e) {
+    delete _renderingTopics[topicId];
+    renderTopicsPage();
+    alert('Failed: ' + e.message);
+  }
 }
 
 async function killTopic(topicId, btn) {
@@ -2742,21 +2523,6 @@ async function clearKilledLfJobs() {
   } catch(e) { alert('Failed: ' + e.message); }
 }
 
-async function openLfStudio(jobId) {
-  lfCurrentJobId  = jobId;
-  lfCurrentSegIdx = null;
-  document.getElementById('lf-studio').style.display = 'block';
-  document.body.style.overflow = 'hidden';
-  await refreshLfStudio();
-}
-
-function closeLfStudio() {
-  document.getElementById('lf-studio').style.display = 'none';
-  document.body.style.overflow = '';
-  lfCurrentJobId = null;
-  loadLongformJobs();
-}
-
 async function killLfJob(jobId, btn) {
   if (!confirm('Kill this longform job?')) return;
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
@@ -2806,321 +2572,8 @@ function viewJobLogs(jobId) {
   loadModalLogs(jobId);
 }
 
-async function refreshLfStudio() {
-  if (!lfCurrentJobId) return;
-  try {
-    var r   = await fetch(API_BASE + '/longform/' + lfCurrentJobId);
-    var job = await r.json();
-    lfJobData = job;
-    document.getElementById('lf-studio-topic').textContent = job.topic || 'Long-form Video';
-
-    var segs     = job.segments || [];
-    var ready    = segs.filter(function(s) { return s.status === 'ready' || (s.voice_r2_url && (s.media||[]).length > 0); }).length;
-    var hasMedia = segs.filter(function(s) { return (s.media||[]).length > 0; }).length;
-    var allReady = segs.length > 0 && ready === segs.length;
-
-    // Progress bar
-    var pct = segs.length ? Math.round((ready / segs.length) * 100) : 0;
-    var statusColor = {
-      scripting:'var(--yellow)', media_collecting:'var(--accent)',
-      ready_to_render:'var(--purple)', rendering:'var(--accent)',
-      complete:'#69f0ae', failed:'var(--red)'
-    }[job.status] || 'var(--muted)';
-
-    document.getElementById('lf-studio-status').innerHTML =
-      'Status: <span style="color:' + statusColor + ';font-weight:600">' + job.status + '</span>'
-      + (job.mood ? ' &bull; ' + job.mood : '')
-      + ' &bull; ' + Math.round((job.target_duration||420)/60) + ' min'
-      + (segs.length ? ' &bull; <span style="color:var(--green)">' + ready + '/' + segs.length + ' segments ready</span>' : '')
-      + (segs.length ? '<div style="margin-top:4px;height:3px;background:var(--surface2);border-radius:2px"><div style="height:3px;background:var(--green);border-radius:2px;width:' + pct + '%"></div></div>' : '');
-
-    var renderBtn = document.getElementById('lf-render-btn');
-    if (renderBtn) renderBtn.disabled = !allReady;
-    renderLfTimeline(segs);
-    if (lfCurrentSegIdx !== null) {
-      var seg = segs.find(function(s) { return s.segment_idx === lfCurrentSegIdx; });
-      if (seg) renderLfEditor(seg);
-    }
-
-    // Auto-refresh while in progress
-    var inProgress = ['scripting','media_collecting','rendering'].includes(job.status);
-    if (inProgress) setTimeout(refreshLfStudio, 8000);
-  } catch(e) {
-    document.getElementById('lf-studio-status').textContent = 'Error: ' + e.message;
-  }
-}
-
-function renderLfTimeline(segments) {
-  var el = document.getElementById('lf-seg-timeline');
-  if (!el) return;
-  if (!segments.length) {
-    el.innerHTML = '<div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);padding:8px">Generating script...</div>';
-    setTimeout(refreshLfStudio, 5000);
-    return;
-  }
-  el.innerHTML = segments.map(function(seg) {
-    var dot = seg.status === 'ready'         ? '#69f0ae'
-            : (seg.status === 'has_media' || seg.status === 'generating_voice') ? '#4fc3f7'
-            : seg.status === 'has_script'    ? 'var(--yellow)'
-            : '#888';
-    var active = seg.segment_idx === lfCurrentSegIdx;
-    return '<div onclick="selectLfSeg(' + seg.segment_idx + ')" style="'
-      + 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:4px;'
-      + 'background:' + (active ? 'var(--surface2)' : 'transparent') + ';'
-      + 'border:1px solid ' + (active ? 'var(--border2)' : 'transparent') + '">'
-      + '<span style="color:' + dot + ';font-size:1rem">&#9899;</span>'
-      + '<div>'
-      + '<div style="font-size:.78rem;font-weight:' + (active?'700':'500') + '">' + esc(seg.label||seg.type) + '</div>'
-      + '<div style="font-family:var(--mono);font-size:.6rem;color:var(--muted)">' + Math.round(seg.duration_target||60) + 's</div>'
-      + '</div>'
-      + '</div>';
-  }).join('');
-}
-
-function selectLfSeg(idx) {
-  lfCurrentSegIdx = idx;
-  var segs = (lfJobData && lfJobData.segments) || [];
-  var seg  = segs.find(function(s) { return s.segment_idx === idx; });
-  renderLfTimeline(segs);
-  if (seg) renderLfEditor(seg);
-}
-
-function renderLfEditor(seg) {
-  var el = document.getElementById('lf-seg-editor');
-  if (!el) return;
-  var mediaItems = (seg.media || []).map(function(m,i) {
-    return '<div style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:6px;margin-bottom:4px">'
-      + '<span style="font-size:.7rem;color:var(--muted)">' + (m.type==='video'?'&#127909;':'&#128444;') + ' ' + (i+1) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:.6rem;color:var(--accent);flex:1">' + esc((m.r2_url||'').split('/').pop()) + '</span>'
-      + '</div>';
-  }).join('');
-  var voiceStatus = seg.voice_r2_url
-    ? '<span style="color:#69f0ae">&#10003; ' + esc(seg.voice_source||'') + ' voice</span>'
-    : '<span style="color:var(--muted)">No voice yet</span>';
-  el.innerHTML =
-    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">'
-    + '<div style="font-size:.95rem;font-weight:700">' + esc(seg.label||seg.type) + '</div>'
-    + '<div style="font-family:var(--mono);font-size:.65rem;color:var(--muted)">' + Math.round(seg.duration_target||60) + 's target</div>'
-    + '</div>'
-    + '<div style="margin-bottom:14px">'
-    + '<div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Script</div>'
-    + '<textarea id="lf-seg-script" rows="5" style="width:100%;background:var(--bg);border:1px solid var(--border);'
-    + 'border-radius:8px;padding:8px;color:var(--text);font-size:.8rem;resize:vertical;box-sizing:border-box">'
-    + esc(seg.script||'') + '</textarea>'
-    + '<button class="btn" style="margin-top:5px;font-size:.72rem" onclick="saveLfScript(' + seg.segment_idx + ')">Save Script</button>'
-    + '</div>'
-    + '<div style="margin-bottom:14px">'
-    + '<div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Media</div>'
-    + (mediaItems || '<div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-bottom:6px">No media yet</div>')
-    + '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">'
-    + '<button class="btn btn-primary" style="font-size:.72rem" onclick="openLfLibPicker(' + seg.segment_idx + ')">&#128444; From Library</button>'
-    + '<button class="btn" style="font-size:.72rem" onclick="lfAutoImages(' + seg.segment_idx + ')">&#9889; Auto-gen</button>'
-    + '<label class="btn" style="font-size:.72rem;cursor:pointer">&#128228; Upload<input type="file" accept="image/*" style="display:none" onchange="lfUploadMedia(event,' + seg.segment_idx + ',\'image\')"></label>'
-    + '</div></div>'
-    + '<div style="margin-bottom:14px">'
-    + '<div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Voice</div>'
-    + '<div style="font-family:var(--mono);font-size:.7rem;margin-bottom:8px">' + voiceStatus + '</div>'
-    + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
-    + '<button class="btn btn-primary" style="font-size:.72rem" onclick="lfGenVoice(' + seg.segment_idx + ')">&#9889; AI Voice</button>'
-    + '<label class="btn" style="font-size:.72rem;cursor:pointer">&#127908; Upload<input type="file" accept="audio/*" style="display:none" onchange="lfUploadVoice(event,' + seg.segment_idx + ')"></label>'
-    + '</div></div>'
-    + '<div id="lf-seg-msg" style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-top:6px"></div>';
-}
-
-function lfMsg(msg, color) {
-  var el = document.getElementById('lf-seg-msg');
-  if (el) { el.textContent = msg; el.style.color = color || 'var(--muted)'; }
-}
-
 var _lfLibSegIdx = null;
 var _lfLibSelected = [];
-
-async function openLfLibPicker(segIdx) {
-  _lfLibSegIdx = segIdx;
-  _lfLibSelected = [];
-
-  // Create picker overlay
-  var overlay = document.getElementById('lf-lib-picker');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'lf-lib-picker';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;overflow:auto;padding:20px';
-    overlay.innerHTML = '<div style="max-width:900px;margin:0 auto">'
-      + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'
-      + '<button class="btn" onclick="document.getElementById(\'lf-lib-picker\').style.display=\'none\'">← Back</button>'
-      + '<div style="font-size:.9rem;font-weight:700">Pick images for segment</div>'
-      + '<div id="lf-lib-count" style="font-family:var(--mono);font-size:.7rem;color:var(--yellow);margin-left:auto">0 selected</div>'
-      + '<button class="btn btn-primary" id="lf-lib-use-btn" onclick="useLibImagesForSegment()" disabled style="opacity:.4">Use Selected</button>'
-      + '</div>'
-      + '<div id="lf-lib-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px"></div>'
-      + '</div>';
-    document.body.appendChild(overlay);
-  }
-
-  overlay.style.display = 'block';
-  var grid = document.getElementById('lf-lib-grid');
-  grid.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;padding:20px">Loading library...</div>';
-
-  try {
-    var r = await fetch(API_BASE + '/image-library?limit=200');
-    var d = await r.json();
-    var imgs = d.images || [];
-    if (!imgs.length) {
-      grid.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;padding:20px">No images in library yet. Generate some videos first.</div>';
-      return;
-    }
-    grid.innerHTML = imgs.map(function(img, i) {
-      var cat = CATS[img.cluster] || { color:'var(--muted)', emoji:'📷' };
-      return '<div class="lib-img-card" data-url="' + esc(img.url) + '" data-key="' + esc(img.key||'') + '" '
-        + 'onclick="toggleLfLibImg(this)" style="position:relative;cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid transparent">'
-        + (img.url ? '<img src="' + esc(img.url) + '" style="width:100%;aspect-ratio:9/16;object-fit:cover;display:block" onerror="this.parentElement.style.display=\'none\'">'
-          : '<div style="width:100%;aspect-ratio:9/16;background:var(--surface2);display:flex;align-items:center;justify-content:center">🖼</div>')
-        + '<div style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.4)" id="lf-lib-chk-' + i + '"></div>'
-        + '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);padding:3px 5px;font-family:var(--mono);font-size:.52rem;color:' + cat.color + '">'
-        + cat.emoji + ' ' + esc((img.topic||'').slice(0,18)) + '</div>'
-        + '</div>';
-    }).join('');
-  } catch(e) {
-    grid.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:.75rem;padding:20px">Error: ' + e.message + '</div>';
-  }
-}
-
-function toggleLfLibImg(el) {
-  var url = el.dataset.url;
-  var key = el.dataset.key;
-  var idx = _lfLibSelected.findIndex(function(s) { return s.url === url; });
-  if (idx > -1) {
-    _lfLibSelected.splice(idx, 1);
-    el.style.borderColor = 'transparent';
-  } else {
-    _lfLibSelected.push({ url, key });
-    el.style.borderColor = 'var(--accent)';
-  }
-  var cnt = document.getElementById('lf-lib-count');
-  var btn = document.getElementById('lf-lib-use-btn');
-  if (cnt) cnt.textContent = _lfLibSelected.length + ' selected';
-  if (btn) { btn.disabled = !_lfLibSelected.length; btn.style.opacity = _lfLibSelected.length ? '1' : '.4'; }
-}
-
-async function useLibImagesForSegment() {
-  if (!_lfLibSelected.length || _lfLibSegIdx === null) return;
-  var btn = document.getElementById('lf-lib-use-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
-  try {
-    // Build media array with selected library images
-    var media = _lfLibSelected.map(function(s, i) {
-      return { type: 'image', r2_url: s.key || s.url, public_url: s.url, order: i, source: 'library' };
-    });
-    var r = await fetch(API_BASE + '/longform/segment/set-media', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ job_id: lfCurrentJobId, segment_idx: _lfLibSegIdx, media })
-    });
-    var d = await r.json();
-    if (d.ok || d.status) {
-      document.getElementById('lf-lib-picker').style.display = 'none';
-      lfMsg('✓ ' + media.length + ' library image(s) applied to segment', '#69f0ae');
-      refreshLfStudio();
-    } else {
-      throw new Error(d.error || 'Failed');
-    }
-  } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = 'Use Selected'; }
-    lfMsg('Error: ' + e.message, 'var(--red)');
-  }
-}
-
-async function saveLfScript(segIdx) {
-  var script = (document.getElementById('lf-seg-script').value || '').trim();
-  if (!script) { lfMsg('Script is empty', 'var(--red)'); return; }
-  lfMsg('Saving...', 'var(--muted)');
-  try {
-    var r = await fetch(API_BASE + '/longform/segment/script', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ job_id: lfCurrentJobId, segment_idx: segIdx, script: script })
-    });
-    var d = await r.json();
-    if (d.status === 'updated') { lfMsg('Saved', '#69f0ae'); refreshLfStudio(); }
-    else lfMsg('Error: ' + (d.error||'unknown'), 'var(--red)');
-  } catch(e) { lfMsg('Error: ' + e.message, 'var(--red)'); }
-}
-
-async function lfAutoImages(segIdx) {
-  lfMsg('Triggering image generation...', 'var(--yellow)');
-  try {
-    var r = await fetch(API_BASE + '/longform/segment/generate-images', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ job_id: lfCurrentJobId, segment_idx: segIdx })
-    });
-    var d = await r.json();
-    if (d.status === 'generating') { lfMsg('Generating... check back in ~60s', 'var(--accent)'); setTimeout(refreshLfStudio, 60000); }
-    else lfMsg('Error: ' + (d.error||'unknown'), 'var(--red)');
-  } catch(e) { lfMsg('Error: ' + e.message, 'var(--red)'); }
-}
-
-async function lfUploadMedia(event, segIdx, mediaType) {
-  var file = event.target.files[0];
-  if (!file) return;
-  lfMsg('Uploading ' + mediaType + '...', 'var(--yellow)');
-  var currentMedia = ((lfJobData && lfJobData.segments || []).find(function(s) { return s.segment_idx===segIdx; }) || {}).media || [];
-  var mediaIdx = currentMedia.length;
-  try {
-    var r = await fetch(
-      API_BASE + '/longform/segment/upload-media?job_id=' + lfCurrentJobId +
-      '&segment_idx=' + segIdx + '&media_idx=' + mediaIdx + '&media_type=' + mediaType,
-      { method: 'POST', headers: { 'content-type': file.type }, body: file }
-    );
-    var d = await r.json();
-    if (d.status === 'uploaded') { lfMsg('Uploaded', '#69f0ae'); refreshLfStudio(); }
-    else lfMsg('Error: ' + (d.error||'unknown'), 'var(--red)');
-  } catch(e) { lfMsg('Error: ' + e.message, 'var(--red)'); }
-}
-
-async function lfGenVoice(segIdx) {
-  lfMsg('Triggering AI voice...', 'var(--yellow)');
-  try {
-    var r = await fetch(API_BASE + '/longform/segment/generate-voice', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ job_id: lfCurrentJobId, segment_idx: segIdx })
-    });
-    var d = await r.json();
-    if (d.status === 'generating') { lfMsg('Generating voice... ~30s', 'var(--accent)'); setTimeout(refreshLfStudio, 30000); }
-    else lfMsg('Error: ' + (d.error||'unknown'), 'var(--red)');
-  } catch(e) { lfMsg('Error: ' + e.message, 'var(--red)'); }
-}
-
-async function lfUploadVoice(event, segIdx) {
-  var file = event.target.files[0];
-  if (!file) return;
-  lfMsg('Uploading voice recording...', 'var(--yellow)');
-  try {
-    var r = await fetch(
-      API_BASE + '/longform/segment/upload-voice?job_id=' + lfCurrentJobId + '&segment_idx=' + segIdx,
-      { method: 'POST', headers: { 'content-type': file.type }, body: file }
-    );
-    var d = await r.json();
-    if (d.status === 'uploaded') { lfMsg('Voice uploaded — segment ready!', '#69f0ae'); refreshLfStudio(); }
-    else lfMsg('Error: ' + (d.error||'unknown'), 'var(--red)');
-  } catch(e) { lfMsg('Error: ' + e.message, 'var(--red)'); }
-}
-
-async function triggerLfRender() {
-  if (!lfCurrentJobId) return;
-  if (!confirm('Render and publish this long-form video? This takes 5-15 minutes.')) return;
-  try {
-    var r = await fetch(API_BASE + '/longform/render', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ job_id: lfCurrentJobId })
-    });
-    var d = await r.json();
-    if (d.status === 'rendering') {
-      document.getElementById('lf-studio-status').textContent = 'Rendering... check back in 5-15 minutes';
-      var btn = document.getElementById('lf-render-btn');
-      btn.disabled = true; btn.textContent = '\u231B Rendering...';
-    } else {
-      alert('Error: ' + (d.error || JSON.stringify(d)));
-    }
-  } catch(e) { alert('Error: ' + e.message); }
-}
 
 // ── THEME ───────────────────────────────────────────────────────
 function setTheme(mode) {
