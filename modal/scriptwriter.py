@@ -231,17 +231,25 @@ STRICT RULES:
 - Open with a fact that stops the scroll.
 - Use correct tense — past for what already happened, future for what is coming.
 - NEVER start with "Fact:" — state facts directly.
-- NO subscribe CTA. NO "Follow us". End sentence 6 with a debate question ONLY.
+- NO subscribe CTA. NO "Follow us". End with a debate question ONLY.
+- NO XML tags. NO emotion tags. Plain text only.
+
+EXPRESSIVENESS THROUGH PUNCTUATION (Chatterbox responds to these):
+- End hook sentence with ! to drive emphasis
+- Use — (em dash) for dramatic pauses: "India just did something — nobody expected this."
+- Use ... for a breath before a key reveal: "The number is... two hundred gigawatts."
+- Short punchy sentences = fast delivery. Long flowing sentences = measured delivery.
+- Question at end naturally rises in pitch — no markup needed.
 
 6 sentences (each 8-10 words):
-1. Hook — the real fact or number
+1. Hook — the real fact or number, end with !
 2. What is happening right now in India
-3. The scale — money, reach, jobs, impact
+3. The scale — money, reach, jobs, impact. Use — for pause before the big number.
 4. What this means for ordinary Indians
 5. The honest challenge or twist
 6. One debate question to drive comments
 
-Return ONLY the script as plain text. No labels. No JSON. No numbering."""
+Return ONLY the script as plain text. No labels. No JSON. No numbering. No XML tags."""
 
     for attempt in range(3):
         try:
@@ -280,9 +288,17 @@ Return ONLY the script as plain text. No labels. No JSON. No numbering."""
 
 
 def _pronunciation_fix(script: str) -> str:
-    """Pure deterministic find-and-replace. NO GPT. NO rewriting."""
+    """
+    Pure deterministic fix for Chatterbox TTS.
+    NO GPT. NO rewriting. NO emotion tags — Chatterbox ignores them.
+    Uses punctuation and spacing to drive natural delivery.
+    """
     fixed = script
 
+    # Strip any emotion tags that may have come from council scripts or old prompts
+    fixed = re.sub(r"</?(?:excited|happy|sad|whisper|angry|emphasis)[^>]*>", "", fixed)
+
+    # ── ACRONYMS ─────────────────────────────────────────────────
     acronyms = [
         ("ISRO",    "I.S.R.O."), ("DRDO",    "D.R.D.O."),
         ("DRDO's",  "D.R.D.O.'s"), ("ISRO's", "I.S.R.O.'s"),
@@ -290,35 +306,74 @@ def _pronunciation_fix(script: str) -> str:
         ("IIM",     "I.I.M."), ("AIIMS",   "A.I.I.M.S."),
         ("UPI",     "U.P.I."), ("NDTV",    "N.D.T.V."),
         ("NASSCOM", "NAS-com"), ("SEBI",    "SEE-bi"),
+        ("AI",      "A.I."), ("EV",       "E.V."),
+        ("GDP",     "G.D.P."), ("MSME",    "M.S.M.E."),
     ]
     for wrong, right in acronyms:
-        fixed = fixed.replace(wrong, right)
+        fixed = re.sub(r'\b' + re.escape(wrong) + r'\b', right, fixed)
 
+    # ── MISSIONS & PROPER NAMES ───────────────────────────────────
     missions = [
         ("Chandrayaan", "Chandra-yaan"), ("Gaganyaan",  "Gagan-yaan"),
         ("Mangalyaan",  "Mangal-yaan"),  ("Aditya-L1",  "Aditya L-one"),
+        ("IN-SPACe",    "IN-Space"),
     ]
     for wrong, right in missions:
         fixed = fixed.replace(wrong, right)
 
-    fixed = fixed.replace("\u20b9", "rupees ").replace("%", " percent")
-    fixed = fixed.replace("&", " and ").replace("\u2192", " to ").replace("~", " approximately ")
+    # ── CURRENCY & UNITS ─────────────────────────────────────────
+    fixed = fixed.replace("\u20b9", "rupees ")
+    fixed = fixed.replace("%", " percent")
+    fixed = fixed.replace("&", " and ")
+    fixed = fixed.replace("\u2192", " to ")
+    fixed = fixed.replace("~", " approximately ")
+    fixed = fixed.replace("km/h", " kilometres per hour")
+    fixed = fixed.replace("GW",   " gigawatts")
+    fixed = fixed.replace("MW",   " megawatts")
+    fixed = fixed.replace("TWh",  " terawatt hours")
 
-    # Indian number formats
+    # ── INDIAN NUMBER FORMATS ─────────────────────────────────────
     fixed = re.sub(r"(\d+),00,00,000", lambda m: m.group(1) + " crore", fixed)
     fixed = re.sub(r"(\d+),00,000",    lambda m: m.group(1) + " lakh",  fixed)
     fixed = re.sub(r"(\d+),000",       lambda m: m.group(1) + " thousand", fixed)
 
-    # Add emotion tags at sentence boundaries only
-    sentences = fixed.split(". ")
-    if sentences and any(c.isdigit() for c in sentences[0]):
-        sentences[0] = "<excited>" + sentences[0] + "</excited>"
-    if len(sentences) >= 2 and sentences[-1].strip().endswith("?"):
-        sentences[-1] = "<happy>" + sentences[-1].strip() + "</happy>"
-    fixed = ". ".join(sentences)
+    # ── CHATTERBOX RHYTHM CUES ───────────────────────────────────
+    # These punctuation patterns directly affect Chatterbox delivery
+    # Em dash = natural dramatic pause
+    # Ellipsis = breath before reveal
+    # ! on hook = confident emphasis
+    # No tags — Chatterbox ignores them
 
-    print(f"  Pronunciation fix done: {fixed[:80]}...")
-    return fixed
+    sentences = re.split(r'(?<=[.!?])\s+', fixed.strip())
+    if not sentences:
+        return fixed
+
+    # Hook sentence (first): ensure it ends with ! for emphasis
+    if sentences[0] and not sentences[0].endswith('!'):
+        sentences[0] = sentences[0].rstrip('.') + '!'
+
+    # Scale sentence (third, index 2): add em dash before large numbers for pause
+    if len(sentences) > 2:
+        sentences[2] = re.sub(
+            r'(\w+)\s+([\d]+(?:\s+(?:crore|lakh|billion|million|gigawatts|percent))+)',
+            r'\1 — \2',
+            sentences[2]
+        )
+
+    # Ensure question mark on last sentence
+    if sentences[-1] and not sentences[-1].endswith('?'):
+        if 'will ' in sentences[-1].lower() or 'can ' in sentences[-1].lower() or 'is ' in sentences[-1].lower():
+            sentences[-1] = sentences[-1].rstrip('.!') + '?'
+
+    fixed = " ".join(sentences)
+
+    # Clean up double spaces and double punctuation from replacements
+    fixed = re.sub(r'  +', ' ', fixed)
+    fixed = re.sub(r'\.\.(?!\.)', '.', fixed)
+    fixed = re.sub(r'——+', '—', fixed)
+
+    print(f"  Pronunciation fix done: {fixed[:100]}...")
+    return fixed.strip()
 
 
 def _extract_captions(api_key: str, script_lines: list) -> list:

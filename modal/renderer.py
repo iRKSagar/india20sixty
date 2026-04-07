@@ -374,7 +374,9 @@ def _fetch_music(mood: str, job_id: str) -> str | None:
 def _build_word_captions(script, audio_dur):
     import re
     if not script or not script.strip(): return []
-    words = re.sub(r'\s+', ' ', script.strip()).split()
+    # Strip ElevenLabs emotion tags — never show these to viewer
+    script = re.sub(r"</?(?:excited|happy|sad|whisper|angry)[^>]*>", "", script).strip()
+    words = re.sub(r'\s+', ' ', script).split()
     if not words: return []
     phrases, chunk = [], []
     for w in words:
@@ -498,8 +500,10 @@ def render_with_audio(
     preset = MOOD_PRESETS.get(mood, MOOD_PRESETS.get("hopeful_future"))
     used_motions = set()
 
-    # Build word-synced captions from script
-    word_captions = _build_word_captions(script, audio_dur) if script else []
+    # Build word-synced captions from script — strip emotion tags first
+    import re as _re
+    clean_script = _re.sub(r"</?(?:excited|happy|sad|whisper|angry)[^>]*>", "", script).strip() if script else ""
+    word_captions = _build_word_captions(clean_script, audio_dur) if clean_script else []
     print(f"  Word captions: {len(word_captions)} phrases")
 
     # Build end card filters from debate question
