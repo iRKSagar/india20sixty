@@ -223,6 +223,7 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
 
         if image_urls and len(image_urls) >= 3:
             image_paths = _download_library(image_urls, job_id)
+            results = None  # no Modal image results — bytes read from disk below
         else:
             # Validate scene prompts are topic-relevant (not generic offices)
             validated_prompts = []
@@ -268,7 +269,16 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
         if voice_mode == "human":
             print("\n--- Render Silent ---")
             update_status("render")
-            image_bytes_list = [res.get("image_bytes") for res in sorted(results, key=lambda x: x["scene_idx"])]
+            # Build image_bytes_list — from Modal results or from disk (library images)
+            if results is not None:
+                image_bytes_list = [res.get("image_bytes") for res in sorted(results, key=lambda x: x["scene_idx"])]
+            else:
+                image_bytes_list = []
+                for p in image_paths:
+                    if p and os.path.exists(p):
+                        with open(p, "rb") as f: image_bytes_list.append(f.read())
+                    else:
+                        image_bytes_list.append(None)
             silent_bytes = _render_silent().remote(
                 job_id=job_id, image_paths=[None] * 3,
                 captions=script_pkg["captions"], mood=script_pkg["mood"],
@@ -306,10 +316,17 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             print("\n--- Render ---")
             update_status("render")
 
-            # Collect image bytes for renderer
+            # Collect image bytes for renderer — from Modal results or disk (library images)
             image_bytes_list = []
-            for res in sorted(results, key=lambda x: x["scene_idx"]):
-                image_bytes_list.append(res.get("image_bytes"))
+            if results is not None:
+                for res in sorted(results, key=lambda x: x["scene_idx"]):
+                    image_bytes_list.append(res.get("image_bytes"))
+            else:
+                for p in image_paths:
+                    if p and os.path.exists(p):
+                        with open(p, "rb") as f: image_bytes_list.append(f.read())
+                    else:
+                        image_bytes_list.append(None)
 
             video_path = _render_audio().remote(
                 job_id=job_id,
