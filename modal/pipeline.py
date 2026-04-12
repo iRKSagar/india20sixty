@@ -225,18 +225,53 @@ def run_pipeline(job_id: str, topic: str, webhook_url: str = "", image_urls: lis
             image_paths = _download_library(image_urls, job_id)
             results = None  # no Modal image results — bytes read from disk below
         else:
-            # Validate scene prompts are topic-relevant (not generic offices)
+            # Validate scene prompts are topic-relevant
             validated_prompts = []
+            # Extract key product/subject words from topic for validation
+            topic_words = [w.lower() for w in topic.split() if len(w) > 3]
+
+            # Abstract/metaphor words that should never appear in product topic images
+            abstract_reject = [
+                "transformer", "robot character", "cartoon", "anime", "illustration",
+                "futuristic city", "generic city", "cityscape", "abstract",
+                "concept art", "digital art", "render", "3d render",
+                "silhouette", "symbol", "icon", "logo",
+                "engineer at computer", "software engineer", "at workstation",
+                "at desk", "office worker", "person at laptop"
+            ]
+
+            # Scene role descriptions for rebuilding
+            scene_roles = [
+                f"ultra-wide dramatic atmosphere, {topic}, India setting, cinematic",
+                f"medium shot human scale, {topic}, Indian hands holding or using product, sharp detail",
+                f"wide cinematic future India, {topic}, optimistic natural light"
+            ]
+
             for i in range(3):
                 sp = script_pkg["scene_prompts"][i] if i < len(script_pkg.get("scene_prompts",[])) else ""
                 if not sp:
-                    sp = f"photorealistic India, {topic}, natural daylight, sharp focus"
-                # If non-AI topic has generic office prompt, rebuild from topic
-                office_words = ["engineer at computer", "software engineer", "at workstation", "at desk", "office worker"]
+                    sp = f"photorealistic India, {scene_roles[i]}, no text"
+
+                sp_lower = sp.lower()
                 ai_cluster = script_pkg.get("cluster", cluster) == "AI"
-                if not ai_cluster and any(w in sp.lower() for w in office_words):
-                    sp = f"photorealistic India, {topic}, natural daylight, Indian people, sharp focus, no text"
-                    print(f"  Scene {i}: office prompt replaced with topic-based prompt")
+                needs_rebuild = False
+
+                # Check for abstract/metaphor content
+                if any(bad in sp_lower for bad in abstract_reject):
+                    needs_rebuild = True
+                    print(f"  Scene {i}: abstract/metaphor prompt rejected — '{sp[:60]}'")
+
+                # Check if prompt mentions none of the topic's key words
+                # (means GPT hallucinated something unrelated)
+                topic_coverage = sum(1 for w in topic_words if w in sp_lower)
+                if topic_coverage == 0 and len(topic_words) > 2:
+                    needs_rebuild = True
+                    print(f"  Scene {i}: prompt has zero topic word coverage — '{sp[:60]}'")
+
+                if needs_rebuild:
+                    sp = f"photorealistic India, {scene_roles[i]}, no text no logos"
+                    print(f"  Scene {i}: rebuilt → '{sp[:80]}'")
+
                 validated_prompts.append(sp)
 
             futures = [

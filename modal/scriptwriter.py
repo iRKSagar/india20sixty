@@ -585,13 +585,17 @@ SCENE ROLE: Hook — stop the scroll. Ultra-wide, enormous scale, dramatic atmos
 ATMOSPHERE to include: {hook_atm}
 
 Rules:
-- Show the PHYSICAL SUBJECT at MASSIVE SCALE (not one person — thousands, not one panel — millions)
+- Show the PHYSICAL PRODUCT OR SUBJECT from this topic — not a metaphor for it
+  BAD: transformer robot (metaphor for transformation)
+  BAD: futuristic city (generic)
+  BAD: glowing screen in darkness (generic tech)
+  GOOD: Indian foldable phone unfolding in hand showing crisp display
+  GOOD: Indian rocket on launch pad with ISRO markings
+  GOOD: Ocean of solar panels in Rajasthan desert
 - Ultra-wide or aerial perspective — the viewer should feel the scale of India
 - Include atmosphere: {hook_atm}
-- Specific to this topic — not generic India cityscape
-- No people at desks. No offices. Show the actual technology or infrastructure.
-- For space/defence topics: include Indian tricolour flag on gantry or ISRO markings — subtle set dressing not graphic overlay
-- Under 120 characters total.
+- For space/defence topics: include Indian tricolour flag or ISRO markings
+- Under 120 characters total. No abstract art. No cartoon. Photorealistic only.
 
 Example for space topic: "Six Indian rockets standing on launch pads at dusk, storm clouds overhead, ocean horizon, ultra-wide cinematic"
 Example for solar topic: "Ocean of solar panels stretching to horizon Rajasthan desert, dust haze, drone aerial, tiny worker for scale"

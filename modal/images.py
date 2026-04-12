@@ -54,6 +54,8 @@ NEGATIVE_PROMPT = (
     "office workers unless topic is about software, "
     "people at computers unless topic is AI or software, "
     "flat lighting, studio backdrop, white background, "
+    "tilak, bindi, tika, forehead mark, religious dot, vermillion mark, "
+    "religious symbols, temple imagery unless topic is about temples, "
 )
 
 import re as _re
@@ -184,37 +186,41 @@ def _make_safe_prompt(original_prompt: str, cluster: str, topic: str = "") -> st
     # Keyword map — ordered by specificity, word-boundary matched
     keyword_map = [
         (["space station", "rocket", "satellite", "isro", "gaganyaan", "launch pad", "spacecraft"],
-         "Indian rocket launch pad Sriharikota, ISRO control room, spacecraft"),
+         "Indian rocket on launch pad Sriharikota, ISRO markings, Indian tricolour flag on gantry"),
+        (["foldable phone", "foldable mobile", "foldable smartphone", "flip phone", "folding phone"],
+         "Indian foldable smartphone unfolding in hand, hinge mechanism close-up, crisp display"),
         (["electric vehicle", "automobile", "automotive", "ev car", "ev launch"],
-         "Indian electric cars highway, EV charging station urban India"),
+         "Indian electric cars on highway, EV charging station urban India"),
         (["solar farm", "solar panel", "wind turbine", "renewable energy", "green hydrogen"],
-         "Solar farm panels India, renewable energy workers, rural landscape"),
+         "Ocean of solar panels stretching horizon India, renewable energy workers"),
         (["drone", "uav", "unmanned aerial"],
-         "Drone flying over Indian cityscape, operator with controller"),
-        (["semiconductor", "chip fabrication", "silicon wafer", "processor"],
-         "Semiconductor chip close-up, Indian engineer cleanroom"),
-        (["smartphone", "mobile phone", "5g tower", "telecom"],
-         "Indian people with smartphones, 5G tower urban India"),
+         "Drone in flight over Indian cityscape, operator with controller below"),
+        (["semiconductor", "chip fabrication", "silicon wafer", "processor", "microchip"],
+         "Semiconductor chip close-up macro, Indian engineer in cleanroom white suit"),
+        (["smartphone", "mobile phone", "5g", "telecom"],
+         "Indian hands holding modern smartphone, sharp product detail, Indian street"),
         (["metro train", "railway", "bullet train", "hyperloop"],
-         "Indian metro train modern station, commuters platform"),
-        (["hospital", "doctor", "healthcare", "medical device"],
-         "Indian doctor with patient, modern hospital"),
+         "Indian metro train at modern station, commuters on platform, glass facade"),
+        (["hospital", "doctor", "healthcare", "medical device", "surgery"],
+         "Indian doctor with patient, modern hospital equipment, clean facility"),
         (["school", "classroom", "education", "teacher", "student"],
-         "Indian students in classroom, teacher at board"),
-        (["farmer", "agriculture", "crop field", "irrigation"],
-         "Indian farmer in field with technology, agricultural drone, rural India"),
-        (["startup", "founder", "venture funding", "unicorn"],
-         "Young Indian entrepreneurs whiteboard session, startup office"),
-        (["quantum", "biotech", "3d printing", "nanotech"],
-         "Indian scientist advanced research equipment, laboratory"),
+         "Indian students in classroom, teacher at board, engaged learning"),
+        (["farmer", "agriculture", "crop field", "irrigation", "agritech"],
+         "Indian farmer in green field with tablet showing crop data, agricultural drone"),
+        (["startup", "founder", "venture funding", "unicorn", "fintech"],
+         "Young Indian founders in startup office, whiteboard planning session"),
+        (["quantum", "biotech", "3d printing", "nanotech", "gene"],
+         "Indian scientist at advanced research equipment, modern laboratory IIT"),
         (["infrastructure", "bridge", "highway", "construction", "smart city"],
-         "Indian infrastructure construction, workers on site, modern city"),
-        (["robot", "automation", "factory", "manufacturing"],
-         "Industrial robots Indian manufacturing plant"),
-        (["data center", "cloud computing", "server farm"],
-         "Data center server racks, Indian technician blue lighting"),
-        (["car launch", "new car", "vehicle launch", "road test"],
-         "New Indian car on highway, launch event, modern road"),
+         "Indian infrastructure construction site, workers on modern highway bridge"),
+        (["robot", "automation", "factory", "manufacturing", "assembly"],
+         "Industrial robots in Indian manufacturing plant, precision assembly line"),
+        (["data center", "cloud computing", "server"],
+         "Data center server racks, Indian technician with blue LED lighting"),
+        (["battery", "energy storage", "lithium"],
+         "Battery cell manufacturing plant India, technician with energy storage unit"),
+        (["wearable", "smartwatch", "health monitor"],
+         "Indian person wearing smartwatch, health data on screen, active lifestyle"),
     ]
 
     topic_subject = None
