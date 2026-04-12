@@ -635,7 +635,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
       <div id="mts-custom-panel" style="display:none">
         <input id="m-custom-topic" type="text" placeholder="e.g. India's first space station 2035"
           style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:.82rem;box-sizing:border-box">
-        <button class="btn btn-primary btn-sm" style="margin-top:8px;font-size:.72rem" onclick="setCustomManualTopic()">Use This Topic</button>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px;font-size:.72rem" onclick="generateManualScript()">Use This Topic</button>
       </div>
       <div id="m-selected-topic" style="display:none;margin-top:10px;padding:10px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.2);border-radius:8px">
         <div style="font-family:var(--mono);font-size:.62rem;color:var(--accent)">Selected:</div>
@@ -771,8 +771,8 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
       </div>
       <div id="m-summary" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-bottom:12px;padding:10px;background:var(--bg);border-radius:8px;line-height:1.8"></div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" style="flex:1;justify-content:center;padding:12px" onclick="submitManualJob('create')">&#9654; Create &amp; Publish</button>
-        <button class="btn btn-ghost"   style="flex:1;justify-content:center;padding:12px" onclick="submitManualJob('stage')">&#9646;&#9646; Stage for Review</button>
+        <button class="btn btn-primary" style="flex:1;justify-content:center;padding:12px" onclick="doManualCreate('create')">&#9654; Create &amp; Publish</button>
+        <button class="btn btn-ghost"   style="flex:1;justify-content:center;padding:12px" onclick="doManualCreate('stage')">&#9646;&#9646; Stage for Review</button>
       </div>
       <div id="m-result" style="margin-top:10px;font-family:var(--mono);font-size:.72rem;text-align:center"></div>
     </div>
@@ -900,7 +900,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="lib-sel-count2" style="font-family:var(--mono);font-size:.68rem;color:var(--yellow)">0 selected</span>
-      <button class="btn btn-primary btn-sm" id="lib-create-btn2" onclick="createVideoFromLibrary2()" disabled style="opacity:.4">&#9654; Create Video (3)</button>
+      <button class="btn btn-primary btn-sm" id="lib-create-btn2" onclick="submitFreeImages()" disabled style="opacity:.4">&#9654; Create Video (3)</button>
       <button id="lib-delete-btn" onclick="deleteSelectedImages()" style="display:none;align-items:center;gap:5px;background:rgba(255,82,82,.15);color:var(--red);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:5px 12px;font-size:.72rem;font-family:var(--font);cursor:pointer">&#128465; Delete</button>
       <button class="btn btn-ghost btn-sm" onclick="backfillLibrary()" style="font-size:.68rem">&#8659; Backfill R2</button>
       <button class="btn btn-ghost btn-sm" onclick="loadLibrary()">&#8635; Refresh</button>
@@ -985,7 +985,7 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
     <button class="btn btn-primary btn-sm" id="bt-ready" onclick="filterTopics('ready')">Ready</button>
     <button class="btn btn-ghost btn-sm"   id="bt-used"  onclick="filterTopics('used')">Used</button>
     <button class="btn btn-purple btn-sm"  onclick="openReplenishModal()">&#8635; Replenish</button>
-    <button class="btn btn-ghost btn-sm"   onclick="loadTopics().then(function(){renderTopicsPage();loadTopicsCount();})">&#8635; Refresh</button>
+    <button class="btn btn-ghost btn-sm"   onclick="loadTopicsCount();renderTopicsPage()">&#8635; Refresh</button>
     <span id="debug-topics" style="font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-left:4px"></span>
   </div>
   <div class="cat-grid" id="topic-cat-strip" style="margin-bottom:12px"></div>
@@ -1313,12 +1313,12 @@ body::before{content:'';position:fixed;inset:0;z-index:0;
 
     <!-- Header -->
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-      <button class="btn" onclick="closeLfStudio()" style="font-size:.8rem">&#8592; Back</button>
+      <button class="btn" onclick="switchTab('home')" style="font-size:.8rem">&#8592; Back</button>
       <div style="flex:1">
         <div id="lf-studio-topic" style="font-size:1rem;font-weight:700">Loading...</div>
         <div id="lf-studio-status" style="font-family:var(--mono);font-size:.65rem;color:var(--muted)"></div>
       </div>
-      <button class="btn btn-primary" id="lf-render-btn" onclick="triggerLfRender()" disabled style="font-size:.8rem">
+      <button class="btn btn-primary" id="lf-render-btn" onclick="alert('Long-form paused')" disabled style="font-size:.8rem">
         &#128640; Render &amp; Publish
       </button>
     </div>

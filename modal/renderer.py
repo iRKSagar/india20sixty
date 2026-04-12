@@ -553,6 +553,15 @@ def render_with_audio(
         off_e = t_e - scene_idx * scene_dur
         scene_word_caps[scene_idx].append((phrase, max(0, off_s), max(0, off_e)))
 
+    # Extract hook text from first sentence — burned onto scene 0 as thumbnail text
+    import re as _re2
+    hook_text = ""
+    if script:
+        clean = _re2.sub(r"</?[^>]+>", "", script).strip()
+        sentences = _re2.split(r'(?<=[.!?])\s+', clean)
+        if sentences:
+            hook_text = sentences[0].strip()[:60]
+
     clip_paths = []
     for i, img in enumerate(image_paths):
         m_a, m_b = scene_motions[i]
@@ -562,6 +571,7 @@ def render_with_audio(
             word_captions=scene_word_caps[i],
             is_last=(i == len(image_paths) - 1),
             end_card_filters=end_card_filters if i == len(image_paths) - 1 else [],
+            hook_text=hook_text if i == 0 else "",
         )
         clip_paths.append(clip)
 
@@ -712,9 +722,10 @@ def _render_scene_clip(
     motion_override: str = None,
     motion_b_override: str = None,
     transition_override: str = None,
-    word_captions: list = None,     # [(text, t_start, t_end)] within this scene
+    word_captions: list = None,
     is_last: bool = False,
-    end_card_filters: list = None,  # drawtext filters for end card (last scene only)
+    end_card_filters: list = None,
+    hook_text: str = "",       # thumbnail text burned into scene 0 only
 ) -> str:
     """
     Render one image as TWO sub-clips with a hard cut between them.
@@ -781,7 +792,6 @@ def _render_scene_clip(
         """
         sub_offset: global time offset this sub-clip starts at (seconds)
         sub_dur: duration of this sub-clip
-        Captions enabled only within this sub-clip's time window.
         """
         sub_end = sub_offset + sub_dur
         parts = [
@@ -792,10 +802,19 @@ def _render_scene_clip(
             grade["noise"],
             grade["vignette"],
             "setsar=1",
-            # Watermark — TOP LEFT, away from YouTube UI (bottom) and captions (lower third)
+            # Watermark — top left, clear of YouTube UI
             f"drawtext=text='\u25B6 India20Sixty':fontsize=32:fontcolor=white@0.80"
-            f":borderw=2:bordercolor=black@0.85:x=24:y=54",
+            f":borderw=2:bordercolor=black@0.85:x=24:y=120",
         ]
+
+        # Hook frame thumbnail text — scene 0 only, top of frame
+        if scene_idx == 0 and hook_text:
+            escaped_hook = _escape_dt(hook_text[:60])
+            parts.append(
+                f"drawtext=text='{escaped_hook}':fontsize=44:fontcolor=white"
+                f":borderw=12:bordercolor=black@0.88"
+                f":x=(w-text_w)/2:y=220"
+            )
 
         # Word-synced captions — only show phrases that fall in this sub-clip's time window
         # Times in word_captions are GLOBAL (0 to audio_dur)

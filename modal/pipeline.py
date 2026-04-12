@@ -605,6 +605,7 @@ def _make_pkg(script_pkg, fact_package):
         "scene_prompts":script_pkg.get("scene_prompts", []),
         "key_fact":     script_pkg.get("key_fact", ""),
         "end_question": script_pkg.get("end_question", ""),
+        "script_format": script_pkg.get("script_format", "narrative"),
         "source":       script_pkg.get("source", "pipeline"),
         "generated_at": datetime.utcnow().isoformat(),
     }

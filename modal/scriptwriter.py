@@ -177,7 +177,7 @@ def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, 
     OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
     print(f"\n[Scriptwriter] job={job_id} cluster={cluster} cta={subscribe_cta}")
 
-    script, script_lines   = _generate_script(OPENAI_API_KEY, topic, fact_package, subscribe_cta)
+    script, script_lines, script_fmt = _generate_script(OPENAI_API_KEY, topic, fact_package, subscribe_cta)
     reviewed_script        = _pronunciation_fix(script)
     captions               = _extract_captions(OPENAI_API_KEY, script_lines)
     mood                   = _mood_classifier(OPENAI_API_KEY, script, cluster)
@@ -201,6 +201,7 @@ def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, 
         "mood_label":      MOOD_PRESETS[mood]["label"],
         "scene_prompts":   scene_prompts,
         "end_question":    end_question,
+        "script_format":   script_fmt,
     }
 
 
@@ -209,47 +210,86 @@ def run_scriptwriter(job_id: str, topic: str, fact_package: dict, cluster: str, 
 # ==========================================
 
 def _generate_script(api_key: str, topic: str, fact_package: dict, subscribe_cta: bool) -> tuple:
+    import random as _rand
     fact_section = ""
     if fact_package and fact_package.get("found"):
         fact_section = f"\nREAL FACT ANCHOR:\nFact: {fact_package['key_fact']}\nSource: {fact_package['source']}"
 
     from datetime import datetime as _dt
-    today = _dt.utcnow().strftime("%B %Y")  # e.g. "April 2026"
-    cta = ""  # NO CTA ever — Shorts must never include subscribe prompts
+    today = _dt.utcnow().strftime("%B %Y")
+
+    # Pick format — weighted toward narrative (highest retention)
+    formats = ["narrative","narrative","narrative","curiosity","curiosity","countdown","before_after"]
+    fmt = _rand.choice(formats)
+    print(f"  Script format: {fmt}")
+
+    if fmt == "narrative":
+        structure = """NARRATIVE FORMAT — highest retention:
+Setup → Conflict → Resolution → Debate
+S1: Curiosity gap hook — do NOT reveal the answer yet. End with !
+  BAD: "India achieved 200 GW solar!" (tells answer)
+  GOOD: "Every expert said India would fail at solar. They were wrong!"
+S2: The backstory — the challenge or starting point
+S3: The turning point — what changed
+S4: The scale — use — before the big number
+S5: What it means for ordinary Indians
+S6: Debate question ending with ?"""
+
+    elif fmt == "curiosity":
+        structure = """CURIOSITY GAP FORMAT — highest CTR:
+Tease → Build → Reveal → Scale → Challenge → Question
+S1: Create knowledge gap — hint at something surprising WITHOUT revealing it. End with !
+  "India just did something that made NASA pay attention!"
+  "Three engineers in Bengaluru changed everything — and nobody noticed!"
+S2: Context — what is this, where does it happen
+S3: The REVEAL — now give the actual fact
+S4: The scale — use — before big number
+S5: The honest challenge or twist
+S6: Debate question — answer only comes in S3, not S1"""
+
+    elif fmt == "countdown":
+        structure = """COUNTDOWN FORMAT — high shareability:
+Tease → 3rd → 2nd → 1st (most surprising) → Meaning → Question
+S1: "Three things India built that shocked the world — number one will surprise you!" End with !
+  Adapt to topic. Use actual number.
+S2: Third item — least surprising
+S3: Second item — more impressive
+S4: First item — most surprising, use — before the number
+S5: What this pattern means for India
+S6: Debate question"""
+
+    elif fmt == "before_after":
+        structure = """BEFORE/AFTER FORMAT — highest shareability, emotional contrast:
+Before → Gap → After → Scale → Meaning → Question
+S1: Where India was — the struggle. Past tense. End with !
+  "In 2010, India imported 80 percent of its solar panels from China!"
+S2: The turning point or decision
+S3: Where India is now — the transformation, use — before the number
+S4: The scale of change — jobs, money, impact
+S5: The lesson for ordinary Indians
+S6: Debate question — "Could India have done this faster?" """
 
     prompt = f"""Write a YouTube Shorts voiceover script for India20Sixty — India's near future channel.
-Today is {today}. Treat events before {today} as past history — use past tense for them.
+Today is {today}. Past events = past tense. Future = future tense only if genuinely upcoming.
 
 Topic: {topic}
 {fact_section}
 
+{structure}
+
 STRICT RULES:
-- Between 48 and 55 words total. Count every word carefully. Must be 48-55. Too short = rejected.
-- Indian English. Clear, confident, modern. Not American or British.
-- NO Hindi words. NO Hinglish. Pure English only.
-- Max 12 words per sentence.
-- Open with a fact that stops the scroll.
-- Use correct tense — past for what already happened, future for what is coming.
-- NEVER start with "Fact:" — state facts directly.
-- NO subscribe CTA. NO "Follow us". End with a debate question ONLY.
-- NO XML tags. NO emotion tags. Plain text only.
+- 48-55 words total. Count every word. Must be 48-55.
+- Indian English. Confident, modern. Not American or British.
+- NO Hindi words. Pure English only. Max 12 words per sentence.
+- NO subscribe CTA. NO "Follow us". NO XML tags. Plain text only.
 
-EXPRESSIVENESS THROUGH PUNCTUATION (Chatterbox responds to these):
-- End hook sentence with ! to drive emphasis
-- Use — (em dash) for dramatic pauses: "India just did something — nobody expected this."
-- Use ... for a breath before a key reveal: "The number is... two hundred gigawatts."
-- Short punchy sentences = fast delivery. Long flowing sentences = measured delivery.
-- Question at end naturally rises in pitch — no markup needed.
+EXPRESSIVENESS (Chatterbox TTS):
+- Hook ends with ! for emphasis
+- Use — before big numbers for dramatic pause
+- Short sentences = fast punchy delivery
+- Final question = natural rising pitch
 
-6 sentences (each 8-10 words):
-1. Hook — the real fact or number, end with !
-2. What is happening right now in India
-3. The scale — money, reach, jobs, impact. Use — for pause before the big number.
-4. What this means for ordinary Indians
-5. The honest challenge or twist
-6. One debate question to drive comments
-
-Return ONLY the script as plain text. No labels. No JSON. No numbering. No XML tags."""
+Return ONLY plain text script. No labels. No JSON. No format name."""
 
     for attempt in range(3):
         try:
@@ -258,7 +298,7 @@ Return ONLY the script as plain text. No labels. No JSON. No numbering. No XML t
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"model": "gpt-4o-mini",
                       "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.75, "max_tokens": 300},
+                      "temperature": 0.82, "max_tokens": 300},
                 timeout=30,
             )
             r.raise_for_status()
@@ -267,24 +307,23 @@ Return ONLY the script as plain text. No labels. No JSON. No numbering. No XML t
                      for l in raw.split("\n") if l.strip()]
             script = " ".join(lines)
             word_count = len(script.split())
-            print(f"  Script attempt {attempt+1} ({word_count} words): {script[:80]}...")
+            print(f"  Script attempt {attempt+1} ({word_count} words, {fmt}): {script[:80]}...")
             if word_count >= 45:
-                return script, lines
+                return script, lines, fmt
             print(f"  Script too short ({word_count} words) — retrying")
         except Exception as e:
             print(f"  Script attempt {attempt+1} failed: {e}")
 
-    # All attempts failed or too short — use guaranteed 52-word fallback
     fallback = (
-        f"India just crossed a major milestone with {topic}. "
-        f"This is not a future plan — the work is happening right now. "
-        f"Billions have been committed and a hard deadline is locked in. "
-        f"Hundreds of thousands of skilled jobs are being created across India. "
-        f"The biggest challenge is not money or talent — it is execution speed. "
-        f"Will India deliver on time and set a new global standard?"
+        f"Every expert said India would fail at {topic}. They were spectacularly wrong! "
+        f"The decision was made years ago — and relentless work followed. "
+        f"Today India stands at — a milestone nobody predicted. "
+        f"Millions of ordinary Indians feel this change every single day. "
+        f"The biggest challenge now is not money or talent — it is speed. "
+        f"Was this inevitable, or did India just get lucky?"
     )
     print(f"  Using fallback script ({len(fallback.split())} words)")
-    return fallback, [fallback]
+    return fallback, [fallback], "narrative"
 
 
 def _pronunciation_fix(script: str) -> str:
